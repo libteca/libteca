@@ -1,0 +1,83 @@
+package main
+
+import (
+	"flag"
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"time"
+
+	"github.com/libteca/libteca/internal/auth"
+	"github.com/libteca/libteca/internal/scan"
+	"github.com/libteca/libteca/internal/server"
+	"github.com/libteca/libteca/internal/store"
+)
+
+func main() {
+	data := flag.String("data", "./data", "data directory")
+	port := flag.Int("port", 8096, "listen port")
+	initAdmin := flag.String("init-admin", "", "create admin as name:password")
+	scanOnly := flag.Bool("scan", false, "scan all libraries then exit")
+	flag.Parse()
+
+	abs, err := filepath.Abs(*data)
+	if err != nil {
+		fatal(err)
+	}
+	for _, d := range []string{abs, filepath.Join(abs, "covers")} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			fatal(err)
+		}
+	}
+
+	db, err := store.Open(filepath.Join(abs, "libteca.db"))
+	if err != nil {
+		fatal(err)
+	}
+	defer db.Close()
+
+	if *initAdmin != "" {
+		name, pass, ok := cut(*initAdmin, ':')
+		if !ok {
+			fatal(fmt.Errorf("--init-admin wants name:password"))
+		}
+		if err := auth.InitAdmin(db, name, pass); err != nil {
+			fatal(err)
+		}
+		fmt.Printf("admin %q created\n", name)
+	}
+
+	if *scanOnly {
+		n, err := scan.All(db, filepath.Join(abs, "covers"))
+		if err != nil {
+			fatal(err)
+		}
+		fmt.Printf("scan complete: %d editions current\n", n)
+		return
+	}
+
+	srv := server.New(db, abs)
+	h := &http.Server{
+		Addr:              fmt.Sprintf(":%d", *port),
+		Handler:           srv.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+	fmt.Printf("libteca listening on :%d (data: %s)\n", *port, abs)
+	fatal(h.ListenAndServe())
+}
+
+func fatal(err error) {
+	fmt.Fprintln(os.Stderr, "libteca:", err)
+	os.Exit(1)
+}
+
+func cut(s string, sep byte) (a, b string, ok bool) {
+	for i := 0; i < len(s); i++ {
+		if s[i] == sep {
+			return s[:i], s[i+1:], true
+		}
+	}
+	return "", "", false
+}

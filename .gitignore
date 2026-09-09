@@ -1,0 +1,14 @@
+libteca-site/
+data/
+/libteca
+web/node_modules/
+web/dist/
+internal/server/webdist/
+web/.neutron/
+**/.neutron-*.d.ts
+*.log
+.DS_Store
+SESSION*.md
+HANDOFF*.md
+STATUS.md
+*.local.md
