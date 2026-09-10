@@ -7,7 +7,7 @@ import { EmptyState, QuietLoad } from "../components/rail";
 import { IconChevronDown } from "../components/svg";
 import { coverRatio } from "../util";
 import {
-  c, card, cardMeta, cardTitle, filterBtn, filterBtnOn, filterTrack, ghostBtn,
+  c, card, cardMeta, cardTitleWrap, filterBtn, filterBtnOn, filterTrack, ghostBtn,
   gridFor, libToolbar, muted, selectChevron, selectWrap, tab, tabActive,
 } from "../styles";
 
@@ -130,7 +130,7 @@ export function LibraryView(props: { lib?: number }) {
             {works.map((w) => (
               <a key={w.id} href={`#/work?id=${w.id}`} className="cover-card" style={card}>
                 <Cover has={w.hasCover} id={w.id} title={w.title} ratio={ratio} />
-                <p style={cardTitle}>{w.title}</p>
+                <p style={cardTitleWrap}>{w.title}</p>
                 <p style={cardMeta}>{w.author}</p>
               </a>
             ))}

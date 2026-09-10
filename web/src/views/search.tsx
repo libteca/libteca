@@ -4,7 +4,7 @@ import { Cover } from "../components/cover";
 import { QuietLoad } from "../components/rail";
 import { IconSearch, TypeIcon } from "../components/svg";
 import { coverRatio, debounce, typeLabel } from "../util";
-import { c, card, cardMeta, cardTitle, eyebrow, gridFor, muted, sectionTitle } from "../styles";
+import { c, card, cardMeta, cardTitleWrap, eyebrow, gridFor, muted, sectionTitle } from "../styles";
 
 const GROUP_ORDER = ["movies", "tv", "music", "audiobooks", "books", "comics"];
 
@@ -125,7 +125,7 @@ export function SearchPage(props: { q: string }) {
             {list.map((it) => (
               <a key={it.workId} href={`#/work?id=${it.workId}`} className="cover-card" style={card}>
                 <Cover has={it.hasCover} id={it.workId} title={it.title} progress={it.percent || undefined} ratio={coverRatio(type)} />
-                <p style={cardTitle}>{it.title}</p>
+                <p style={cardTitleWrap}>{it.title}</p>
                 <p style={cardMeta}>{it.author}</p>
               </a>
             ))}

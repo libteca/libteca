@@ -1,3 +1,4 @@
+import type { ComponentChildren } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { api, media, type EditionDetail, type WorkDetail } from "../api";
 import { Cover } from "../components/cover";
@@ -55,7 +56,7 @@ export function WorkView(props: { id: number }) {
   if (isMusic) return <TrackList w={w} />;
   if (isMovie) {
     return (
-      <div>
+      <Wash id={w.id} has={!!w.hasCover}>
         <BackButton />
         <div style={workHead}>
           <div style={workCover}><Cover has={w.hasCover} id={w.id} title={w.title} /></div>
@@ -72,11 +73,34 @@ export function WorkView(props: { id: number }) {
             <AddToPlaylist editionId={first.id} />
           </div>
         </div>
-        <p style={{ ...muted, maxWidth: "46rem" }}>{w.description}</p>
-      </div>
+        <p style={{ ...muted, maxWidth: "40rem", lineHeight: 1.55 }}>{w.description}</p>
+      </Wash>
     );
   }
   return <EditionsView w={w} editionId={edition} setEdition={setEdition} isAdmin={isAdmin} reload={reload} />;
+}
+
+function Wash(props: { id: number; has: boolean; children: ComponentChildren }) {
+  return (
+    <div style={{ position: "relative" }}>
+      {props.has && (
+        <div aria-hidden style={{
+          position: "absolute",
+          inset: "-1.2rem -1.6rem auto",
+          height: "24rem",
+          backgroundImage: `url(${media(`/covers/${props.id}.jpg`)})`,
+          backgroundSize: "cover",
+          backgroundPosition: "center 30%",
+          filter: "blur(64px) saturate(1.2)",
+          opacity: 0.3,
+          pointerEvents: "none",
+          maskImage: "linear-gradient(to bottom, black 35%, transparent)",
+          WebkitMaskImage: "linear-gradient(to bottom, black 35%, transparent)",
+        }} />
+      )}
+      <div style={{ position: "relative" }}>{props.children}</div>
+    </div>
+  );
 }
 
 function BackButton() {
@@ -91,7 +115,7 @@ function EpisodeList(props: { w: WorkDetail; onPlay: (id: number) => void }) {
   const eps = [...props.w.editions].sort((a, b) => (a.seasonNum! - b.seasonNum!) || (a.episodeNum! - b.episodeNum!));
   const resumeEp = eps.find((e) => e.position && e.position > 0 && !e.isFinished);
   return (
-    <div>
+    <Wash id={props.w.id} has={!!props.w.hasCover}>
       <BackButton />
       <div style={workHead}>
         <div style={workCover}><Cover has={props.w.hasCover} id={props.w.id} title={props.w.title} /></div>
@@ -129,7 +153,7 @@ function EpisodeList(props: { w: WorkDetail; onPlay: (id: number) => void }) {
           );
         })}
       </div>
-    </div>
+    </Wash>
   );
 }
 
@@ -155,7 +179,7 @@ function TrackList(props: { w: WorkDetail }) {
   };
 
   return (
-    <div>
+    <Wash id={props.w.id} has={!!props.w.hasCover}>
       <BackButton />
       <div style={workHead}>
         <div style={workCover}><Cover has={props.w.hasCover} id={props.w.id} title={props.w.title} ratio="square" /></div>
@@ -191,7 +215,7 @@ function TrackList(props: { w: WorkDetail }) {
           onFileEnded={(i) => saveTrack(i, tracks[i]?.duration || 0, true)}
         />
       )}
-    </div>
+    </Wash>
   );
 }
 
@@ -245,7 +269,7 @@ function EditionsView(props: { w: WorkDetail; editionId: number; setEdition: (id
   })();
 
   return (
-    <div>
+    <Wash id={w.id} has={!!w.hasCover}>
       <BackButton />
       <div style={workHead}>
         <div style={workCover}><Cover has={w.hasCover} id={w.id} title={w.title} progress={ed.position && ed.duration ? ed.position / ed.duration : rp?.pct} /></div>
@@ -336,7 +360,7 @@ function EditionsView(props: { w: WorkDetail; editionId: number; setEdition: (id
           onQueueEnded={() => { save(ed.duration, true); setPlaying(false); }}
         />
       )}
-    </div>
+    </Wash>
   );
 }
 

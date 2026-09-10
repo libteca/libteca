@@ -282,13 +282,23 @@ export const card: CSSProperties = {
 };
 
 export const cardTitle: CSSProperties = {
-  margin: "0.5rem 0 0",
-  fontWeight: 600,
-  fontSize: "0.86rem",
-  letterSpacing: "-0.01em",
+  margin: "0.55rem 0 0",
+  fontWeight: 550,
+  fontSize: "0.84rem",
+  letterSpacing: "-0.012em",
   overflow: "hidden",
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
+};
+
+export const cardTitleWrap: CSSProperties = {
+  ...cardTitle,
+  whiteSpace: "normal",
+  display: "-webkit-box",
+  WebkitLineClamp: 2,
+  WebkitBoxOrient: "vertical",
+  lineHeight: 1.3,
+  minHeight: "2.2em",
 };
 
 export const cardMeta: CSSProperties = {

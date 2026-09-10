@@ -1,8 +1,9 @@
 import { useEffect, useState } from "preact/hooks";
 import { api, type Library, type RecentItem, type ResumeItem } from "../api";
+import { Cover } from "../components/cover";
 import { EmptyState, QuietLoad, Rail, RailCard } from "../components/rail";
 import { coverRatio, fmt, typeLabel } from "../util";
-import { c, muted, primaryBtn, railTitle } from "../styles";
+import { c, muted, primaryBtn, railTitle, workTitle } from "../styles";
 
 export function Home() {
   const [resume, setResume] = useState<ResumeItem[]>([]);
@@ -20,29 +21,49 @@ export function Home() {
 
   const watching = resume.filter((r) => r.libraryType === "movies" || r.libraryType === "tv");
   const listening = resume.filter((r) => r.libraryType === "audiobooks" || r.libraryType === "music");
-  const heroWatch = watching.length > 0;
-  const heroListen = !heroWatch && listening.length > 0;
+  const hero = watching[0] || listening[0];
+  const restWatch = watching.slice(hero && hero === watching[0] ? 1 : 0);
+  const restListen = listening.slice(hero && hero === listening[0] ? 1 : 0);
 
   return (
     <div>
-      {watching.length > 0 && (
+      {hero && (
+        <a href={`#/work?id=${hero.workId}`} className="press" style={{
+          display: "flex", gap: "2rem", alignItems: "center",
+          margin: "0.4rem 0 2.6rem", textDecoration: "none", color: "inherit",
+        }}>
+          <div style={{ width: "10.5rem", flexShrink: 0, maxWidth: "38%" }}>
+            <Cover has={hero.hasCover} id={hero.workId} title={hero.title} progress={hero.percent} ratio={coverRatio(hero.libraryType)} />
+          </div>
+          <div style={{ minWidth: 0 }}>
+            <p style={{ margin: "0 0 0.45rem", fontSize: "0.72rem", letterSpacing: "0.08em", textTransform: "uppercase", color: c.faint, fontWeight: 600 }}>
+              {watching[0] === hero ? "Continue watching" : "Continue listening"}
+            </p>
+            <h1 style={{ ...workTitle, fontSize: "clamp(1.8rem, 4vw, 2.8rem)", margin: "0 0 0.5rem" }}>{hero.title}</h1>
+            <p style={muted}>
+              {hero.author ? `${hero.author}  ·  ` : ""}
+              {fmt(Math.max(0, hero.durationSecs - hero.positionSecs))} left
+            </p>
+          </div>
+        </a>
+      )}
+      {restWatch.length > 0 && (
         <Rail title="Continue Watching">
-          {watching.map((r) => (
+          {restWatch.map((r) => (
             <RailCard
               key={r.editionId}
               id={r.workId}
               title={r.title}
-              meta={r.libraryType === "tv" ? `${fmt(r.durationSecs - r.positionSecs)} left` : fmt(r.durationSecs - r.positionSecs) + " left"}
+              meta={fmt(r.durationSecs - r.positionSecs) + " left"}
               hasCover={r.hasCover}
               progress={r.percent}
-              size={heroWatch ? 12.2 : 11}
             />
           ))}
         </Rail>
       )}
-      {listening.length > 0 && (
+      {restListen.length > 0 && (
         <Rail title="Continue Listening">
-          {listening.map((r) => (
+          {restListen.map((r) => (
             <RailCard
               key={r.editionId}
               id={r.workId}
@@ -51,7 +72,6 @@ export function Home() {
               hasCover={r.hasCover}
               progress={r.percent}
               ratio={coverRatio(r.libraryType)}
-              size={heroListen ? 12.2 : 11}
             />
           ))}
         </Rail>
