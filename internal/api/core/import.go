@@ -7,7 +7,7 @@ import (
 	"os"
 
 	"github.com/libteca/libteca/internal/importer"
-	"github.com/neutron-build/neutron-go/neutron"
+	"github.com/neutron-build/neutron/go/neutron"
 )
 
 // MountImport registers the foreign-instance import endpoints (admin only).

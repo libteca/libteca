@@ -5,7 +5,7 @@
 # Two blockers, both deliberate and temporary:
 #
 # 1. No published image yet. neutron-go is published
-#    (github.com/neutron-build/neutron-go v0.1.0); remaining work is the
+#    (github.com/neutron-build/neutron/go v0.1.0); remaining work is the
 #    release pipeline pushing ghcr.io/libteca/libteca.
 # 2. No /dev/dri. The teploy format has no device mapping (same class of
 #    limitation as the teploy-arcade docker-socket note — no escape hatch),

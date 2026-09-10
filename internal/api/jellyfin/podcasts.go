@@ -11,7 +11,7 @@ import (
 
 	"github.com/libteca/libteca/internal/auth"
 	"github.com/libteca/libteca/internal/store"
-	"github.com/neutron-build/neutron-go/neutron"
+	"github.com/neutron-build/neutron/go/neutron"
 )
 
 var rePodItem = regexp.MustCompile(`^pod(\d+)$`)

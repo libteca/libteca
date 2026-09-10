@@ -28,8 +28,8 @@ github.com/mfridman/interpolate v0.0.2 h1:pnuTK7MQIxxFz1Gr+rjSIx9u7qVjf5VOoM/u6B
 github.com/mfridman/interpolate v0.0.2/go.mod h1:p+7uk6oE07mpE/Ik1b8EckO0O4ZXiGAfshKBWLUM9Xg=
 github.com/ncruces/go-strftime v1.0.0 h1:HMFp8mLCTPp341M/ZnA4qaf7ZlsbTc+miZjCLOFAw7w=
 github.com/ncruces/go-strftime v1.0.0/go.mod h1:Fwc5htZGVVkseilnfgOVb9mKy6w1naJmn9CehxcKcls=
-github.com/neutron-build/neutron-go v0.1.0 h1:AqjnPJFO1IYxRBYrAq26YsqLmrsJdVUYJXxFg8O2Jcc=
-github.com/neutron-build/neutron-go v0.1.0/go.mod h1:nGNm9U7aGP9ErZIT5XUaBNLSDS3V7OTmtOqv/6lxDt8=
+github.com/neutron-build/neutron/go v0.1.0 h1:GWBWl/StQT9NUBccR68eWVk1W6oF7jhGUW64m+5e3FU=
+github.com/neutron-build/neutron/go v0.1.0/go.mod h1:byLlkDBaThugnFPbcf4hbVzVx5LJvStSQGVGsXqKhi0=
 github.com/pressly/goose/v3 v3.28.0 h1:D2M+iL31GmpZxSHOhX8mqyqAT3CXnokUmm0eKoSP+Vc=
 github.com/pressly/goose/v3 v3.28.0/go.mod h1:v26MOuB8bL3kzzrt3Vqhb3R0PRVsl8hFQKdrht/L6Rk=
 github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec h1:W09IVJc94icq4NjY3clb7Lk8O1qJ8BdBEF8z0ibU0rE=

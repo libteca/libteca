@@ -182,8 +182,8 @@ Decisions are append-only. Each entry: date, decision, why, what would reverse i
     Reverse: corpus capture may still reshape nothing here (first-party
     contract is ours alone); readers arrive Slice 2.
 
-17. **neutron-go published (2026-09-10).** Module path is
-    `github.com/neutron-build/neutron-go` v0.1.0 — not `neutron-dev` (that
-    org never existed). Own repo: GitHub `neutron-build/neutron-go` +
-    Forgejo `Tyler/neutron-go`. libteca dropped the relative `replace` and
-    requires v0.1.0. Reverse: none.
+17. **neutron-go published (2026-09-10).** Nested module in the Neutron
+    monorepo: `github.com/neutron-build/neutron/go` @ `go/v0.1.0`. The
+    sibling `neutron-build/neutron-go` / Forgejo `Tyler/neutron-go` repos
+    were created then deleted — nested is the shape. libteca requires
+    v0.1.0, no `replace`. Reverse: none.

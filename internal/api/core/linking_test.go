@@ -12,7 +12,7 @@ import (
 
 	"github.com/libteca/libteca/internal/auth"
 	"github.com/libteca/libteca/internal/store"
-	"github.com/neutron-build/neutron-go/neutron"
+	"github.com/neutron-build/neutron/go/neutron"
 )
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }

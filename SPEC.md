@@ -343,7 +343,7 @@ beyond create/revoke, no podcasts, no OPDS, no backups tooling (document
 
 **Owed — code, next session:** teploy /dev/dri passthrough is a Teploy-format
 gap, not libteca. Darwin watch logs Add failures (dir-only watches already).
-neutron-go is published: `github.com/neutron-build/neutron-go` v0.1.0
+neutron-go is published: `github.com/neutron-build/neutron/go` v0.1.0
 (Forgejo `Tyler/neutron-go`).
 
 **Demo/testing:** data/demo + data/demo-media (seeded via tools/seed), admin
