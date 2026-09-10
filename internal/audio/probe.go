@@ -16,15 +16,16 @@ type Chapter struct {
 }
 
 type Info struct {
-	Duration   float64           `json:"duration"`
-	Codec      string            `json:"codec"`
-	Container  string            `json:"container"`
-	Bitrate    int64             `json:"bitrate"`
-	Channels   int               `json:"channels"`
-	SampleRate int               `json:"sample_rate"`
-	Meta       map[string]string `json:"meta"`
-	Chapters   []Chapter         `json:"chapters"`
-	HasVideo   bool              `json:"has_video"`
+	Duration     float64           `json:"duration"`
+	Codec        string            `json:"codec"`
+	Container    string            `json:"container"`
+	Bitrate      int64             `json:"bitrate"`
+	Channels     int               `json:"channels"`
+	SampleRate   int               `json:"sample_rate"`
+	Meta         map[string]string `json:"meta"`
+	Chapters     []Chapter         `json:"chapters"`
+	HasVideo     bool              `json:"has_video"`
+	HasSubtitles bool              `json:"has_subtitles"`
 }
 
 type ffprobeOut struct {
@@ -96,6 +97,9 @@ func Probe(path string) (*Info, error) {
 		if s.CodecType == "video" && s.Disposition["attached_pic"] == 1 {
 			info.HasVideo = true
 		}
+		if isSubtitleStream(s.CodecType, s.CodecName) {
+			info.HasSubtitles = true
+		}
 	}
 	for i, c := range p.Chapters {
 		var start, end float64
@@ -119,6 +123,17 @@ func Probe(path string) (*Info, error) {
 		info.Chapters = append(info.Chapters, Chapter{ID: c.ID, Start: start, End: end, Title: title})
 	}
 	return info, nil
+}
+
+func isSubtitleStream(codecType, codecName string) bool {
+	if codecType == "subtitle" || codecType == "subtitles" {
+		return true
+	}
+	switch strings.ToLower(codecName) {
+	case "subrip", "ass", "webvtt", "mov_text":
+		return true
+	}
+	return false
 }
 
 func MimeType(codec, container string) string {

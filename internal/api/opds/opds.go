@@ -450,7 +450,7 @@ func (a *API) cover(w http.ResponseWriter, r *http.Request, _ int64) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	srcPath := filepath.Join(a.Dir, "covers", *wv.CoverPath)
+	srcPath := filepath.Join(a.Dir, "covers", filepath.Base(*wv.CoverPath))
 	if r.URL.Query().Get("size") == "thumb" {
 		a.coverThumb(w, r, wid, srcPath)
 		return

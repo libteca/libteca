@@ -631,7 +631,7 @@ func (a *API) image(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", 404)
 		return
 	}
-	f, err := os.Open(filepath.Join(a.Dir, "covers", *wv.CoverPath))
+	f, err := os.Open(filepath.Join(a.Dir, "covers", filepath.Base(*wv.CoverPath)))
 	if err != nil {
 		http.Error(w, "not found", 404)
 		return
@@ -699,7 +699,7 @@ func (a *API) playbackInfo(w http.ResponseWriter, r *http.Request) {
 	fid := "f" + strconv.FormatInt(f.ID, 10)
 	playSession := "ps-" + strconv.FormatInt(ed.ID, 10)
 	mediaSource := map[string]any{
-		"Id": fid, "Path": f.Path, "Protocol": "File",
+		"Id": fid, "Path": filepath.Base(f.Path), "Protocol": "File",
 		"SupportsDirectPlay": false, "SupportsDirectStream": false, "SupportsTranscoding": true,
 	}
 	container := ""
@@ -744,6 +744,11 @@ func (a *API) mediaStreams(f *store.FileRec) []map[string]any {
 		}
 		streams = append(streams, s)
 	}
+	streams = append(streams, map[string]any{
+		"Type": "Subtitle", "Index": 0, "Codec": "vtt",
+		"IsExternal": true, "DeliveryMethod": "External",
+		"IsTextSubtitleStream": true,
+	})
 	return streams
 }
 
@@ -795,6 +800,10 @@ func (a *API) hlsMaster(w http.ResponseWriter, r *http.Request) {
 func (a *API) hlsSegment(w http.ResponseWriter, r *http.Request) {
 	sid := r.PathValue("sid")
 	file := r.PathValue("file")
+	if !regexp.MustCompile(`^[A-Za-z0-9._-]+$`).MatchString(sid) {
+		http.Error(w, "bad", 400)
+		return
+	}
 	if !regexp.MustCompile(`^seg\d+\.ts$|^index\.m3u8$`).MatchString(file) {
 		http.Error(w, "bad", 400)
 		return

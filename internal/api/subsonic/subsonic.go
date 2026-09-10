@@ -378,7 +378,7 @@ func (a *API) getCoverArt(w http.ResponseWriter, r *http.Request, _ int64) {
 		http.Error(w, "not found", 404)
 		return
 	}
-	f, err := os.Open(filepath.Join(a.Dir, "covers", *album.CoverPath))
+	f, err := os.Open(filepath.Join(a.Dir, "covers", filepath.Base(*album.CoverPath)))
 	if err != nil {
 		http.Error(w, "not found", 404)
 		return

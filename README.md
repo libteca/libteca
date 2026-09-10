@@ -2,41 +2,45 @@
 
 One media server, every client. Movies, TV, music, audiobooks, podcasts, books,
 and comics from a single Go binary with an embedded SQLite store — serving four
-wire-protocol faces so the client apps you already use connect unchanged. The
-product is the compatibility layer: instead of building a fifth client
-ecosystem, libteca inherits the existing ones.
+wire-protocol faces so existing client apps are the target, not a fifth client
+ecosystem.
 
-Status: BUILDING (private). The spine, first-party web UI, Audiobookshelf face,
-and Jellyfin face v1 (including HLS transcode) are built; OPDS and Subsonic
-subsets are mounted. Live-client verification against a recorded traffic corpus
-is the next owed step — every client claim below says exactly how far it has
-actually been tested.
+Status: BUILDING (private). The spine, first-party web UI, and all four faces
+are mounted. No live-client cell below says "works". ABS is expected from
+reading official-app source (corpus replay pending). Jellyfin, OPDS, and
+Subsonic are corpus-pending / untested against real clients.
 
 ## The four faces
 
 | Face | Protocol surface | Inherited clients | Status |
 |---|---|---|---|
-| Audiobookshelf | ABS API: login token, libraries/items, progress sync, cover + file streaming, socket.io | Official ABS iOS/Android apps | Built; corpus verification pending |
-| Jellyfin | Jellyfin 10.10.x API: auth, /Items hierarchy, images, PlaybackInfo + DeviceProfile engine, HLS transcode, /Sessions + websocket | Jellyfin Media Player, Android TV, Swiftfin, Infuse, Findroid | Built v1; corpus verification pending |
+| Audiobookshelf | ABS API: login token, libraries/items, progress sync, cover + file streaming. No socket.io (stretch, not built). | Official ABS iOS/Android apps | Built; corpus verification pending |
+| Jellyfin | Jellyfin-shaped 10.10.x surface: auth, /Items hierarchy, images, PlaybackInfo (hardcoded direct-play vs HLS — not a DeviceProfile engine), HLS transcode, /Sessions + websocket | Jellyfin Media Player, Android TV, Swiftfin, Infuse, Findroid | Built v1; corpus verification pending |
 | OPDS | OPDS 1.2 navigation/acquisition feeds, Basic auth, OpenSearch, OPDS-PSE paged CBZ | KOReader, KyBook, Chunky, Moon+, Panel | Built; untested against clients |
-| Subsonic | Subsonic subset: ping, authenticate, artists/indexes, album lists, stream, search, scrobble | Symfonium, Feishin, play:Sub | Subset built; untested against clients |
+| Subsonic | Subsonic subset: ping, password/token auth on `/rest/*`, artists/indexes, album lists, stream, search, scrobble | Symfonium, Feishin, play:Sub | Subset built; untested against clients |
 
-Podcast serving (subscribe, auto-download, OPML import/export) is built on the
-spine and surfaces in the ABS-compatible apps.
+Podcast subscribe, auto-download, and OPML import/export are on the spine and
+mounted on the ABS face. That path is corpus-unverified against ABS apps.
 
 ## Quickstart
 
-Requires Go 1.26+ and Node/npm for the embedded web UI; ffmpeg + ffprobe on
-PATH for scan-time probing and transcoding.
+Source build needs Go 1.26+, Node/npm (embedded web UI), ffmpeg + ffprobe on
+PATH, and a local `Neutron/go` checkout — `go.mod` `replace`s
+`github.com/neutron-dev/neutron-go` to `../../Neutron/go`. There is no
+`go get` / `go install` path. Release tarballs need only ffmpeg + ffprobe.
 
 ```sh
-make build                                  # builds web UI into the binary
-./libteca --data ./data --init-admin admin:secret   # creates admin, then serves
+make build                                  # web UI into the binary, then go build
+./libteca --data ./data --init-admin admin:secret   # creates admin, then serves :8096
 ```
 
-Open http://localhost:8096, log in, add a library pointing at your media, and
-scan (from the web UI, or `./libteca --data ./data --scan` as a one-shot).
-Then point clients at it:
+`--watch` is on by default (`--watch=false` or `LIBTECA_WATCH=false` disables;
+`LIBTECA_SWEEP=<seconds>` sets the sweep, `0` disables). `--hwaccel` accepts
+`auto|none|videotoolbox|vaapi|nvenc|qsv`; empty defers to `$LIBTECA_HWACCEL`,
+then auto-detect. `--port` defaults to 8096.
+
+Open http://localhost:8096, log in, add a library, and scan (web UI, or
+`./libteca --data ./data --scan` as a one-shot). Then point clients at it:
 
 | Client | Face | How to connect |
 |---|---|---|
@@ -45,8 +49,10 @@ Then point clients at it:
 | KOReader | OPDS | OPDS catalog `http://<host>:8096/opds`, Basic auth |
 | Symfonium | Subsonic | Subsonic server `http://<host>:8096/rest` |
 
-From a release tarball instead of source: unpack, verify against SHA256SUMS,
-run the binary with the same flags.
+Those connection recipes are the intended URLs, not a claim the clients work.
+
+From a release tarball: unpack, verify against SHA256SUMS, run the binary with
+the same flags. No Node, no Neutron checkout.
 
 ## Client compatibility matrix
 
@@ -56,7 +62,7 @@ run is pending, so nothing says "works" yet.
 
 | Client | Face | Status |
 |---|---|---|
-| Audiobookshelf official app (iOS/Android) | ABS | Expected works — contract read from client source; corpus replay pending |
+| Audiobookshelf official app (iOS/Android) | ABS | Expected — contract read from client source; corpus replay pending |
 | Jellyfin Media Player (desktop) | Jellyfin | Untested — corpus capture pending |
 | Jellyfin Android TV / Fire TV | Jellyfin | Untested |
 | Swiftfin (Apple TV) | Jellyfin | Untested |
@@ -70,13 +76,14 @@ run is pending, so nothing says "works" yet.
 | play:Sub | Subsonic | Untested |
 
 The web UI (library browse, players for audio/video, EPUB/CBZ readers, admin)
-is the fallback for anything a face does not cover yet.
+is a first-party surface, not a substitute for face verification.
 
 ## Benchmarks
 
 Real numbers from `bench/results/` on this machine (darwin/arm64, 10-core,
 go1.26.6, 2026-09-09). 10k-file synthetic audio library, 1080p H.264 source.
-Reproduce with `make seed` then `make bench`; JSON lands in `bench/results/`.
+`make bench` self-seeds anything missing; `make seed` is the 10k audio library
+only. JSON lands in `bench/results/`.
 
 | Benchmark | Result | Target | Pass |
 |---|---|---|---|
@@ -95,17 +102,17 @@ Direct play is disk-bound: no server CPU beyond file reads.
   admin + hardware-transcode notes in [deploy/README.md](deploy/README.md).
 - Teploy: app template at [deploy/teploy/teploy.yml](deploy/teploy/teploy.yml)
   (single service, port 8096, `/healthcheck` health, `data` volume; read its
-  header for current limitations).
+  header for current limitations — no published image yet).
 
 Release artifacts: `make release` cross-compiles linux/amd64, linux/arm64,
 darwin/amd64, darwin/arm64 into `dist/release/` as tarballs/zips with
-SHA256SUMS. The binary is CGo-free; only ffmpeg is a runtime dependency.
+SHA256SUMS. The binary is CGo-free; runtime deps are ffmpeg and ffprobe.
 
 ## Security posture
 
-Local-first, zero telemetry. Per-device tokens with revocation (web admin);
-admin and user surfaces separated. No public-internet exposure in any default —
-LAN or Tailscale is the intended deployment. All file serving resolves through
-the scanned file table's stored paths; client-supplied paths never reach the
-filesystem (path traversal is the classic media-server kill vector). See
-PLAN.md §11.
+Local-first, zero telemetry. Listens on `:<port>` (all interfaces); LAN or
+Tailscale is the intended deployment — nothing in the defaults puts auth in
+front of a public bind. Per-device tokens with revocation (web admin); admin
+and user surfaces separated. All file serving resolves through the scanned
+file table's stored paths; client-supplied paths never reach the filesystem
+(path traversal is the classic media-server kill vector). See PLAN.md §11.

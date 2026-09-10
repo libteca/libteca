@@ -48,7 +48,9 @@ func (s *Server) Handler() http.Handler {
 
 	tm := transcode.New(s.Dir)
 	if s.HWAccel != "" {
-		tm.SetHwAccel(s.HWAccel)
+		if err := tm.SetHwAccel(s.HWAccel); err != nil {
+			slog.Warn("libteca: --hwaccel ignored", "value", s.HWAccel, "err", err)
+		}
 	}
 	jf := jellyfin.New(s.DB, s.Dir, tm)
 	jf.Mount(r)

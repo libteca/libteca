@@ -117,14 +117,31 @@ func scanVideoLibrary(db *store.DB, lib *store.Library, coversDir string, tv boo
 			continue
 		}
 		title, year := titleYear(filepath.Base(top))
+		nfo := readWorkNFO(top, group[0].path)
+		if nfo != nil {
+			if nfo.Title != "" {
+				title = nfo.Title
+			}
+			if y := nfo.YearValue(); y != "" {
+				year = y
+			}
+		}
 		authorPtr := nullable(year)
 		w := &store.Work{LibraryID: lib.ID, Title: title, Author: &authorPtr}
+		if nfo != nil {
+			if d := nfo.Description(); d != "" {
+				w.Description = &d
+			}
+		}
 		workID, err := db.UpsertWork(w)
 		if err != nil {
 			return count, err
 		}
 		if w.Created {
 			tr.work()
+		}
+		if err := applyNFO(db, workID, nfo); err != nil {
+			fmt.Fprintf(os.Stderr, "libteca: skip nfo %s: %v\n", top, err)
 		}
 		for i := range group {
 			f := &group[i]
@@ -144,6 +161,8 @@ func scanVideoLibrary(db *store.DB, lib *store.Library, coversDir string, tv boo
 					edTitle = fmt.Sprintf("S%02dE%02d", f.season, f.episode)
 				}
 			}
+			rawTitle := edTitle
+			edTitle = episodeTitleFromNFO(f.path, edTitle)
 			dur := f.duration
 			e := &store.Edition{WorkID: workID, Format: "video", Title: edTitle, DurationSecs: &dur}
 			if tv {
@@ -154,6 +173,9 @@ func scanVideoLibrary(db *store.DB, lib *store.Library, coversDir string, tv boo
 			editionID, err := db.UpsertEdition(e)
 			if err != nil {
 				return count, err
+			}
+			if edTitle != rawTitle {
+				_ = db.SetEpisodeTitle(editionID, edTitle)
 			}
 			c, ct, vc, w_, h, br := f.codec, f.container, f.vcodec, f.width, f.height, f.bitrate
 			fr := &store.FileRec{
@@ -176,20 +198,8 @@ func scanVideoLibrary(db *store.DB, lib *store.Library, coversDir string, tv boo
 }
 
 func ensureCoverVideo(db *store.DB, workID int64, top, coversDir string) error {
-	dst := filepath.Join(coversDir, fmt.Sprintf("%d.jpg", workID))
-	if _, err := os.Stat(dst); err == nil {
-		return db.SetWorkCover(workID, fmt.Sprintf("%d.jpg", workID))
-	}
-	for _, name := range []string{"poster.jpg", "Poster.jpg", "cover.jpg", "Cover.jpg", "folder.jpg"} {
-		src := filepath.Join(top, name)
-		if data, err := os.ReadFile(src); err == nil {
-			if werr := os.WriteFile(dst, data, 0o644); werr != nil {
-				return werr
-			}
-			return db.SetWorkCover(workID, fmt.Sprintf("%d.jpg", workID))
-		}
-	}
-	return nil
+	_, err := importSidecarPoster(db, workID, top, coversDir, findWorkNFO(top) != "")
+	return err
 }
 
 func parseEpisode(v *vidFile, path, rel string) {

@@ -252,7 +252,7 @@ func (a *API) podcastCover(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no cover", 404)
 		return
 	}
-	f, err := os.Open(filepath.Join(a.DataDir, "covers", *p.CoverPath))
+	f, err := os.Open(filepath.Join(a.DataDir, "covers", filepath.Base(*p.CoverPath)))
 	if err != nil {
 		http.Error(w, "not found", 404)
 		return

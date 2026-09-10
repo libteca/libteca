@@ -1,16 +1,26 @@
 package core
 
 import (
+	"context"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/libteca/libteca/internal/auth"
 )
 
 var srtStamp = regexp.MustCompile(`(\d{1,2}:\d{2}:\d{2}),(\d{1,3})`)
+
+var (
+	ffmpegLookPath = exec.LookPath
+	ffmpegRun      = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return exec.CommandContext(ctx, name, args...).Output()
+	}
+)
 
 func (a *API) subtitles(w http.ResponseWriter, r *http.Request) {
 	fid := auth.Atoi64(r.PathValue("fileId"))
@@ -20,19 +30,28 @@ func (a *API) subtitles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	side, ok := sidecarSRT(f.Path)
-	if !ok {
-		writeJSON(w, 404, map[string]string{"error": "no subtitles"})
+	if ok {
+		data, err := os.ReadFile(side)
+		if err != nil {
+			writeJSON(w, 404, map[string]string{"error": "no subtitles"})
+			return
+		}
+		writeVTT(w, []byte(srtToVTT(string(data))))
 		return
 	}
-	data, err := os.ReadFile(side)
+	data, err := embeddedVTT(r.Context(), f.Path)
 	if err != nil {
 		writeJSON(w, 404, map[string]string{"error": "no subtitles"})
 		return
 	}
+	writeVTT(w, data)
+}
+
+func writeVTT(w http.ResponseWriter, data []byte) {
 	w.Header().Set("Content-Type", "text/vtt")
 	w.Header().Set("Cache-Control", "max-age=86400")
 	w.WriteHeader(200)
-	w.Write([]byte(srtToVTT(string(data))))
+	w.Write(data)
 }
 
 // sidecarSRT looks for <base>.srt and <base>.<2-letter>.srt next to the media
@@ -66,6 +85,48 @@ func sidecarSRT(media string) (string, bool) {
 		return lang, true
 	}
 	return "", false
+}
+
+func libtecaVTT(media string) string {
+	return strings.TrimSuffix(media, filepath.Ext(media)) + ".libteca.vtt"
+}
+
+func cachedVTT(media string) ([]byte, bool) {
+	cache := libtecaVTT(media)
+	ci, err := os.Stat(cache)
+	if err != nil {
+		return nil, false
+	}
+	si, err := os.Stat(media)
+	if err != nil || ci.ModTime().Before(si.ModTime()) {
+		return nil, false
+	}
+	data, err := os.ReadFile(cache)
+	if err != nil {
+		return nil, false
+	}
+	return data, true
+}
+
+func extractEmbedded(ctx context.Context, src string) ([]byte, error) {
+	if _, err := ffmpegLookPath("ffmpeg"); err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	return ffmpegRun(ctx, "ffmpeg", "-i", src, "-map", "0:s:0", "-f", "webvtt", "-")
+}
+
+func embeddedVTT(ctx context.Context, media string) ([]byte, error) {
+	if data, ok := cachedVTT(media); ok {
+		return data, nil
+	}
+	data, err := extractEmbedded(ctx, media)
+	if err != nil {
+		return nil, err
+	}
+	_ = os.WriteFile(libtecaVTT(media), data, 0o644)
+	return data, nil
 }
 
 func srtToVTT(s string) string {

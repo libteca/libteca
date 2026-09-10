@@ -304,7 +304,7 @@ func (a *API) itemCover(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no cover", 404)
 		return
 	}
-	path := filepath.Join(a.DataDir, "covers", *ctx.wv.CoverPath)
+	path := filepath.Join(a.DataDir, "covers", filepath.Base(*ctx.wv.CoverPath))
 	f, err := os.Open(path)
 	if err != nil {
 		http.Error(w, "not found", 404)

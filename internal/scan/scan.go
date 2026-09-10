@@ -178,14 +178,31 @@ func scanBook(db *store.DB, lib *store.Library, top string, group []bookFile, co
 		title = filepath.Base(top)
 	}
 
+	nfo := readWorkNFO(top, first.path)
+	if nfo != nil {
+		if nfo.Title != "" {
+			title = nfo.Title
+		}
+		if author == "" {
+			author = nfo.CreditsLine()
+		}
+	}
 	authorPtr := nullable(author)
 	w := &store.Work{LibraryID: lib.ID, Title: title, Author: &authorPtr}
+	if nfo != nil {
+		if d := nfo.Description(); d != "" {
+			w.Description = &d
+		}
+	}
 	workID, err := db.UpsertWork(w)
 	if err != nil {
 		return err
 	}
 	if w.Created {
 		tr.work()
+	}
+	if err := applyNFO(db, workID, nfo); err != nil {
+		fmt.Fprintf(os.Stderr, "libteca: skip nfo %s: %v\n", top, err)
 	}
 
 	var total float64
@@ -228,19 +245,11 @@ func scanBook(db *store.DB, lib *store.Library, top string, group []bookFile, co
 }
 
 func ensureCover(db *store.DB, workID int64, top string, group []bookFile, coversDir string) error {
+	ok, err := importSidecarPoster(db, workID, top, coversDir, findWorkNFO(top) != "")
+	if err != nil || ok {
+		return err
+	}
 	dst := filepath.Join(coversDir, fmt.Sprintf("%d.jpg", workID))
-	if _, err := os.Stat(dst); err == nil {
-		return db.SetWorkCover(workID, fmt.Sprintf("%d.jpg", workID))
-	}
-	for _, name := range []string{"cover.jpg", "Cover.jpg", "folder.jpg", "Folder.jpg"} {
-		src := filepath.Join(top, name)
-		if data, err := os.ReadFile(src); err == nil {
-			if werr := os.WriteFile(dst, data, 0o644); werr != nil {
-				return werr
-			}
-			return db.SetWorkCover(workID, fmt.Sprintf("%d.jpg", workID))
-		}
-	}
 	for _, f := range group {
 		if f.info != nil && f.info.HasVideo {
 			cmd := extractCmd(f.path, dst)
