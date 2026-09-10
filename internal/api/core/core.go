@@ -46,8 +46,12 @@ func (a *API) Mount(r *neutron.Router) {
 	r.HandleFunc("GET /libraries/{id}/scan/jobs", a.scanJobs)
 	r.HandleFunc("GET /libraries/{id}/scan/events", a.scanEvents)
 	r.HandleFunc("GET /scan-jobs/{id}", a.scanJob)
+	r.HandleFunc("GET /resume", a.resume)
+	r.HandleFunc("GET /search", a.search)
+	r.HandleFunc("GET /recent", a.recent)
 	r.HandleFunc("GET /libraries/{id}/works", a.works)
 	r.HandleFunc("GET /works/{id}", a.work)
+	r.HandleFunc("GET /subtitles/{fileId}", a.subtitles)
 	r.HandleFunc("GET /progress/{editionId}", a.getProgress)
 	r.HandleFunc("POST /progress/{editionId}", a.setProgress)
 	r.HandleFunc("GET /stream/{fileId}", a.stream)
@@ -462,7 +466,26 @@ func nowMilli() int64 { return time.Now().UnixMilli() }
 
 func (a *API) works(w http.ResponseWriter, r *http.Request) {
 	id := auth.Atoi64(r.PathValue("id"))
-	works, err := a.DB.WorksInLibrary(id)
+	q := r.URL.Query()
+	sort, dir, filter := q.Get("sort"), q.Get("dir"), q.Get("filter")
+	switch sort {
+	case "title", "author", "added", "updated":
+	default:
+		sort = "title"
+	}
+	if dir != "asc" && dir != "desc" {
+		if sort == "added" || sort == "updated" {
+			dir = "desc"
+		} else {
+			dir = "asc"
+		}
+	}
+	switch filter {
+	case "in_progress", "unplayed", "finished":
+	default:
+		filter = "all"
+	}
+	works, err := a.DB.WorksInLibraryFiltered(id, auth.UserID(r), sort, dir, filter)
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return

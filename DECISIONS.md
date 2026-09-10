@@ -104,3 +104,20 @@ Decisions are append-only. Each entry: date, decision, why, what would reverse i
     goroutine fixes ffmpeg zombies).
     Reverse: corpus capture (owed #1-2) arbitrates every `// corpus:`
     marker; websocket timing reverses if a priority client hard-requires it.
+
+13. **First-party web UI is a headline surface, not a fallback; built
+    contract-first.** Founder call 2026-09-09: the web UI must beat
+    Jellyfin/Plex/Kavita/ABS standalone (inherited clients are the moat,
+    but the product can't depend on them). Method: the discovery layer
+    (resume/search/recent/sort-filter/subtitles) and the UI were built in
+    parallel against one written JSON contract — field names load-bearing,
+    timestamps Unix milliseconds everywhere (matches /me, progress), media
+    tags authenticate via `?token=` query (auth middleware already accepted
+    it; covers were silently 401ing before). Admin scan-jobs + SSE now
+    consumed by the UI (closes owed item 4). Found gap recorded as owed:
+    users/tokens core endpoints (SPEC §5 promised, never built).
+    Plex note: no Plex face ever — closed protocol, account-tethered
+    clients; libteca beats Plex positionally (no subscription, no paywalled
+    remote/transcode), not by emulation.
+    Reverse: corpus capture may still reshape nothing here (first-party
+    contract is ours alone); readers arrive Slice 2.

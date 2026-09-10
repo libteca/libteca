@@ -319,6 +319,21 @@ beyond create/revoke, no podcasts, no OPDS, no backups tooling (document
 - HLS cold start fixed: `-hls_init_time 2`, `Prebuffer` before m3u8 serve,
   `WaitForSegmentFile` in segment handler (no more seek-race 404s), ffmpeg
   zombies reaped (`cmd.Wait` goroutine). Tests incl. real-ffmpeg integration.
+- Discovery layer for the first-party UI (contract-built in parallel with
+  the web overhaul, DECISIONS 13): `GET /api/core/resume` (cross-type
+  continue hub, latest-per-work), `/search?q=` (title-then-author ILIKE),
+  `/recent`, works endpoint gained `sort/dir/filter` params (defaults
+  byte-compatible with the old order), `GET /subtitles/{fileId}`
+  (sidecar .srt → VTT, lazy stat, DB-resolved paths only).
+- Web UI overhauled to beat incumbent web clients as a standalone client:
+  modularized (api/styles/views/players/components), Home resume hub
+  (Continue Watching/Listening + Recently Added + libraries), global search
+  with grouped dropdown, library sort/filter controls, work page sells
+  Work→Editions (format badges, per-edition state), video player subtitles
+  (CC toggle via `<track>`), Media Session API + keyboard shortcuts both
+  players, admin shows scan jobs + live SSE progress (owed item 4 fully
+  wired), PWA (manifest + hand-rolled SW, static-only caching, 15.7 kB gz
+  bundle). Cover `<img>` 401 bug fixed (`?token=` media URLs).
 
 **Owed, in order:**
 
@@ -328,11 +343,12 @@ beyond create/revoke, no podcasts, no OPDS, no backups tooling (document
    TV); verify the three `// corpus:` trickplay markers and NextUp shapes.
 3. Jellyfin websocket (`/socket`) for remote control — OPTIONAL/stretch per
    founder 2026-09-09; do after corpus, not before.
-4. Admin UI wiring for scan jobs + SSE (server-side done; web UI still
-   shows the old 202 flow).
+4. Users/tokens core endpoints + admin UI section (SPEC §5 promised them,
+   never built — only /login and /me exist; discovered during web overhaul).
 5. Slice 0 exit gates G1-G3 (real library, web player, phone) — then the
    PLAN §14 public/launch decisions.
 
 **Known warts:** episode titles depend on filename quality (no providers yet);
 no fsnotify; `--init-admin` first-run only; trickplay/manifest shapes guessed
-until corpus verifies; SSE events consumed by nothing yet.
+until corpus verifies; no in-app EPUB/CBZ readers (Slice 2); no users/tokens
+management yet.

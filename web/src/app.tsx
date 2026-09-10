@@ -1,0 +1,84 @@
+import { useEffect, useState } from "preact/hooks";
+import { api, getToken, setToken } from "./api";
+import { c, header as headerStyle, brand, center, linkBtn, nav, navLink, page } from "./styles";
+import { Login } from "./views/login";
+import { Home } from "./views/home";
+import { LibraryView } from "./views/library";
+import { WorkView } from "./views/work";
+import { SearchBox, SearchPage } from "./views/search";
+import { AdminView } from "./views/admin";
+import { IconHome, IconLibrary } from "./components/svg";
+
+type View = { name: string; id?: number; q?: string; lib?: number };
+
+function parseHash(): View {
+  const h = (typeof location === "undefined" ? "" : location.hash).replace(/^#\//, "");
+  const [name, qs] = h.split("?");
+  const params = new URLSearchParams(qs || "");
+  const id = params.get("id");
+  const q = params.get("q");
+  const lib = params.get("lib");
+  if (name === "work" && id) return { name: "work", id: Number(id) };
+  if (name === "admin") return { name: "admin" };
+  if (name === "search") return { name: "search", q: q || "" };
+  if (name === "home") return { name: "home" };
+  if (name === "library") return { name: "library", lib: lib ? Number(lib) : undefined };
+  return { name: "home" };
+}
+
+const globalCss = `
+.rail-x { scrollbar-width: none; }
+.rail-x::-webkit-scrollbar { display: none; }
+a { color: inherit; }
+::selection { background: rgba(10, 132, 255, 0.35); }
+select option { background: #141518; color: #f5f5f7; }
+input[type="range"].seek { height: 3px; cursor: pointer; }
+video::cue { background: rgba(0,0,0,0.7); }
+`;
+
+export function App() {
+  const [ready, setReady] = useState(false);
+  const [view, setView] = useState<View>(() => parseHash());
+  const [me, setMe] = useState<{ name: string; isAdmin: boolean } | null>(null);
+
+  useEffect(() => {
+    setToken(localStorage.getItem("libteca-token") || "");
+    if (!getToken()) { setReady(true); return; }
+    api("/me").then((u) => { setMe(u); setReady(true); }).catch(() => { setReady(true); });
+    const onHash = () => setView(parseHash());
+    addEventListener("hashchange", onHash);
+    return () => removeEventListener("hashchange", onHash);
+  }, []);
+
+  if (!ready) return <div style={center}>loading…</div>;
+  if (!getToken()) return <Login onLogin={() => { setView({ name: "home" }); location.hash = "#/home"; location.reload(); }} />;
+  if (!me) return <div style={center}>checking…</div>;
+
+  const navItem = (active: boolean): preact.JSX.CSSProperties => ({
+    ...navLink, color: active ? c.text : c.muted,
+    display: "inline-flex", alignItems: "center", gap: "0.35rem",
+  });
+
+  return (
+    <div style={page}>
+      <style>{globalCss}</style>
+      <header style={headerStyle}>
+        <a href="#/home" style={brand}>libteca</a>
+        <SearchBox />
+        <nav style={nav}>
+          <a href="#/home" style={navItem(view.name === "home")}><IconHome size={14} /> Home</a>
+          <a href="#/library" style={navItem(view.name === "library")}><IconLibrary size={14} /> Library</a>
+          {me.isAdmin && <a href="#/admin" style={navItem(view.name === "admin")}>Admin</a>}
+          <button style={linkBtn} onClick={() => { localStorage.removeItem("libteca-token"); setToken(""); location.hash = "#/"; location.reload(); }}>
+            {me.name} · sign out
+          </button>
+        </nav>
+      </header>
+      {view.name === "home" && <Home />}
+      {view.name === "library" && <LibraryView lib={view.lib} />}
+      {view.name === "work" && view.id != null && <WorkView id={view.id} />}
+      {view.name === "search" && <SearchPage q={view.q || ""} />}
+      {view.name === "admin" && me.isAdmin && <AdminView />}
+    </div>
+  );
+}
