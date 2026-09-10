@@ -4,10 +4,9 @@
 # STATUS: target shape for `teploy deploy libteca` (PLAN §3, Slice 1 exit).
 # Two blockers, both deliberate and temporary:
 #
-# 1. No published image. go.mod carries a relative `replace` to the
-#    unpublished neutron-go module, so an image cannot be built from this
-#    repo in isolation. When neutron-go publishes (PLAN §4), the release
-#    pipeline pushes ghcr.io/libteca/libteca and this file deploys as-is.
+# 1. No published image yet. neutron-go is published
+#    (github.com/neutron-build/neutron-go v0.1.0); remaining work is the
+#    release pipeline pushing ghcr.io/libteca/libteca.
 # 2. No /dev/dri. The teploy format has no device mapping (same class of
 #    limitation as the teploy-arcade docker-socket note — no escape hatch),
 #    so LIBTECA_HWACCEL=auto degrades to software transcode in the

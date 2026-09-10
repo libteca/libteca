@@ -14,7 +14,7 @@ import (
 
 	"github.com/libteca/libteca/internal/scan"
 	"github.com/libteca/libteca/internal/store"
-	"github.com/neutron-dev/neutron-go/neutron"
+	"github.com/neutron-build/neutron-go/neutron"
 )
 
 type scanResp struct {

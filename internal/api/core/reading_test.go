@@ -13,7 +13,7 @@ import (
 
 	"github.com/libteca/libteca/internal/auth"
 	"github.com/libteca/libteca/internal/store"
-	"github.com/neutron-dev/neutron-go/neutron"
+	"github.com/neutron-build/neutron-go/neutron"
 )
 
 func seedBookEdition(t *testing.T, db *store.DB, workID int64, format string, pageCount *int) int64 {

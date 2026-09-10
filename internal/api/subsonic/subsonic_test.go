@@ -17,7 +17,7 @@ import (
 	"github.com/cespare/xxhash/v2"
 	"github.com/libteca/libteca/internal/auth"
 	"github.com/libteca/libteca/internal/store"
-	"github.com/neutron-dev/neutron-go/neutron"
+	"github.com/neutron-build/neutron-go/neutron"
 )
 
 type env struct {

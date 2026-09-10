@@ -20,7 +20,7 @@ import (
 	"github.com/libteca/libteca/internal/audio"
 	"github.com/libteca/libteca/internal/auth"
 	"github.com/libteca/libteca/internal/store"
-	"github.com/neutron-dev/neutron-go/neutron"
+	"github.com/neutron-build/neutron-go/neutron"
 )
 
 // ID scheme (stable, documented):

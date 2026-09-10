@@ -181,3 +181,9 @@ Decisions are append-only. Each entry: date, decision, why, what would reverse i
     remote/transcode), not by emulation.
     Reverse: corpus capture may still reshape nothing here (first-party
     contract is ours alone); readers arrive Slice 2.
+
+17. **neutron-go published (2026-09-10).** Module path is
+    `github.com/neutron-build/neutron-go` v0.1.0 — not `neutron-dev` (that
+    org never existed). Own repo: GitHub `neutron-build/neutron-go` +
+    Forgejo `Tyler/neutron-go`. libteca dropped the relative `replace` and
+    requires v0.1.0. Reverse: none.

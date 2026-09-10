@@ -19,7 +19,7 @@ import (
 	"github.com/libteca/libteca/internal/store"
 	"github.com/libteca/libteca/internal/transcode"
 	"github.com/libteca/libteca/internal/trickplay"
-	"github.com/neutron-dev/neutron-go/neutron"
+	"github.com/neutron-build/neutron-go/neutron"
 )
 
 type API struct {

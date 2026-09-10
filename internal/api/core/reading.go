@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/libteca/libteca/internal/auth"
-	"github.com/neutron-dev/neutron-go/neutron"
+	"github.com/neutron-build/neutron-go/neutron"
 )
 
 // MountReading registers the reading endpoints. Add this one line to

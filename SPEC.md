@@ -341,9 +341,10 @@ beyond create/revoke, no podcasts, no OPDS, no backups tooling (document
    capture).
 4. PLAN §14 launch decisions (public repo timing, media-hub archive, license).
 
-**Owed — code, next session:** neutron-go publish (blocks CI, container
-image, teploy registration); teploy /dev/dri passthrough is a Teploy-format
+**Owed — code, next session:** teploy /dev/dri passthrough is a Teploy-format
 gap, not libteca. Darwin watch logs Add failures (dir-only watches already).
+neutron-go is published: `github.com/neutron-build/neutron-go` v0.1.0
+(Forgejo `Tyler/neutron-go`).
 
 **Demo/testing:** data/demo + data/demo-media (seeded via tools/seed), admin
 via --init-admin; server on :8096 — the founder's browser-test instance.

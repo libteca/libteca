@@ -24,10 +24,9 @@ mounted on the ABS face. That path is corpus-unverified against ABS apps.
 
 ## Quickstart
 
-Source build needs Go 1.26+, Node/npm (embedded web UI), ffmpeg + ffprobe on
-PATH, and a local `Neutron/go` checkout — `go.mod` `replace`s
-`github.com/neutron-dev/neutron-go` to `../../Neutron/go`. There is no
-`go get` / `go install` path. Release tarballs need only ffmpeg + ffprobe.
+Source build needs Go 1.26+, Node/npm (embedded web UI), and ffmpeg + ffprobe
+on PATH. The Go module `github.com/neutron-build/neutron-go` is a published
+dependency (`v0.1.0`). Release tarballs need only ffmpeg + ffprobe.
 
 ```sh
 make build                                  # web UI into the binary, then go build
