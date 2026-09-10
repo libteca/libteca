@@ -624,7 +624,7 @@ func (a *API) work(w http.ResponseWriter, r *http.Request) {
 			"id": full.ID, "libraryId": full.LibraryID, "libraryName": lib.Name,
 			"title": full.Title, "subtitle": full.Subtitle, "author": full.Author,
 			"description": full.Description, "hasCover": full.CoverPath != nil && *full.CoverPath != "",
-			"editions": eds,
+			"genres": a.DB.WorkGenres(id), "editions": eds,
 		})
 		return
 	}

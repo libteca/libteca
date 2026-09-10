@@ -4,8 +4,8 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
-
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -123,12 +123,22 @@ func UserID(r *http.Request) int64 {
 }
 
 func InitAdmin(db *store.DB, name, password string) error {
+	u, err := db.UserByName(name)
+	if err == nil {
+		if !Verify(password, u.PasswordHash) {
+			return fmt.Errorf("user %q exists with a different password", name)
+		}
+		return nil
+	}
+	if !errors.Is(err, store.ErrNotFound) {
+		return err
+	}
 	var count int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&count); err != nil {
 		return err
 	}
 	if count > 0 {
-		return fmt.Errorf("users already exist; --init-admin only works on first run")
+		return fmt.Errorf("users already exist; refusing to create a second admin")
 	}
 	now := time.Now().UnixMilli()
 	res, err := db.Exec(`INSERT INTO users (name, password_hash, is_admin, created_at, updated_at) VALUES (?,?,1,?,?)`,

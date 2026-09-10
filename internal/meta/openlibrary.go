@@ -124,6 +124,15 @@ func (p *OpenLibrary) Fetch(ctx context.Context, id string) (*Result, error) {
 		Genres:      work.Subjects,
 		Extra:       map[string]string{},
 	}
+	if len(work.Authors) > 0 {
+		names := make([]string, 0, len(work.Authors))
+		for _, a := range work.Authors {
+			if n := p.fetchAuthor(ctx, a.Author.Key); n != "" {
+				names = append(names, n)
+			}
+		}
+		res.Author = strings.Join(names, ", ")
+	}
 	if pageCount != "" {
 		res.Extra["pageCount"] = pageCount
 	}
@@ -135,6 +144,24 @@ func (p *OpenLibrary) Fetch(ctx context.Context, id string) (*Result, error) {
 	}
 	CachePut(p.Name(), "fetch:"+p.base+"|"+id, res)
 	return res, nil
+}
+
+// fetchAuthor resolves an /authors/{key} reference to a display name,
+// personal_name first. Best-effort: failures yield "" and never fail the
+// work fetch.
+func (p *OpenLibrary) fetchAuthor(ctx context.Context, key string) string {
+	key = strings.TrimPrefix(strings.TrimSpace(key), "/authors/")
+	if key == "" {
+		return ""
+	}
+	var a olAuthor
+	if err := p.getJSON(ctx, p.base+"/authors/"+key+".json", &a); err != nil {
+		return ""
+	}
+	if a.PersonalName != "" {
+		return a.PersonalName
+	}
+	return a.Name
 }
 
 func (p *OpenLibrary) fetchEditions(ctx context.Context, id string) (int, error) {
@@ -211,8 +238,9 @@ type olDoc struct {
 }
 
 // corpus: OpenLibrary works JSON — description string OR {type,value}; covers[]
-// numeric (may contain -1 sentinels); authors[] carry keys only (names need a
-// separate /authors fetch — left empty here); subjects[] string array.
+// numeric (may contain -1 sentinels); authors[] carry {author:{key}} refs
+// resolved via a separate /authors/{key}.json fetch (personal_name||name);
+// subjects[] string array.
 type olWork struct {
 	Key              string          `json:"key"`
 	Title            string          `json:"title"`
@@ -220,6 +248,20 @@ type olWork struct {
 	Covers           []int64         `json:"covers"`
 	FirstPublishDate string          `json:"first_publish_date"`
 	Subjects         []string        `json:"subjects"`
+	Authors          []olWorkAuthor  `json:"authors"`
+}
+
+type olWorkAuthor struct {
+	Author struct {
+		Key string `json:"key"`
+	} `json:"author"`
+}
+
+// corpus: OpenLibrary authors JSON — personal_name preferred over name.
+type olAuthor struct {
+	Key          string `json:"key"`
+	Name         string `json:"name"`
+	PersonalName string `json:"personal_name"`
 }
 
 // corpus: OpenLibrary editions.json — entries[] with page_count OR

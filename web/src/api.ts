@@ -6,6 +6,7 @@ export type Work = {
 export type WorkDetail = {
   id: number; libraryId?: number; libraryName?: string;
   title: string; author: string | null; description: string | null; hasCover: boolean;
+  genres?: string[];
   editions: EditionDetail[];
 };
 

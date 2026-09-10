@@ -152,6 +152,19 @@ Decisions are append-only. Each entry: date, decision, why, what would reverse i
     Reverse: corpus capture still arbitrates face shapes; TMDB key absence
     just disables that provider.
 
+16. **Wave 4 (2026-09-09 night): metadata tail + scan-instance unification
+    + init-admin idempotency.** (a) TMDB season fetch + apply-episodes fills
+    only filename-like titles (`SxxExx`); never clobbers good titles.
+    (b) works.genres JSON column (0008); leftover settings-KV rows stay.
+    (c) OpenLibrary Fetch resolves `/authors/{key}` (personal_name||name).
+    (d) Audible chapters distribute across multi-file editions by
+    cumulative duration; ffprobe titles never clobbered. (e) Server.Core
+    is constructed once in New and handed to watch — HTTP and watch share
+    the in-process run guard (closes 15(d)). (f) --init-admin: create if
+    empty DB; same name+password = ok; wrong password or second admin =
+    error. Reverse: none expected; TMDB episode apply is still
+    corpus-unverified against real season payloads.
+
 13. **First-party web UI is a headline surface, not a fallback; built
     contract-first.** Founder call 2026-09-09: the web UI must beat
     Jellyfin/Plex/Kavita/ABS standalone (inherited clients are the moat,

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,6 +34,7 @@ const (
 func (a *API) MountProviders(r *neutron.Router) {
 	r.HandleFunc("POST /works/{id}/match", a.matchWork)
 	r.HandleFunc("POST /works/{id}/apply", a.applyMatch)
+	r.HandleFunc("POST /works/{id}/apply-episodes", a.applyEpisodes)
 	r.HandleFunc("POST /works/{id}/skip", a.skipWork)
 	r.HandleFunc("GET /matching/inbox", a.matchingInbox)
 	r.HandleFunc("POST /libraries/{id}/refresh-meta", a.refreshMeta)
@@ -121,6 +123,123 @@ func (a *API) fetchResult(ctx context.Context, providerName, id string) (*meta.R
 	return nil, fmt.Errorf("unknown provider %q", providerName)
 }
 
+// seasonEpisodesFetcher is the optional per-season capability providers
+// need to serve apply-episodes (TMDb implements it).
+type seasonEpisodesFetcher interface {
+	FetchSeasonEpisodes(ctx context.Context, tvID string, season int) ([]meta.EpisodeInfo, error)
+}
+
+func (a *API) findSeasonFetcher(providerName string) (seasonEpisodesFetcher, error) {
+	for _, p := range a.metaProviders() {
+		if p.Name() == providerName {
+			if sf, ok := p.(seasonEpisodesFetcher); ok {
+				return sf, nil
+			}
+			return nil, fmt.Errorf("provider %q has no season support", providerName)
+		}
+	}
+	return nil, fmt.Errorf("unknown provider %q", providerName)
+}
+
+// titleLooksLikeFilename reports whether an edition title is raw scan
+// residue: no spaces plus dots/underscores (raw filename), or the scanner's
+// file-derived fallback form "S01E02". Real episode titles ("The Beginning")
+// never match.
+func titleLooksLikeFilename(title string) bool {
+	if strings.Contains(title, " ") {
+		return false
+	}
+	if strings.Contains(title, ".") || strings.Contains(title, "_") {
+		return true
+	}
+	return reScanFallbackTitle.MatchString(title)
+}
+
+var reScanFallbackTitle = regexp.MustCompile(`^[Ss]\d{2}[Ee]\d{2,3}$`)
+
+// applyEpisodes: POST /works/{id}/apply-episodes {provider, id} — TV only.
+// For every season present on the work's editions, fetches the season and
+// fills titles that look like filenames (good titles are never clobbered);
+// stores the season's first-episode description only when empty. Genres
+// from the main Fetch are written best-effort.
+func (a *API) applyEpisodes(w http.ResponseWriter, r *http.Request) {
+	id := auth.Atoi64(r.PathValue("id"))
+	wv, err := a.DB.WorkByID(id)
+	if err != nil {
+		writeJSON(w, 404, map[string]string{"error": "work not found"})
+		return
+	}
+	var body struct {
+		Provider string `json:"provider"`
+		ID       string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Provider == "" || body.ID == "" {
+		writeJSON(w, 400, map[string]string{"error": "provider and id required"})
+		return
+	}
+	lib, err := a.DB.Library(wv.LibraryID)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	if kindForLibrary(lib.Type) != "tv" {
+		writeJSON(w, 400, map[string]string{"error": "not a tv work"})
+		return
+	}
+	sf, err := a.findSeasonFetcher(body.Provider)
+	if err != nil {
+		writeJSON(w, 502, map[string]string{"error": err.Error()})
+		return
+	}
+	editions, err := a.DB.WorkEpisodes(id)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	if res, err := a.fetchResult(r.Context(), body.Provider, body.ID); err == nil && len(res.Genres) > 0 {
+		_ = a.DB.SetWorkGenres(id, res.Genres)
+	}
+	var updated, skipped int
+	season := -1
+	var byEp map[int]meta.EpisodeInfo
+	first := true
+	for _, ed := range editions {
+		if ed.SeasonNum != season {
+			season = ed.SeasonNum
+			first = true
+			infos, err := sf.FetchSeasonEpisodes(r.Context(), body.ID, season)
+			if err != nil {
+				writeJSON(w, 502, map[string]string{"error": err.Error()})
+				return
+			}
+			byEp = make(map[int]meta.EpisodeInfo, len(infos))
+			for _, info := range infos {
+				byEp[info.Episode] = info
+			}
+		}
+		changed := false
+		if info, ok := byEp[ed.EpisodeNum]; ok {
+			if info.Title != "" && titleLooksLikeFilename(ed.Title) && info.Title != ed.Title {
+				if err := a.DB.SetEpisodeTitle(ed.ID, info.Title); err == nil {
+					changed = true
+				}
+			}
+			if first && info.Description != "" && (ed.Description == nil || *ed.Description == "") {
+				if err := a.DB.SetEpisodeDescription(ed.ID, info.Description); err == nil {
+					changed = true
+				}
+			}
+		}
+		if changed {
+			updated++
+		} else {
+			skipped++
+		}
+		first = false
+	}
+	writeJSON(w, 200, map[string]any{"updated": updated, "skipped": skipped})
+}
+
 func (a *API) matchWork(w http.ResponseWriter, r *http.Request) {
 	id := auth.Atoi64(r.PathValue("id"))
 	wv, err := a.DB.WorkByID(id)
@@ -198,7 +317,7 @@ func (a *API) applyMatch(w http.ResponseWriter, r *http.Request) {
 
 // applyResult writes a fetched result into the work: description + provider
 // identity, cover download (house convention: covers/{workID}.jpg), Audible
-// chapters for audiobooks (only where empty), genres for movies/tv.
+// chapters for audiobooks (only where empty/generic), genres for movies/tv.
 func (a *API) applyResult(w *store.Work, libType string, res *meta.Result) (map[string]any, error) {
 	if err := a.DB.ApplyWorkMeta(w.ID, res.Description, res.Provider, res.ID); err != nil {
 		return nil, err
@@ -212,15 +331,7 @@ func (a *API) applyResult(w *store.Work, libType string, res *meta.Result) (map[
 	}
 	kind := kindForLibrary(libType)
 	if kind == "audiobook" && len(res.Chapters) > 0 {
-		chs := make([]fileChapter, len(res.Chapters))
-		for i, c := range res.Chapters {
-			chs[i] = fileChapter{ID: int64(i + 1), Start: c.StartSec, End: c.EndSec, Title: c.Title}
-		}
-		if b, err := json.Marshal(chs); err == nil {
-			if n, err := a.DB.FillEmptyChapters(w.ID, string(b)); err == nil {
-				summary["chapters"] = n
-			}
-		}
+		summary["chapters"] = a.applyChapters(w.ID, res.Chapters)
 	}
 	if (kind == "movie" || kind == "tv") && len(res.Genres) > 0 {
 		if err := a.DB.SetWorkGenres(w.ID, res.Genres); err == nil {
@@ -228,6 +339,139 @@ func (a *API) applyResult(w *store.Work, libType string, res *meta.Result) (map[
 		}
 	}
 	return summary, nil
+}
+
+// applyChapters writes Audible chapters to the work's editions: single-file
+// m4b editions get the full timeline via FillEmptyChapters (empty only);
+// multi-file editions get distributeChapters. Returns files written.
+func (a *API) applyChapters(workID int64, chapters []meta.Chapter) int64 {
+	var written int64
+	full := make([]fileChapter, len(chapters))
+	for i, c := range chapters {
+		full[i] = fileChapter{ID: int64(i + 1), Start: c.StartSec, End: c.EndSec, Title: c.Title}
+	}
+	if b, err := json.Marshal(full); err == nil {
+		if n, err := a.DB.FillEmptyChapters(workID, string(b)); err == nil {
+			written += n
+		}
+	}
+	return written + a.distributeChapters(workID, chapters)
+}
+
+type chapterFileRow struct {
+	id       int64
+	path     string
+	duration float64
+	chapters string
+}
+
+// distributeChapters spreads provider chapters across the files of every
+// multi-file edition of the work by cumulative duration. Per-file chapter
+// JSON is written only where the existing chapters are empty or generic
+// (filename-titled) — ffprobe titles are never clobbered.
+func (a *API) distributeChapters(workID int64, chapters []meta.Chapter) int64 {
+	rows, err := a.DB.Query(`SELECT f.id, f.edition_id, f.path, f.duration_secs, f.chapters
+		FROM files f
+		JOIN editions e ON e.id = f.edition_id
+		WHERE e.work_id = ? AND f.missing = 0
+		ORDER BY f.edition_id, f.seq, f.path`, workID)
+	if err != nil {
+		return 0
+	}
+	editions := map[int64][]chapterFileRow{}
+	var order []int64
+	for rows.Next() {
+		var edID int64
+		var f chapterFileRow
+		if err := rows.Scan(&f.id, &edID, &f.path, &f.duration, &f.chapters); err != nil {
+			rows.Close()
+			return 0
+		}
+		if _, seen := editions[edID]; !seen {
+			order = append(order, edID)
+		}
+		editions[edID] = append(editions[edID], f)
+	}
+	rows.Close()
+	var written int64
+	for _, edID := range order {
+		files := editions[edID]
+		if len(files) < 2 {
+			continue
+		}
+		durations := make([]float64, len(files))
+		for i, f := range files {
+			durations[i] = f.duration
+		}
+		perFile := distributeChapterMath(durations, chapters)
+		for i, f := range files {
+			if len(perFile[i]) == 0 || !genericChapters(f.path, f.chapters) {
+				continue
+			}
+			if b, err := json.Marshal(perFile[i]); err == nil {
+				if _, err := a.DB.Exec(`UPDATE files SET chapters = ? WHERE id = ? AND missing = 0`, string(b), f.id); err == nil {
+					written++
+				}
+			}
+		}
+	}
+	return written
+}
+
+// distributeChapterMath assigns each chapter to the file whose cumulative
+// duration range contains its start, converting start/end to file-relative
+// coordinates clamped to that file's duration. Chapters starting at or past
+// the edition total (or collapsing to nothing) are dropped.
+func distributeChapterMath(durations []float64, chapters []meta.Chapter) [][]fileChapter {
+	out := make([][]fileChapter, len(durations))
+	for idx, c := range chapters {
+		base := 0.0
+		at, offset := -1, 0.0
+		for i, d := range durations {
+			if c.StartSec >= base && c.StartSec < base+d {
+				at, offset = i, base
+				break
+			}
+			base += d
+		}
+		if at < 0 || durations[at] <= 0 {
+			continue
+		}
+		start := c.StartSec - offset
+		end := c.EndSec - offset
+		if end > durations[at] {
+			end = durations[at]
+		}
+		if end <= start {
+			continue
+		}
+		out[at] = append(out[at], fileChapter{ID: int64(idx + 1), Start: start, End: end, Title: c.Title})
+	}
+	return out
+}
+
+// genericChapters reports whether a file's stored chapters are safe to
+// replace: empty or unparseable JSON, or titles that all equal the filename
+// stem the scanner falls back to when a file has no embedded chapters.
+func genericChapters(path, stored string) bool {
+	stored = strings.TrimSpace(stored)
+	if stored == "" || stored == "[]" {
+		return true
+	}
+	var chs []fileChapter
+	if json.Unmarshal([]byte(stored), &chs) != nil {
+		return true
+	}
+	if len(chs) == 0 {
+		return true
+	}
+	stem := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	for _, c := range chs {
+		if c.Title != stem {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *API) downloadCover(workID int64, url string) (bool, error) {

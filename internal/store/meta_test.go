@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+
+	"github.com/pressly/goose/v3"
 )
 
 func openMetaTestDB(t *testing.T) *DB {
@@ -223,8 +225,8 @@ func TestWorkGenres(t *testing.T) {
 	db := openMetaTestDB(t)
 	libID, _ := db.AddLibrary("A", "movies", t.TempDir())
 	id := addMetaWork(t, db, libID, "W", "")
-	if g := db.WorkGenres(id); g != nil {
-		t.Fatalf("genres = %v, want nil", g)
+	if g := db.WorkGenres(id); len(g) != 0 {
+		t.Fatalf("genres = %v, want empty", g)
 	}
 	if err := db.SetWorkGenres(id, []string{"Science Fiction", "Adventure"}); err != nil {
 		t.Fatal(err)
@@ -232,5 +234,104 @@ func TestWorkGenres(t *testing.T) {
 	g := db.WorkGenres(id)
 	if len(g) != 2 || g[0] != "Science Fiction" {
 		t.Fatalf("genres = %v", g)
+	}
+	var raw string
+	if err := db.QueryRow(`SELECT genres FROM works WHERE id = ?`, id).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if raw != `["Science Fiction","Adventure"]` {
+		t.Fatalf("column = %q", raw)
+	}
+}
+
+func TestGenresMigrationFromKV(t *testing.T) {
+	db := openMetaTestDB(t)
+	libID, _ := db.AddLibrary("A", "movies", t.TempDir())
+	withKV := addMetaWork(t, db, libID, "W1", "")
+	noKV := addMetaWork(t, db, libID, "W2", "")
+
+	// Roll back to the pre-genres schema, write KV rows the old way, then
+	// re-run migrations so the real 0008 migration does the copy.
+	if err := goose.DownTo(db.DB, "migrations", 7); err != nil {
+		t.Fatalf("goose down: %v", err)
+	}
+	if err := db.SetSetting("genres:work/"+strconv.FormatInt(withKV, 10), `["Drama"]`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetSetting("genres:work/999", `["Orphan"]`); err != nil {
+		t.Fatal(err)
+	}
+	if err := goose.Up(db.DB, "migrations"); err != nil {
+		t.Fatalf("goose up: %v", err)
+	}
+
+	if g := db.WorkGenres(withKV); len(g) != 1 || g[0] != "Drama" {
+		t.Fatalf("migrated genres = %v, want [Drama]", g)
+	}
+	if g := db.WorkGenres(noKV); len(g) != 0 {
+		t.Fatalf("genres without KV = %v, want empty", g)
+	}
+	if _, ok := db.GetSetting("genres:work/" + strconv.FormatInt(withKV, 10)); !ok {
+		t.Fatal("KV rows should be left in place")
+	}
+}
+
+func TestWorkEpisodes(t *testing.T) {
+	db := openMetaTestDB(t)
+	libID, _ := db.AddLibrary("A", "tv", t.TempDir())
+	id := addMetaWork(t, db, libID, "Show", "")
+
+	s1, s2, e1, e2 := 1, 2, 1, 2
+	if _, err := db.UpsertEdition(&Edition{WorkID: id, Format: "video", Title: "Special"}); err != nil {
+		t.Fatal(err)
+	}
+	edS1E2, err := db.UpsertEdition(&Edition{WorkID: id, Format: "video", Title: "S01E02", SeasonNum: &s1, EpisodeNum: &e2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	edS1E1, err := db.UpsertEdition(&Edition{WorkID: id, Format: "video", Title: "Show.S01E01.1080p", SeasonNum: &s1, EpisodeNum: &e1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	edS2E1, err := db.UpsertEdition(&Edition{WorkID: id, Format: "video", Title: "Good Title", SeasonNum: &s2, EpisodeNum: &e1})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	eps, err := db.WorkEpisodes(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(eps) != 3 {
+		t.Fatalf("episodes = %+v, want 3 (no-season edition excluded)", eps)
+	}
+	if eps[0].ID != edS1E1 || eps[0].SeasonNum != 1 || eps[0].EpisodeNum != 1 || eps[0].Description != nil {
+		t.Fatalf("eps[0] = %+v", eps[0])
+	}
+	if eps[1].ID != edS1E2 || eps[2].ID != edS2E1 {
+		t.Fatalf("order = %+v, want (s1e1, s1e2, s2e1)", eps)
+	}
+
+	if err := db.SetEpisodeTitle(edS1E2, "The Beginning"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetEpisodeDescription(edS1E1, "After the incident."); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetEpisodeDescription(edS1E1, "clobber attempt"); err != nil {
+		t.Fatal(err)
+	}
+	eps, err = db.WorkEpisodes(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eps[1].Title != "The Beginning" {
+		t.Fatalf("title = %q", eps[1].Title)
+	}
+	if eps[0].Description == nil || *eps[0].Description != "After the incident." {
+		t.Fatalf("description = %v, want preserved original", eps[0].Description)
+	}
+	if eps[2].Description != nil {
+		t.Fatalf("description = %v, want untouched nil", eps[2].Description)
 	}
 }

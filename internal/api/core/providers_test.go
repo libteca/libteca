@@ -139,6 +139,33 @@ func fileChaptersByPath(t *testing.T, db *store.DB, path string) string {
 	return chapters
 }
 
+type multiFile struct {
+	name     string
+	duration float64
+	chapters string
+}
+
+func addMultiFileWork(t *testing.T, db *store.DB, libID int64, format, title string, files []multiFile) int64 {
+	t.Helper()
+	w := &store.Work{LibraryID: libID, Title: title}
+	workID, err := db.UpsertWork(w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := &store.Edition{WorkID: workID, Format: format, Title: title}
+	edID, err := db.UpsertEdition(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, f := range files {
+		fr := &store.FileRec{EditionID: edID, Path: f.name, Seq: i + 1, SizeBytes: 1, MtimeSecs: 1, DurationSecs: f.duration, Chapters: f.chapters}
+		if err := db.UpsertFile(fr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return workID
+}
+
 func newImageServer(t *testing.T) string {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -430,6 +457,157 @@ func TestMatchingInboxEndpoint(t *testing.T) {
 	}
 	if len(rows) != 1 || rows[0]["id"] != float64(workID) || rows[0]["libraryType"] != "audiobooks" || rows[0]["title"] != "W" {
 		t.Fatalf("rows = %v", rows)
+	}
+}
+
+func TestDistributeChapterMath(t *testing.T) {
+	durations := []float64{100, 200, 300}
+	chapters := []meta.Chapter{
+		{Title: "C1", StartSec: 0, EndSec: 150},
+		{Title: "C2", StartSec: 150, EndSec: 350},
+		{Title: "C3", StartSec: 350, EndSec: 600},
+		{Title: "C4", StartSec: 600, EndSec: 620},
+	}
+	got := distributeChapterMath(durations, chapters)
+	want := [][]fileChapter{
+		{{ID: 1, Start: 0, End: 100, Title: "C1"}},
+		{{ID: 2, Start: 50, End: 200, Title: "C2"}},
+		{{ID: 3, Start: 50, End: 300, Title: "C3"}},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("len = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if len(got[i]) != len(want[i]) {
+			t.Fatalf("file %d chapters = %+v, want %+v", i, got[i], want[i])
+		}
+		for j := range want[i] {
+			if got[i][j] != want[i][j] {
+				t.Errorf("file %d chapter %d = %+v, want %+v", i, j, got[i][j], want[i][j])
+			}
+		}
+	}
+}
+
+func TestApplyDistributesMultiFileChapters(t *testing.T) {
+	fp := &fakeProvider{
+		name: "audible",
+		kind: "audiobook",
+		fetchRes: &meta.Result{
+			Provider: "audible", ID: "B1", Title: "Project Hail Mary",
+			Description: "desc",
+			Chapters: []meta.Chapter{
+				{Title: "Chapter 1", StartSec: 0, EndSec: 150},
+				{Title: "Chapter 2", StartSec: 150, EndSec: 350},
+				{Title: "Chapter 3", StartSec: 350, EndSec: 600},
+			},
+		},
+	}
+	a, db, libID := newMatchingAPI(t, "audiobooks", fp)
+	workID := addMultiFileWork(t, db, libID, "mp3", "Project Hail Mary", []multiFile{
+		{name: "01.mp3", duration: 100, chapters: "[]"},
+		{name: "02.mp3", duration: 200, chapters: `[{"id":1,"start":0,"end":200,"title":"02"}]`},
+		{name: "03.mp3", duration: 300, chapters: `[{"id":1,"start":0,"end":300,"title":"ffprobe"}]`},
+	})
+
+	code, body := callHandler(t, "POST", "/works/1/apply", strconv.FormatInt(workID, 10),
+		`{"provider":"audible","id":"B1"}`, a.applyMatch)
+	if code != 200 {
+		t.Fatalf("code = %d body = %v", code, body)
+	}
+	apply, _ := body["apply"].(map[string]any)
+	if apply["chapters"] != float64(2) {
+		t.Fatalf("apply summary = %v, want 2 files written", apply)
+	}
+	if got, want := fileChaptersByPath(t, db, "01.mp3"), `[{"id":1,"start":0,"end":100,"title":"Chapter 1"}]`; got != want {
+		t.Fatalf("01.mp3 chapters = %q, want %q", got, want)
+	}
+	if got, want := fileChaptersByPath(t, db, "02.mp3"), `[{"id":2,"start":50,"end":200,"title":"Chapter 2"}]`; got != want {
+		t.Fatalf("02.mp3 chapters = %q, want %q (filename-titled replaced)", got, want)
+	}
+	if got := fileChaptersByPath(t, db, "03.mp3"); !strings.Contains(got, "ffprobe") || strings.Contains(got, "Chapter 3") {
+		t.Fatalf("03.mp3 chapters clobbered: %q", got)
+	}
+}
+
+func TestApplyDistributesMultipleChaptersToOneFile(t *testing.T) {
+	fp := &fakeProvider{
+		name: "audible",
+		kind: "audiobook",
+		fetchRes: &meta.Result{
+			Provider: "audible", ID: "B1", Title: "W",
+			Chapters: []meta.Chapter{
+				{Title: "C1", StartSec: 0, EndSec: 40},
+				{Title: "C2", StartSec: 40, EndSec: 150},
+			},
+		},
+	}
+	a, db, libID := newMatchingAPI(t, "audiobooks", fp)
+	workID := addMultiFileWork(t, db, libID, "mp3", "W", []multiFile{
+		{name: "a.mp3", duration: 100, chapters: "[]"},
+		{name: "b.mp3", duration: 50, chapters: "[]"},
+	})
+
+	_, body := callHandler(t, "POST", "/works/1/apply", strconv.FormatInt(workID, 10),
+		`{"provider":"audible","id":"B1"}`, a.applyMatch)
+	apply, _ := body["apply"].(map[string]any)
+	if apply["chapters"] != float64(1) {
+		t.Fatalf("apply summary = %v, want 1 (only the file holding chapter starts)", apply)
+	}
+	if got, want := fileChaptersByPath(t, db, "a.mp3"), `[{"id":1,"start":0,"end":40,"title":"C1"},{"id":2,"start":40,"end":100,"title":"C2"}]`; got != want {
+		t.Fatalf("a.mp3 chapters = %q, want %q (end clamped to file duration)", got, want)
+	}
+	if got := fileChaptersByPath(t, db, "b.mp3"); got != "[]" {
+		t.Fatalf("b.mp3 chapters = %q, want untouched []", got)
+	}
+}
+
+func TestApplyDistributesSkipsTitledFiles(t *testing.T) {
+	fp := &fakeProvider{
+		name: "audible",
+		kind: "audiobook",
+		fetchRes: &meta.Result{
+			Provider: "audible", ID: "B1", Title: "W",
+			Chapters: []meta.Chapter{{Title: "Only", StartSec: 0, EndSec: 150}},
+		},
+	}
+	a, db, libID := newMatchingAPI(t, "audiobooks", fp)
+	workID := addMultiFileWork(t, db, libID, "mp3", "W", []multiFile{
+		{name: "a.mp3", duration: 100, chapters: `[{"id":1,"start":0,"end":100,"title":"real"}]`},
+		{name: "b.mp3", duration: 50, chapters: `[{"id":1,"start":0,"end":50,"title":"real too"}]`},
+	})
+
+	_, body := callHandler(t, "POST", "/works/1/apply", strconv.FormatInt(workID, 10),
+		`{"provider":"audible","id":"B1"}`, a.applyMatch)
+	apply, _ := body["apply"].(map[string]any)
+	if apply["chapters"] != float64(0) {
+		t.Fatalf("apply summary = %v, want 0 (titled files skipped)", apply)
+	}
+	if got := fileChaptersByPath(t, db, "a.mp3"); !strings.Contains(got, "real") {
+		t.Fatalf("titled file clobbered: %q", got)
+	}
+	if got := fileChaptersByPath(t, db, "b.mp3"); !strings.Contains(got, "real too") {
+		t.Fatalf("titled file clobbered: %q", got)
+	}
+}
+
+func TestGenericChapters(t *testing.T) {
+	cases := []struct {
+		path, stored string
+		want         bool
+	}{
+		{"x.mp3", "[]", true},
+		{"x.mp3", "", true},
+		{"x.mp3", "not json", true},
+		{"x.mp3", `[{"id":1,"start":0,"end":10,"title":"x"}]`, true},
+		{"x.mp3", `[{"id":1,"start":0,"end":10,"title":"ffprobe"}]`, false},
+		{"x.mp3", `[{"id":1,"start":0,"end":10,"title":"x"},{"id":2,"start":10,"end":20,"title":"other"}]`, false},
+		{"sub dir/y.m4a", `[{"id":1,"start":0,"end":10,"title":"y"}]`, true},
+	}
+	for _, tc := range cases {
+		if got := genericChapters(tc.path, tc.stored); got != tc.want {
+			t.Errorf("genericChapters(%q, %q) = %v, want %v", tc.path, tc.stored, got, tc.want)
+		}
 	}
 }
 

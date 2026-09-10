@@ -19,10 +19,14 @@ type Server struct {
 	DB      *store.DB
 	Dir     string
 	HWAccel string
+	Core    *core.API
 }
 
+// New builds the server with its core API instance. The same instance is
+// mounted by Handler and must be handed to watch.New so HTTP-triggered and
+// watch-triggered scans share one in-process run guard.
 func New(db *store.DB, dataDir string) *Server {
-	return &Server{DB: db, Dir: dataDir}
+	return &Server{DB: db, Dir: dataDir, Core: core.New(db, dataDir)}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -35,7 +39,10 @@ func (s *Server) Handler() http.Handler {
 
 	authMW := auth.Middleware(s.DB)
 
-	c := core.New(s.DB, s.Dir)
+	if s.Core == nil {
+		s.Core = core.New(s.DB, s.Dir)
+	}
+	c := s.Core
 	c.MountPublic(r.Group("/api/core"))
 	c.Mount(r.Group("/api/core", authMW))
 

@@ -252,6 +252,58 @@ func TestTMDBBadID(t *testing.T) {
 	}
 }
 
+const tmdbSeasonFixture = `{
+ "id": 94605,
+ "name": "Season 1",
+ "episodes": [
+  {"season_number": 1, "episode_number": 1, "name": "Bad Luck Hole", "overview": "Earthquake aftershocks.", "air_date": "2024-10-09"},
+  {"season_number": 1, "episode_number": 2, "name": "The Trailer", "overview": "Hiding out.", "air_date": "2024-10-16"}
+ ]
+}`
+
+func TestTMDBFetchSeasonEpisodes(t *testing.T) {
+	ResetCache()
+	var hits int
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/tv/94605/season/1" {
+			t.Errorf("path = %q, want /tv/94605/season/1", r.URL.Path)
+		}
+		mu.Lock()
+		hits++
+		mu.Unlock()
+		fmt.Fprint(w, tmdbSeasonFixture)
+	}))
+	defer srv.Close()
+	p := newTestTMDB(t, srv.URL, 0)
+
+	eps, err := p.FetchSeasonEpisodes(context.Background(), "tv:94605", 1)
+	if err != nil {
+		t.Fatalf("FetchSeasonEpisodes: %v", err)
+	}
+	if len(eps) != 2 {
+		t.Fatalf("episodes = %+v, want 2", eps)
+	}
+	first := eps[0]
+	if first.Season != 1 || first.Episode != 1 || first.Title != "Bad Luck Hole" ||
+		first.Description != "Earthquake aftershocks." || first.AirDate != "2024-10-09" {
+		t.Errorf("first = %+v", first)
+	}
+	if eps[1].Episode != 2 || eps[1].Title != "The Trailer" {
+		t.Errorf("second = %+v", eps[1])
+	}
+
+	if _, err := p.FetchSeasonEpisodes(context.Background(), "tv:94605", 1); err != nil || hits != 1 {
+		t.Fatalf("second call err=%v hits=%d, want cached (hits 1)", err, hits)
+	}
+	if _, err := p.FetchSeasonEpisodes(context.Background(), "movie:438631", 1); err == nil {
+		t.Fatal("movie id should error")
+	}
+	if _, err := p.FetchSeasonEpisodes(context.Background(), "94605", 1); err == nil {
+		t.Fatal("unprefixed id should error")
+	}
+}
+
 func TestTMDBKindFilter(t *testing.T) {
 	hits := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -81,6 +81,32 @@ const olEditionsPagesFallback = `{
  ]
 }`
 
+const olAuthorHerbert = `{
+ "key": "/authors/OL41197A",
+ "name": "Frank Herbert",
+ "personal_name": "Frank Herbert"
+}`
+
+const olAuthorPenName = `{
+ "key": "/authors/OL1A",
+ "name": "Pen Name",
+ "personal_name": "Real Name"
+}`
+
+const olAuthorPlain = `{"key": "/authors/OL2A", "name": "Second Author"}`
+
+const olWorkTwoAuthors = `{
+ "key": "/works/OL12345W",
+ "title": "Dune",
+ "description": "Two-author work.",
+ "covers": [8232841],
+ "first_publish_date": "1965",
+ "authors": [
+  {"author": {"key": "/authors/OL1A"}},
+  {"author": {"key": "/authors/OL2A"}}
+ ]
+}`
+
 func TestOpenLibrarySearch(t *testing.T) {
 	var gotTitle, gotAuthor, gotLimit, gotUA string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -179,6 +205,8 @@ func TestOpenLibraryFetch(t *testing.T) {
 			fmt.Fprint(w, olWorkStringDesc)
 		case "/works/OL12345W/editions.json":
 			fmt.Fprint(w, olEditionsFixture)
+		case "/authors/OL41197A.json":
+			fmt.Fprint(w, olAuthorHerbert)
 		default:
 			t.Errorf("path = %q", r.URL.Path)
 		}
@@ -192,6 +220,9 @@ func TestOpenLibraryFetch(t *testing.T) {
 	}
 	if res.ID != "OL12345W" || res.Title != "Dune" {
 		t.Errorf("res = %+v", res)
+	}
+	if res.Author != "Frank Herbert" {
+		t.Errorf("Author = %q", res.Author)
 	}
 	if res.Description != "A plain string description." {
 		t.Errorf("Description = %q", res.Description)
@@ -231,14 +262,69 @@ func TestOpenLibraryFetchDescriptionVariants(t *testing.T) {
 	if res.Description != "An object-shaped description." {
 		t.Errorf("Description = %q", res.Description)
 	}
+	if res.Author != "" {
+		t.Errorf("Author = %q, want empty (work has no author refs)", res.Author)
+	}
 	if res.Extra["pageCount"] != "300" {
 		t.Errorf("pageCount = %q, want 300 via number_of_pages fallback", res.Extra["pageCount"])
 	}
 }
 
+func TestOpenLibraryFetchAuthors(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/works/OL12345W.json":
+			fmt.Fprint(w, olWorkTwoAuthors)
+		case "/works/OL12345W/editions.json":
+			fmt.Fprint(w, olEditionsPagesFallback)
+		case "/authors/OL1A.json":
+			fmt.Fprint(w, olAuthorPenName)
+		case "/authors/OL2A.json":
+			fmt.Fprint(w, olAuthorPlain)
+		default:
+			t.Errorf("path = %q", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	ol := newTestOL(t, srv.URL, 0)
+
+	res, err := ol.Fetch(context.Background(), "OL12345W")
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if res.Author != "Real Name, Second Author" {
+		t.Errorf("Author = %q, want personal_name preferred and names joined", res.Author)
+	}
+}
+
+func TestOpenLibraryFetchAuthorFailureBestEffort(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/works/OL12345W.json":
+			fmt.Fprint(w, olWorkStringDesc)
+		case "/works/OL12345W/editions.json":
+			fmt.Fprint(w, olEditionsPagesFallback)
+		case "/authors/OL41197A.json":
+			http.Error(w, "gone", http.StatusNotFound)
+		default:
+			t.Errorf("path = %q", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	ol := newTestOL(t, srv.URL, 0)
+
+	res, err := ol.Fetch(context.Background(), "OL12345W")
+	if err != nil {
+		t.Fatalf("Fetch must survive author failure: %v", err)
+	}
+	if res.Author != "" {
+		t.Errorf("Author = %q, want empty", res.Author)
+	}
+}
+
 func TestOpenLibraryCache(t *testing.T) {
 	var mu sync.Mutex
-	workHits, editionHits := 0, 0
+	workHits, editionHits, authorHits := 0, 0, 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -249,6 +335,9 @@ func TestOpenLibraryCache(t *testing.T) {
 		case "/works/OL12345W/editions.json":
 			editionHits++
 			fmt.Fprint(w, olEditionsFixture)
+		case "/authors/OL41197A.json":
+			authorHits++
+			fmt.Fprint(w, olAuthorHerbert)
 		}
 	}))
 	defer srv.Close()
@@ -261,8 +350,8 @@ func TestOpenLibraryCache(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if workHits != 1 || editionHits != 1 {
-		t.Errorf("workHits=%d editionHits=%d, want 1/1 (second Fetch cached)", workHits, editionHits)
+	if workHits != 1 || editionHits != 1 || authorHits != 1 {
+		t.Errorf("workHits=%d editionHits=%d authorHits=%d, want 1/1/1 (second Fetch cached)", workHits, editionHits, authorHits)
 	}
 }
 

@@ -282,7 +282,7 @@ error), no fsnotify, no providers/network metadata, no multi-user UI polish
 beyond create/revoke, no podcasts, no OPDS, no backups tooling (document
 `data/` copy), no Docker image (bare binary + systemd doc).
 
-## 9. Current state (2026-09-09, after waves 1-2)
+## 9. Current state (2026-09-09, after waves 1-4)
 
 **Done and smoke-verified** (synthetic libraries over curl/tests, all faces):
 
@@ -322,6 +322,13 @@ beyond create/revoke, no podcasts, no OPDS, no backups tooling (document
   play-all; OPDS thumbnails (stdlib box-average downscale, thumb cache);
   CBR via unrar/unar exec when present; `libteca backup` subcommand
   (VACUUM INTO + covers mirror + prune).
+- Wave 4: TMDB season/episode titles (`POST /works/{id}/apply-episodes`,
+  fills filename-like titles only); works.genres column (migration 0008,
+  KV leftover rows left in place); OpenLibrary Fetch resolves author keys;
+  multi-file edition Audible chapter distribution (cumulative duration,
+  never clobber ffprobe titles); watch and HTTP scans share one core
+  instance; `--init-admin` is idempotent (same password = ok, wrong
+  password / second admin = error). Race-clean on auth/store/core/watch.
 
 **Owed — human-owned (founder), in order:**
 
@@ -334,16 +341,14 @@ beyond create/revoke, no podcasts, no OPDS, no backups tooling (document
    capture).
 4. PLAN §14 launch decisions (public repo timing, media-hub archive, license).
 
-**Owed — code, next session:** TMDB episode titles via /tv/{id}/season/{n};
-genres column migration (movie/tv genres live in settings KV today); refresh-
-meta as background job + SSE for large libraries; multi-file m4b Audible
-chapter distribution; OpenLibrary Fetch author resolution; Darwin fd-limit
-caveat for watch on huge libraries; neutron-go publish (blocks CI, container
-image, teploy registration); teploy /dev/dri passthrough upstream feature.
+**Owed — code, next session:** refresh-meta as background job + SSE for
+large libraries; Darwin fd-limit caveat for watch on huge libraries;
+neutron-go publish (blocks CI, container image, teploy registration);
+teploy /dev/dri passthrough upstream feature.
 
 **Demo/testing:** data/demo + data/demo-media (seeded via tools/seed), admin
 via --init-admin; server on :8096 — the founder's browser-test instance.
 
-**Known warts:** episode titles from filename quality (providers pending);
-`--init-admin` first-run only; OPDS covers unsized (image == thumbnail);
-teploy device passthrough missing; CI absent (replace-path blocker).
+**Known warts:** episode titles from filename quality until apply-episodes
+runs against TMDB; OPDS full-size image rel is unsized (thumbnail rel is
+160px); teploy device passthrough missing; CI absent (replace-path blocker).

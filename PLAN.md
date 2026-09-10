@@ -7,11 +7,11 @@ wire protocols so their existing clients connect to us unchanged**. One spine, f
 Status: **BUILDING** (repo `Tyler/libteca`, private until the corpus gates pass).
 All four faces implemented (Jellyfin incl. websocket/trickplay/hwaccel, ABS,
 OPDS+PSE, Subsonic incl. playlists); web UI is a headline surface (home hub,
-readers, PWA); podcasts, users/tokens, edition linking + ABS/Kavita importers,
-benches, packaging landed in waves 1-2 (2026-09-09, DECISIONS 12-14).
-Remaining codeable: providers, fsnotify, podcast episode progress, playlist
-UI. Remaining gates (founder-owned): corpus capture runs, G1-G3, version
-pins, launch decisions. Task ledger: SPEC.md §9.
+readers, PWA, matching inbox, playlists); podcasts, users/tokens, edition
+linking + ABS/Kavita importers, providers, fsnotify watch, benches, packaging
+landed in waves 1-4 (2026-09-09, DECISIONS 12-16). Remaining codeable: tail
+items (refresh-meta SSE, neutron-go publish). Remaining gates (founder-owned):
+corpus capture, G1-G3, launch decisions. Task ledger: SPEC.md §9.
 
 ---
 

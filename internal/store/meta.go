@@ -2,7 +2,6 @@ package store
 
 import (
 	"encoding/json"
-	"strconv"
 )
 
 // GetCached reads a provider_cache row: (response, fetched_at, ok).
@@ -93,25 +92,70 @@ func (d *DB) FillEmptyChapters(workID int64, chapters string) (int64, error) {
 	return res.RowsAffected()
 }
 
-// Genres live in the settings KV (works has no genres column; a proper
-// migration is the follow-up). Key: genres:work:{id} -> JSON array.
+// Genres live on works.genres as a JSON array (0008). Settings-KV rows
+// from before the migration stay behind — harmless, no longer read.
 
 func (d *DB) SetWorkGenres(workID int64, genres []string) error {
 	b, err := json.Marshal(genres)
 	if err != nil {
 		return err
 	}
-	return d.SetSetting("genres:work/"+strconv.FormatInt(workID, 10), string(b))
+	_, err = d.Exec(`UPDATE works SET genres = ?, updated_at = ? WHERE id = ?`,
+		string(b), nowMilli(), workID)
+	return err
 }
 
 func (d *DB) WorkGenres(workID int64) []string {
-	v, ok := d.GetSetting("genres:work/" + strconv.FormatInt(workID, 10))
-	if !ok {
+	var raw string
+	if err := d.QueryRow(`SELECT genres FROM works WHERE id = ?`, workID).Scan(&raw); err != nil {
 		return nil
 	}
 	var genres []string
-	if json.Unmarshal([]byte(v), &genres) != nil {
+	if json.Unmarshal([]byte(raw), &genres) != nil {
 		return nil
 	}
 	return genres
+}
+
+// EpisodeEdition is the slice of an edition apply-episodes works on.
+type EpisodeEdition struct {
+	ID          int64
+	SeasonNum   int
+	EpisodeNum  int
+	Title       string
+	Description *string
+}
+
+// WorkEpisodes returns the TV editions of a work that carry season and
+// episode numbers, ordered by (season, episode).
+func (d *DB) WorkEpisodes(workID int64) ([]EpisodeEdition, error) {
+	rows, err := d.Query(`SELECT id, season_num, episode_num, title, description FROM editions
+		WHERE work_id = ? AND season_num IS NOT NULL AND episode_num IS NOT NULL
+		ORDER BY season_num, episode_num`, workID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []EpisodeEdition
+	for rows.Next() {
+		var e EpisodeEdition
+		if err := rows.Scan(&e.ID, &e.SeasonNum, &e.EpisodeNum, &e.Title, &e.Description); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+func (d *DB) SetEpisodeTitle(editionID int64, title string) error {
+	_, err := d.Exec(`UPDATE editions SET title = ? WHERE id = ?`, title, editionID)
+	return err
+}
+
+// SetEpisodeDescription fills an empty episode description — existing text
+// is never clobbered.
+func (d *DB) SetEpisodeDescription(editionID int64, description string) error {
+	_, err := d.Exec(`UPDATE editions SET description = ? WHERE id = ? AND (description IS NULL OR description = '')`,
+		description, editionID)
+	return err
 }

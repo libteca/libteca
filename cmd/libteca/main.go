@@ -13,7 +13,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/libteca/libteca/internal/api/core"
 	"github.com/libteca/libteca/internal/auth"
 	"github.com/libteca/libteca/internal/podcast"
 	"github.com/libteca/libteca/internal/scan"
@@ -62,7 +61,7 @@ func main() {
 		if err := auth.InitAdmin(db, name, pass); err != nil {
 			fatal(err)
 		}
-		fmt.Printf("admin %q created\n", name)
+		fmt.Printf("admin %q ready\n", name)
 	}
 
 	if *scanOnly {
@@ -98,8 +97,7 @@ func main() {
 				sweep = time.Duration(v) * time.Second
 			}
 		}
-		a := core.New(db, abs)
-		go watch.New(a, db, watch.Config{SweepEvery: sweep}).Run(ctx)
+		go watch.New(srv.Core, db, watch.Config{SweepEvery: sweep}).Run(ctx)
 		fmt.Printf("libteca: watch enabled (debounce %s, sweep %s)\n", watch.DefaultDebounce, sweep)
 	}
 

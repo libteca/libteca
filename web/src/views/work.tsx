@@ -12,6 +12,15 @@ import { editionState, fmt, formatLabel } from "../util";
 
 const READER_FORMATS: ReadonlySet<string> = new Set(["epub", "cbz", "pdf"]);
 
+function GenreChips(props: { genres?: string[] }) {
+  if (!props.genres?.length) return null;
+  return (
+    <p style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem", margin: "0.2rem 0 0" }}>
+      {props.genres.map((g) => <span key={g} style={badge}>{g}</span>)}
+    </p>
+  );
+}
+
 function readerProgress(e: { isFinished?: boolean; percent?: number; page?: number; pageCount?: number }) {
   if (e.isFinished) return { label: "Finished", pct: 1 };
   if (e.percent && e.percent > 0 && e.percent < 1) return { label: `${Math.round(e.percent * 100)}% read`, pct: e.percent };
@@ -56,6 +65,7 @@ export function WorkView(props: { id: number }) {
           <div style={workMeta}>
             <h2 style={workTitle}>{w.title}</h2>
             <p style={muted}>{w.author}</p>
+            <GenreChips genres={w.genres} />
             <p style={muted}>{fmt(first?.duration || 0)}</p>
             <button style={primaryBtn} onClick={() => setVideoEdition(first.id)}>
               <span style={{ display: "inline-flex", gap: "0.45rem", alignItems: "center" }}>
@@ -86,6 +96,7 @@ function EpisodeList(props: { w: WorkDetail; onPlay: (id: number) => void }) {
         <div style={{ width: "9.5rem", flexShrink: 0 }}><Cover has={props.w.hasCover} id={props.w.id} title={props.w.title} /></div>
         <div style={workMeta}>
           <h2 style={workTitle}>{props.w.title}</h2>
+          <GenreChips genres={props.w.genres} />
           <p style={muted}>{eps.length} episodes</p>
           {resumeEp && (
             <button style={primaryBtn} onClick={() => props.onPlay(resumeEp.id)}>
@@ -150,6 +161,7 @@ function TrackList(props: { w: WorkDetail }) {
         <div style={workMeta}>
           <h2 style={workTitle}>{props.w.title}</h2>
           <p style={muted}>{props.w.author} · {tracks.length} tracks</p>
+          <GenreChips genres={props.w.genres} />
         </div>
       </div>
       <div style={chapterList}>
@@ -239,6 +251,7 @@ function EditionsView(props: { w: WorkDetail; editionId: number; setEdition: (id
         <div style={workMeta}>
           <h2 style={workTitle}>{w.title}</h2>
           <p style={muted}>{w.author}</p>
+          <GenreChips genres={w.genres} />
           {multi && (
             <p style={{ ...muted, fontSize: "0.8rem" }}>
               <span style={badge}>{w.editions.length} editions</span>
