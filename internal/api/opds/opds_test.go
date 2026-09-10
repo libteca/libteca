@@ -5,6 +5,9 @@ import (
 	"bytes"
 	"encoding/xml"
 	"fmt"
+	"image"
+	"image/color"
+	"image/jpeg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -631,5 +634,121 @@ func TestNewestFeed(t *testing.T) {
 		if f.Entries[i].Title != title {
 			t.Fatalf("entry %d = %q, want %q", i, f.Entries[i].Title, title)
 		}
+	}
+}
+
+func testJPEG(t *testing.T, w, h int) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			img.SetRGBA(x, y, color.RGBA{R: uint8(x * 255 / w), G: uint8(y * 255 / h), B: 0x80, A: 0xFF})
+		}
+	}
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, img, nil); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func seedCover(t *testing.T, e *testEnv, workID int64, data []byte) string {
+	t.Helper()
+	rel := strconv.FormatInt(workID, 10) + ".jpg"
+	if err := os.WriteFile(filepath.Join(e.dataDir, "covers", rel), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e.db.Exec(`UPDATE works SET cover_path = ? WHERE id = ?`, rel, workID)
+	return rel
+}
+
+func TestCoverThumb(t *testing.T) {
+	e := newEnv(t)
+	lib := e.addLibrary(t, "books")
+	w := e.addWork(t, lib, "Dune", "", time.Now().UnixMilli())
+	seedCover(t, e, w, testJPEG(t, 400, 200))
+
+	thumbURL := "/opds/cover/" + strconv.FormatInt(w, 10) + "?size=thumb"
+	rec := e.get(t, thumbURL)
+	if rec.Code != 200 {
+		t.Fatalf("status %d", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "image/jpeg" {
+		t.Fatalf("content type = %q", ct)
+	}
+	img, _, err := image.Decode(bytes.NewReader(rec.Body.Bytes()))
+	if err != nil {
+		t.Fatalf("decode thumb: %v", err)
+	}
+	if img.Bounds().Dx() != 160 || img.Bounds().Dy() != 80 {
+		t.Fatalf("thumb bounds = %v, want 160x80", img.Bounds())
+	}
+	cached := filepath.Join(e.dataDir, "covers", "thumb", strconv.FormatInt(w, 10)+".jpg")
+	onDisk, err := os.ReadFile(cached)
+	if err != nil {
+		t.Fatalf("thumb cache missing: %v", err)
+	}
+	if !bytes.Equal(onDisk, rec.Body.Bytes()) {
+		t.Fatal("cached thumb differs from response")
+	}
+	rec2 := e.get(t, thumbURL)
+	if !bytes.Equal(rec2.Body.Bytes(), rec.Body.Bytes()) {
+		t.Fatal("second request not served from cache")
+	}
+
+	// feed entries point the thumbnail rel at the thumb size
+	e.addEdition(t, w, "epub", writeBookFile(t, []byte("epub"), "d.epub"), nil, time.Now().UnixMilli())
+	f := decodeFeed(t, e.get(t, "/opds/libraries/"+strconv.FormatInt(lib, 10)))
+	en := f.Entries[len(f.Entries)-1]
+	tl, ok := findLink(en.Links, relThumbnail)
+	if !ok || tl.Href != thumbURL {
+		t.Fatalf("thumbnail link = %+v", en.Links)
+	}
+	il, _ := findLink(en.Links, relImage)
+	if il.Href == tl.Href {
+		t.Fatal("image rel must keep the full-size href")
+	}
+}
+
+func TestCoverThumbPassthroughSmall(t *testing.T) {
+	e := newEnv(t)
+	lib := e.addLibrary(t, "books")
+	w := e.addWork(t, lib, "Thin Book", "", time.Now().UnixMilli())
+	small := testJPEG(t, 100, 50)
+	seedCover(t, e, w, small)
+
+	rec := e.get(t, "/opds/cover/"+strconv.FormatInt(w, 10)+"?size=thumb")
+	if rec.Code != 200 {
+		t.Fatalf("status %d", rec.Code)
+	}
+	if !bytes.Equal(rec.Body.Bytes(), small) {
+		t.Fatal("small cover must pass through unchanged (no upscale)")
+	}
+	if _, err := os.Stat(filepath.Join(e.dataDir, "covers", "thumb", strconv.FormatInt(w, 10)+".jpg")); !os.IsNotExist(err) {
+		t.Fatal("passthrough must not write a thumb cache")
+	}
+}
+
+func TestCoverThumbUndecodablePassthrough(t *testing.T) {
+	e := newEnv(t)
+	lib := e.addLibrary(t, "books")
+	w := e.addWork(t, lib, "Webp Book", "", time.Now().UnixMilli())
+	notJPEG := []byte("RIFF....WEBP")
+	seedCover(t, e, w, notJPEG)
+
+	rec := e.get(t, "/opds/cover/"+strconv.FormatInt(w, 10)+"?size=thumb")
+	if rec.Code != 200 || !bytes.Equal(rec.Body.Bytes(), notJPEG) {
+		t.Fatalf("undecodable cover must pass through: %d", rec.Code)
+	}
+}
+
+func TestScaleToWidthAspect(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 321, 99))
+	out := scaleToWidth(img, 160)
+	if out.Bounds().Dx() != 160 {
+		t.Fatalf("width = %d", out.Bounds().Dx())
+	}
+	if out.Bounds().Dy() != (99*160+321/2)/321 {
+		t.Fatalf("height = %d", out.Bounds().Dy())
 	}
 }

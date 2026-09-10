@@ -1,6 +1,8 @@
 package abs_test
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -95,7 +97,20 @@ func podcastEnv(t *testing.T) *podEnv {
 
 func (e *podEnv) get(t *testing.T, path string, token string) (int, string) {
 	t.Helper()
-	req, err := http.NewRequest("GET", e.srv.URL+path, nil)
+	return e.req(t, "GET", path, token, nil)
+}
+
+func (e *podEnv) req(t *testing.T, method, path, token string, body any) (int, string) {
+	t.Helper()
+	var rd io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rd = bytes.NewReader(data)
+	}
+	req, err := http.NewRequest(method, e.srv.URL+path, rd)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,11 +122,11 @@ func (e *podEnv) get(t *testing.T, path string, token string) (int, string) {
 		t.Fatal(err)
 	}
 	defer res.Body.Close()
-	body, err := io.ReadAll(res.Body)
+	b, err := io.ReadAll(res.Body)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return res.StatusCode, string(body)
+	return res.StatusCode, string(b)
 }
 
 func TestPodcastsLibraryMediaType(t *testing.T) {
@@ -178,5 +193,88 @@ func TestEpisodeFileStreamAndAuth(t *testing.T) {
 	}
 	if body != "fake-episode-bytes" {
 		t.Fatalf("stream bytes = %q", body)
+	}
+}
+
+func TestEpisodeProgressZeroShape(t *testing.T) {
+	e := podcastEnv(t)
+	status, body := e.get(t, fmt.Sprintf("/api/podcasts/episodes/pe-%d/progress", e.epID), e.token)
+	if status != 200 {
+		t.Fatalf("status %d: %s", status, body)
+	}
+	var p map[string]any
+	if err := json.Unmarshal([]byte(body), &p); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"currentTime", "progress", "isFinished", "lastUpdate", "serverTime", "duration", "durationTimeSeconds", "libraryItemId"} {
+		if _, ok := p[k]; !ok {
+			t.Fatalf("progress payload missing %q: %s", k, body)
+		}
+	}
+	if p["currentTime"].(float64) != 0 || p["isFinished"].(bool) || p["libraryItemId"] != fmt.Sprintf("pe-%d", e.epID) {
+		t.Fatalf("zero progress wrong: %s", body)
+	}
+	if p["duration"].(float64) != 1800 {
+		t.Fatalf("duration should fall back to episode duration: %s", body)
+	}
+}
+
+func TestEpisodeProgressRoundTrip(t *testing.T) {
+	e := podcastEnv(t)
+	path := fmt.Sprintf("/api/podcasts/episodes/pe-%d/progress", e.epID)
+
+	status, body := e.req(t, "POST", path, e.token, map[string]any{"currentTime": 900, "duration": 1800})
+	if status != 200 {
+		t.Fatalf("post: status %d: %s", status, body)
+	}
+	var p map[string]any
+	json.Unmarshal([]byte(body), &p)
+	if p["currentTime"].(float64) != 900 || p["progress"].(float64) != 0.5 || p["isFinished"].(bool) {
+		t.Fatalf("post response wrong: %s", body)
+	}
+
+	status, body = e.get(t, path, e.token)
+	if status != 200 {
+		t.Fatalf("get: status %d: %s", status, body)
+	}
+	json.Unmarshal([]byte(body), &p)
+	if p["currentTime"].(float64) != 900 || p["progress"].(float64) != 0.5 || p["isFinished"].(bool) {
+		t.Fatalf("round trip lost state: %s", body)
+	}
+
+	// progress-only body derives position from progress*duration
+	status, body = e.req(t, "POST", path, e.token, map[string]any{"progress": 0.25, "duration": 1800})
+	if status != 200 {
+		t.Fatalf("post: status %d: %s", status, body)
+	}
+	json.Unmarshal([]byte(body), &p)
+	if p["currentTime"].(float64) != 450 {
+		t.Fatalf("progress-derived position wrong: %s", body)
+	}
+
+	// within 5s of the end marks finished
+	status, body = e.req(t, "POST", path, e.token, map[string]any{"currentTime": 1796, "duration": 1800})
+	if status != 200 {
+		t.Fatalf("post: status %d: %s", status, body)
+	}
+	json.Unmarshal([]byte(body), &p)
+	if !p["isFinished"].(bool) {
+		t.Fatalf("end-of-episode position should mark finished: %s", body)
+	}
+
+	// detail payloads carry inline progress
+	status, body = e.get(t, fmt.Sprintf("/api/podcasts/%d", e.podID), e.token)
+	if status != 200 || !strings.Contains(body, `"currentTime":1796`) {
+		t.Fatalf("episode payload missing inline progress: %s", body)
+	}
+}
+
+func TestEpisodeProgressAuthAndNotFound(t *testing.T) {
+	e := podcastEnv(t)
+	if status, _ := e.req(t, "GET", fmt.Sprintf("/api/podcasts/episodes/pe-%d/progress", e.epID), "", nil); status != 401 {
+		t.Fatalf("unauthenticated progress: status %d, want 401", status)
+	}
+	if status, _ := e.req(t, "GET", "/api/podcasts/episodes/pe-999/progress", e.token, nil); status != 404 {
+		t.Fatalf("unknown episode: status %d, want 404", status)
 	}
 }

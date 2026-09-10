@@ -8,8 +8,10 @@ import { WorkView } from "./views/work";
 import { ReadView } from "./views/read";
 import { SearchBox, SearchPage } from "./views/search";
 import { AdminView } from "./views/admin";
+import { MatchingView } from "./views/matching";
 import { PodcastsView } from "./views/podcasts";
-import { IconHome, IconLibrary, IconPodcast } from "./components/svg";
+import { PlaylistsView } from "./views/playlists";
+import { IconHome, IconLibrary, IconMusic, IconPodcast } from "./components/svg";
 
 type View = { name: string; id?: number; q?: string; lib?: number; edition?: number; format?: string };
 
@@ -25,8 +27,10 @@ function parseHash(): View {
   if (name === "read" && edition) return { name: "read", edition: Number(edition), id: id ? Number(id) : undefined, format: format || undefined };
   if (name === "work" && id) return { name: "work", id: Number(id) };
   if (name === "admin") return { name: "admin" };
+  if (name === "matching") return { name: "matching" };
   if (name === "search") return { name: "search", q: q || "" };
   if (name === "podcasts") return { name: "podcasts" };
+  if (name === "playlists") return { name: "playlists", id: id ? Number(id) : undefined };
   if (name === "home") return { name: "home" };
   if (name === "library") return { name: "library", lib: lib ? Number(lib) : undefined };
   return { name: "home" };
@@ -75,7 +79,9 @@ export function App() {
           <a href="#/home" style={navItem(view.name === "home")}><IconHome size={14} /> Home</a>
           <a href="#/library" style={navItem(view.name === "library")}><IconLibrary size={14} /> Library</a>
           <a href="#/podcasts" style={navItem(view.name === "podcasts")}><IconPodcast size={14} /> Podcasts</a>
+          <a href="#/playlists" style={navItem(view.name === "playlists")}><IconMusic size={14} /> Playlists</a>
           {me.isAdmin && <a href="#/admin" style={navItem(view.name === "admin")}>Admin</a>}
+          {me.isAdmin && <a href="#/matching" style={navItem(view.name === "matching")}>Matching</a>}
           <button style={linkBtn} onClick={() => { localStorage.removeItem("libteca-token"); setToken(""); location.hash = "#/"; location.reload(); }}>
             {me.name} · sign out
           </button>
@@ -87,7 +93,9 @@ export function App() {
       {view.name === "read" && view.edition != null && <ReadView edition={view.edition} work={view.id} format={view.format} />}
       {view.name === "search" && <SearchPage q={view.q || ""} />}
       {view.name === "podcasts" && <PodcastsView />}
+      {view.name === "playlists" && <PlaylistsView id={view.id} />}
       {view.name === "admin" && me.isAdmin && <AdminView />}
+      {view.name === "matching" && me.isAdmin && <MatchingView />}
     </div>
   );
 }

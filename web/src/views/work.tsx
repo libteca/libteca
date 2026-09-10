@@ -62,6 +62,7 @@ export function WorkView(props: { id: number }) {
                 <IconPlay size={14} /> {first.position && !first.isFinished ? "Resume" : "Play"}
               </span>
             </button>
+            <AddToPlaylist editionId={first.id} />
           </div>
         </div>
         <p style={{ ...muted, maxWidth: "46rem" }}>{w.description}</p>
@@ -99,17 +100,20 @@ function EpisodeList(props: { w: WorkDetail; onPlay: (id: number) => void }) {
         {eps.map((e) => {
           const st = editionState(e);
           return (
-            <button key={e.id} style={{ ...chapterRow, color: e.isFinished ? c.faint : c.textDim }} onClick={() => props.onPlay(e.id)}>
-              <span style={{ display: "flex", gap: "0.7rem", alignItems: "baseline", minWidth: 0 }}>
-                <span style={{ color: c.faint, fontVariantNumeric: "tabular-nums" }}>{e.episodeNum}.</span>
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.title}</span>
-              </span>
-              <span style={{ display: "flex", gap: "0.7rem", alignItems: "baseline", flexShrink: 0 }}>
-                <span style={muted}>{fmt(e.duration)}</span>
-                {st.pct > 0 && !e.isFinished && <span style={progressMini(st.pct)} />}
-                {e.isFinished && <span style={{ color: c.ok, display: "inline-flex" }}><IconCheck size={13} /></span>}
-              </span>
-            </button>
+            <div key={e.id} style={{ display: "flex", alignItems: "center", gap: "0.35rem", borderBottom: `1px solid ${c.lineSoft}` }}>
+              <button style={{ ...chapterRow, width: "auto", flex: 1, minWidth: 0, borderBottom: "none", color: e.isFinished ? c.faint : c.textDim }} onClick={() => props.onPlay(e.id)}>
+                <span style={{ display: "flex", gap: "0.7rem", alignItems: "baseline", minWidth: 0 }}>
+                  <span style={{ color: c.faint, fontVariantNumeric: "tabular-nums" }}>{e.episodeNum}.</span>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.title}</span>
+                </span>
+                <span style={{ display: "flex", gap: "0.7rem", alignItems: "baseline", flexShrink: 0 }}>
+                  <span style={muted}>{fmt(e.duration)}</span>
+                  {st.pct > 0 && !e.isFinished && <span style={progressMini(st.pct)} />}
+                  {e.isFinished && <span style={{ color: c.ok, display: "inline-flex" }}><IconCheck size={13} /></span>}
+                </span>
+              </button>
+              <AddToPlaylist editionId={e.id} compact />
+            </div>
           );
         })}
       </div>
@@ -150,13 +154,16 @@ function TrackList(props: { w: WorkDetail }) {
       </div>
       <div style={chapterList}>
         {tracks.map((t, i) => (
-          <button key={t.id} style={{ ...chapterRow, color: i === idx ? c.text : c.textDim }} onClick={() => { setIdx(i); ctl.current?.playAt(i, 0); }}>
-            <span style={{ display: "flex", gap: "0.7rem", alignItems: "baseline", minWidth: 0 }}>
-              <span style={{ color: c.faint, fontVariantNumeric: "tabular-nums" }}>{i + 1}.</span>
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.title}</span>
-            </span>
-            <span style={{ ...muted, flexShrink: 0 }}>{fmt(t.duration)}</span>
-          </button>
+          <div key={t.id} style={{ display: "flex", alignItems: "center", gap: "0.35rem", borderBottom: `1px solid ${c.lineSoft}` }}>
+            <button style={{ ...chapterRow, width: "auto", flex: 1, minWidth: 0, borderBottom: "none", color: i === idx ? c.text : c.textDim }} onClick={() => { setIdx(i); ctl.current?.playAt(i, 0); }}>
+              <span style={{ display: "flex", gap: "0.7rem", alignItems: "baseline", minWidth: 0 }}>
+                <span style={{ color: c.faint, fontVariantNumeric: "tabular-nums" }}>{i + 1}.</span>
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.title}</span>
+              </span>
+              <span style={{ ...muted, flexShrink: 0 }}>{fmt(t.duration)}</span>
+            </button>
+            <AddToPlaylist editionId={t.id} compact />
+          </div>
         ))}
       </div>
       {idx != null && (
@@ -264,6 +271,7 @@ function EditionsView(props: { w: WorkDetail; editionId: number; setEdition: (id
             })}
           </div>
           <EditionMenu w={w} edition={ed} isAdmin={props.isAdmin} reload={props.reload} />
+          {(ed.format === "audio" || ed.format === "video") && <AddToPlaylist editionId={ed.id} />}
           {playable ? (
             <button style={primaryBtn} onClick={resumeOrPlay}>
               <span style={{ display: "inline-flex", gap: "0.45rem", alignItems: "center" }}>
@@ -405,8 +413,71 @@ function WorkPicker(props: {
   );
 }
 
-function EditionMenu(props: { w: WorkDetail; edition: { id: number; title: string }; isAdmin: boolean; reload: () => void }) {
+type PlaylistLite = { id: number; name: string; songCount: number };
+
+function AddToPlaylist(props: { editionId: number; compact?: boolean }) {
   const [open, setOpen] = useState(false);
+  const [lists, setLists] = useState<PlaylistLite[]>([]);
+  const [added, setAdded] = useState("");
+  const [newName, setNewName] = useState("");
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    if (!open) return;
+    setAdded(""); setErr("");
+    api("/playlists").then((r: PlaylistLite[]) => setLists(Array.isArray(r) ? r : [])).catch(() => setLists([]));
+  }, [open]);
+
+  const addTo = async (pl: PlaylistLite) => {
+    const res = await api(`/playlists/${pl.id}/items`, { method: "POST", body: JSON.stringify({ editionId: props.editionId }) });
+    if (res.error) { setErr(res.error); return; }
+    setAdded(pl.name);
+    setTimeout(() => setOpen(false), 700);
+  };
+
+  const createAndAdd = async () => {
+    if (!newName.trim()) return;
+    setErr("");
+    const res = await api("/playlists", { method: "POST", body: JSON.stringify({ name: newName.trim(), editionIds: [props.editionId] }) });
+    if (res.error) { setErr(res.error); return; }
+    setOpen(false);
+  };
+
+  const btnStyle: preact.JSX.CSSProperties = props.compact
+    ? { ...ghostBtn, padding: "0.25rem 0.6rem", fontSize: "0.78rem" }
+    : ghostBtn;
+
+  if (!open) {
+    return (
+      <button type="button" style={btnStyle} title="Add to playlist" onClick={() => setOpen(true)}>+ Playlist</button>
+    );
+  }
+  return (
+    <div style={{ position: "relative" }}>
+      <button type="button" style={{ ...btnStyle, borderColor: c.accent }} onClick={() => setOpen(false)}>+ Playlist</button>
+      <div style={{ ...menuCard, left: "auto", right: 0 }}>
+        {added ? (
+          <p style={{ ...muted, margin: 0 }}>Added to {added}</p>
+        ) : (
+          <>
+            {lists.map((pl) => (
+              <PickerRow key={pl.id} title={pl.name} sub={`${pl.songCount} items`} onClick={() => addTo(pl)} />
+            ))}
+            {lists.length === 0 && <p style={muted}>No playlists yet.</p>}
+            <div style={{ display: "flex", gap: "0.4rem" }}>
+              <input style={{ ...input, flex: 1 }} placeholder="New playlist" value={newName}
+                onInput={(e) => setNewName((e.target as HTMLInputElement).value)} />
+              <button type="button" style={ghostBtn} onClick={createAndAdd}>Create</button>
+            </div>
+            {err && <p style={{ color: c.danger, margin: 0, fontSize: "0.8rem" }}>{err}</p>}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function EditionMenu(props: { w: WorkDetail; edition: { id: number; title: string }; isAdmin: boolean; reload: () => void }) {  const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<"" | "move" | "split" | "merge" | "merge-confirm">("");
   const [mergeTarget, setMergeTarget] = useState<WorkLite | null>(null);
   const [busy, setBusy] = useState(false);

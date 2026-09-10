@@ -11,9 +11,15 @@ package opds
 
 import (
 	"archive/zip"
+	"bytes"
 	"crypto/sha256"
 	"encoding/xml"
 	"fmt"
+	"image"
+	"image/color"
+	_ "image/gif"
+	"image/jpeg"
+	_ "image/png"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -258,10 +264,9 @@ func editionEntry(e store.OPDSEdition) Entry {
 	})
 	if e.CoverPath != nil && *e.CoverPath != "" {
 		cover := "/opds/cover/" + strconv.FormatInt(e.WorkID, 10)
-		// both image rels serve the same cover bytes until resizing exists
 		en.Links = append(en.Links,
 			FeedLink{Href: cover, Rel: relImage, Type: "image/jpeg"},
-			FeedLink{Href: cover, Rel: relThumbnail, Type: "image/jpeg"},
+			FeedLink{Href: cover + "?size=thumb", Rel: relThumbnail, Type: "image/jpeg"},
 		)
 	}
 	if e.Format == "cbz" {
@@ -445,7 +450,54 @@ func (a *API) cover(w http.ResponseWriter, r *http.Request, _ int64) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	file, err := os.Open(filepath.Join(a.Dir, "covers", *wv.CoverPath))
+	srcPath := filepath.Join(a.Dir, "covers", *wv.CoverPath)
+	if r.URL.Query().Get("size") == "thumb" {
+		a.coverThumb(w, r, wid, srcPath)
+		return
+	}
+	serveCoverFile(w, r, srcPath)
+}
+
+const thumbWidth = 160
+
+// coverThumb serves a ~thumbWidth-wide JPEG for the work cover: cached on
+// disk under covers/thumb/, downscaled with a deterministic box-average
+// (stdlib only). Covers already narrower than the target — or in formats
+// stdlib cannot decode (webp/avif) — pass through unchanged and uncached.
+func (a *API) coverThumb(w http.ResponseWriter, r *http.Request, wid int64, srcPath string) {
+	thumbDir := filepath.Join(a.Dir, "covers", "thumb")
+	thumbPath := filepath.Join(thumbDir, strconv.FormatInt(wid, 10)+".jpg")
+	if _, err := os.Stat(thumbPath); err == nil {
+		serveCoverFile(w, r, thumbPath)
+		return
+	}
+	data, err := os.ReadFile(srcPath)
+	if err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	img, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil || img.Bounds().Dx() <= thumbWidth {
+		serveCoverFile(w, r, srcPath)
+		return
+	}
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, scaleToWidth(img, thumbWidth), &jpeg.Options{Quality: 85}); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := os.MkdirAll(thumbDir, 0o755); err == nil {
+		os.WriteFile(thumbPath, buf.Bytes(), 0o644)
+	}
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.WriteHeader(http.StatusOK)
+	w.Write(buf.Bytes())
+}
+
+func serveCoverFile(w http.ResponseWriter, r *http.Request, path string) {
+	file, err := os.Open(path)
 	if err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
@@ -458,6 +510,41 @@ func (a *API) cover(w http.ResponseWriter, r *http.Request, _ int64) {
 	}
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	http.ServeContent(w, r, fi.Name(), fi.ModTime(), file)
+}
+
+// scaleToWidth shrinks src to width w with a box-average kernel: every
+// destination pixel is the exact mean of the source box it covers. Integer
+// math only, so the output is deterministic across runs and machines.
+func scaleToWidth(src image.Image, w int) *image.RGBA {
+	b := src.Bounds()
+	sw, sh := b.Dx(), b.Dy()
+	th := (sh*w + sw/2) / sw
+	if th < 1 {
+		th = 1
+	}
+	dst := image.NewRGBA(image.Rect(0, 0, w, th))
+	for y := 0; y < th; y++ {
+		y0, y1 := y*sh/th, (y+1)*sh/th
+		if y1 <= y0 {
+			y1 = y0 + 1
+		}
+		for x := 0; x < w; x++ {
+			x0, x1 := x*sw/w, (x+1)*sw/w
+			if x1 <= x0 {
+				x1 = x0 + 1
+			}
+			var rs, gs, bs, as, n uint64
+			for yy := y0; yy < y1; yy++ {
+				for xx := x0; xx < x1; xx++ {
+					pr, pg, pb, pa := src.At(b.Min.X+xx, b.Min.Y+yy).RGBA()
+					rs, gs, bs, as = rs+uint64(pr), gs+uint64(pg), bs+uint64(pb), as+uint64(pa)
+					n++
+				}
+			}
+			dst.SetRGBA(x, y, color.RGBA{R: uint8(rs / n >> 8), G: uint8(gs / n >> 8), B: uint8(bs / n >> 8), A: uint8(as / n >> 8)})
+		}
+	}
+	return dst
 }
 
 func (a *API) psePage(w http.ResponseWriter, r *http.Request, _ int64) {

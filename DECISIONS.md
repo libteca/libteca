@@ -128,6 +128,30 @@ Decisions are append-only. Each entry: date, decision, why, what would reverse i
     Basic-auth cache reverses if a security review objects; podcast episode
     progress needs a schema decision when built.
 
+15. **Wave 3 (2026-09-09 evening): providers + watch + polish; the codeable
+    backlog is now tail-items only.** Recorded calls: (a) provider interface
+    as pinned in meta.go — two agents built against one written contract
+    (same method as the web/discovery split); cache keys include the
+    provider base URL so per-test httptest servers can't collide; (b) auto-
+    apply metadata ONLY on single-candidate strong match (>= 0.85
+    Levenshtein) — ambiguity goes to a manual inbox (PLAN §8's
+    never-wrong-guess rule made mechanical); provider keys are env-gated,
+    absent key = provider disabled, never a scan error; (c) Audible
+    chapters fill ONLY empty single-file m4b editions — never clobber
+    ffprobe data; (d) fsnotify dep added (approved, sole new dep of the
+    wave); watch triggers the same scan-job machinery as HTTP (DB-level
+    running-job guard; a server.go one-line injection to unify instances
+    remains open); (e) podcast episode progress in its own table (0007) —
+    episodes are deliberately NOT editions; both faces read it via
+    UserData/inline shapes, writes via podcast-scoped routes because
+    ServeMux can't register partial-wildcard segments (`pe-{id}`); (f) CBR
+    via exec'd unrar/unar only — no RAR Go dep ever; (g) `libteca backup` =
+    VACUUM INTO + covers mirror + keep-10 prune — document, don't build
+    backup servers; (h) SW reader chunks: verified already covered by
+    runtime caching (hashed same-origin assets) — documented, not precached.
+    Reverse: corpus capture still arbitrates face shapes; TMDB key absence
+    just disables that provider.
+
 13. **First-party web UI is a headline surface, not a fallback; built
     contract-first.** Founder call 2026-09-09: the web UI must beat
     Jellyfin/Plex/Kavita/ABS standalone (inherited clients are the moat,

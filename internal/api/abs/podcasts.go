@@ -1,13 +1,16 @@
 package abs
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/libteca/libteca/internal/auth"
 	"github.com/libteca/libteca/internal/store"
 	"github.com/neutron-dev/neutron-go/neutron"
 )
@@ -21,16 +24,21 @@ import (
 // episodes are namespaced "pe-{id}" so they can never collide with the
 // edition ids abs.go resolves /me/progress/{itemId} and /items/{itemId}
 // against. Progress: podcast episodes are not editions (their file rows have
-// edition_id NULL) and podcast_episodes has no progress column, so episode
-// progress is not persisted — ABS stores it feed-position-based on the
-// episode. /api/me/progress/pe-* falls through abs.go's edition resolver and
-// 404s; apps keep local progress. No migrations added.
+// edition_id NULL), so episode progress lives in its own table and is served
+// here. /api/me/progress/pe-* itself cannot be routed from this file: the
+// segment "pe-{id}" is not a valid ServeMux wildcard (wildcards must span a
+// whole segment) and "/me/progress/{itemId}" already belongs to abs.go, so a
+// second registration panics — the pe- progress endpoints live under
+// /podcasts/episodes/{epId}/progress with the same payload shape abs.go's
+// book progress uses.
 func (a *API) MountPodcasts(r *neutron.Router) {
 	r.HandleFunc("GET /libraries/{id}/podcasts", a.libraryPodcasts)
 	r.HandleFunc("GET /podcasts/{id}", a.podcastDetail)
 	r.HandleFunc("GET /podcasts/{id}/cover", a.podcastCover)
 	r.HandleFunc("GET /podcasts/{id}/episodes", a.podcastEpisodes)
 	r.HandleFunc("GET /podcasts/episodes/{epId}/file", a.podcastEpisodeFile)
+	r.HandleFunc("GET /podcasts/episodes/{epId}/progress", a.podcastEpisodeProgressGet)
+	r.HandleFunc("POST /podcasts/episodes/{epId}/progress", a.podcastEpisodeProgressPost)
 }
 
 func (a *API) libraryPodcasts(w http.ResponseWriter, r *http.Request) {
@@ -74,9 +82,10 @@ func (a *API) podcastDetail(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, err.Error())
 		return
 	}
+	progs, _ := a.DB.EpisodeProgressByPodcast(auth.UserID(r), p.ID)
 	epJSON := make([]map[string]any, 0, len(eps))
 	for i := range eps {
-		epJSON = append(epJSON, a.episodePayload(&eps[i]))
+		epJSON = append(epJSON, a.episodePayload(&eps[i], progs[eps[i].ID]))
 	}
 	media := body["media"].(map[string]any)
 	metadata := media["metadata"].(map[string]any)
@@ -103,11 +112,12 @@ func (a *API) podcastEpisodes(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, err.Error())
 		return
 	}
+	progs, _ := a.DB.EpisodeProgressByPodcast(auth.UserID(r), p.ID)
 	limit := intQuery(r, "limit", 20)
 	page := intQuery(r, "page", 0)
 	results := make([]map[string]any, 0, len(eps))
 	for i := range eps {
-		results = append(results, a.episodePayload(&eps[i]))
+		results = append(results, a.episodePayload(&eps[i], progs[eps[i].ID]))
 	}
 	total := len(results)
 	start, end := pageWindow(page, limit, total)
@@ -136,6 +146,100 @@ func (a *API) podcastEpisodeFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	serveAudio(w, r, path)
+}
+
+// episodeProgressPayload mirrors abs.go's progressPayload field-for-field
+// (currentTime, progress 0-1, isFinished, lastUpdate, serverTime, ...) with
+// the pe-{id} episode id in libraryItemId; p == nil yields the zero-progress
+// shape abs.go's getProgress returns for editions without a row.
+// corpus: fields matched against abs.go progressPayload, unverified against recorded traffic
+func (a *API) episodeProgressPayload(userID int64, e *store.PodcastEpisode, p *store.EpisodeProgress) map[string]any {
+	dur := 0.0
+	if e.DurationSecs != nil {
+		dur = *e.DurationSecs
+	}
+	pos, fin := 0.0, false
+	lastUpdate := time.Now().UnixMilli()
+	if p != nil {
+		if p.DurationSecs != nil && *p.DurationSecs > 0 {
+			dur = *p.DurationSecs
+		}
+		pos, fin, lastUpdate = p.PositionSecs, p.IsFinished, p.UpdatedAt
+	}
+	frac := 0.0
+	if dur > 0 {
+		frac = pos / dur
+	}
+	now := time.Now().UnixMilli()
+	return map[string]any{
+		"id":            "u-" + strconv.FormatInt(userID, 10) + "-pe-" + strconv.FormatInt(e.ID, 10),
+		"userId":        "u-" + strconv.FormatInt(userID, 10),
+		"libraryItemId": "pe-" + strconv.FormatInt(e.ID, 10),
+		"duration":      dur, "durationTimeSeconds": int64(dur),
+		"progress": frac, "currentTime": pos,
+		"isFinished": fin, "lastUpdate": lastUpdate,
+		"createdAt": lastUpdate, "serverTime": now,
+	}
+}
+
+func (a *API) podcastEpisodeProgressGet(w http.ResponseWriter, r *http.Request) {
+	ep, err := a.resolvePodcastEpisode(r.PathValue("epId"))
+	if errors.Is(err, store.ErrNotFound) {
+		fail(w, 404, "Episode not found")
+		return
+	}
+	if err != nil {
+		fail(w, 500, err.Error())
+		return
+	}
+	p, _ := a.DB.GetEpisodeProgress(auth.UserID(r), ep.ID)
+	write(w, 200, a.episodeProgressPayload(auth.UserID(r), ep, p))
+}
+
+func (a *API) podcastEpisodeProgressPost(w http.ResponseWriter, r *http.Request) {
+	ep, err := a.resolvePodcastEpisode(r.PathValue("epId"))
+	if errors.Is(err, store.ErrNotFound) {
+		fail(w, 404, "Episode not found")
+		return
+	}
+	if err != nil {
+		fail(w, 500, err.Error())
+		return
+	}
+	var body struct {
+		CurrentTime  float64 `json:"currentTime"`
+		TimeListened float64 `json:"timeListened"`
+		Duration     float64 `json:"duration"`
+		Progress     float64 `json:"progress"`
+		IsFinished   bool    `json:"isFinished"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		fail(w, 400, "Invalid body")
+		return
+	}
+	position := body.CurrentTime
+	if body.Progress > 0 && body.CurrentTime == 0 && body.Duration > 0 {
+		position = body.Progress * body.Duration
+	}
+	p := &store.EpisodeProgress{
+		UserID: auth.UserID(r), EpisodeID: ep.ID,
+		PositionSecs: position, IsFinished: body.IsFinished,
+	}
+	dur := body.Duration
+	if dur == 0 && ep.DurationSecs != nil {
+		dur = *ep.DurationSecs
+	}
+	if dur > 0 {
+		p.DurationSecs = &dur
+		if position >= dur-5 {
+			p.IsFinished = true
+		}
+	}
+	if err := a.DB.SetEpisodeProgress(p); err != nil {
+		fail(w, 500, err.Error())
+		return
+	}
+	write(w, 200, a.episodeProgressPayload(auth.UserID(r), ep, p))
 }
 
 func (a *API) podcastCover(w http.ResponseWriter, r *http.Request) {
@@ -208,7 +312,7 @@ func (a *API) podcastItemPayload(p *store.Podcast) map[string]any {
 }
 
 // corpus: episode shape (id/index/enclosure/audioFile.progress) built from ABS client code knowledge, unverified against recorded traffic
-func (a *API) episodePayload(e *store.PodcastEpisode) map[string]any {
+func (a *API) episodePayload(e *store.PodcastEpisode, prog *store.EpisodeProgress) map[string]any {
 	title := ""
 	if e.Title != nil {
 		title = *e.Title
@@ -219,6 +323,18 @@ func (a *API) episodePayload(e *store.PodcastEpisode) map[string]any {
 		"pubDate": e.PubDate, "addedAt": e.CreatedAt,
 		"enclosure": map[string]any{"url": e.EnclosureURL, "length": e.EnclosureBytes},
 		"progress":  nil,
+	}
+	if prog != nil {
+		// corpus: inline per-user episode progress object, unverified against recorded traffic
+		m["progress"] = map[string]any{
+			"id":            "pe-" + strconv.FormatInt(e.ID, 10),
+			"userId":        "u-" + strconv.FormatInt(prog.UserID, 10),
+			"libraryItemId": "pe-" + strconv.FormatInt(e.ID, 10),
+			"currentTime":   prog.PositionSecs,
+			"isFinished":    prog.IsFinished,
+			"lastUpdate":    prog.UpdatedAt,
+			"progress":      episodeProgressFrac(e, prog),
+		}
 	}
 	if e.Description != nil {
 		m["description"] = *e.Description
@@ -244,6 +360,20 @@ func (a *API) episodePayload(e *store.PodcastEpisode) map[string]any {
 		}
 	}
 	return m
+}
+
+func episodeProgressFrac(e *store.PodcastEpisode, p *store.EpisodeProgress) float64 {
+	dur := 0.0
+	if p.DurationSecs != nil {
+		dur = *p.DurationSecs
+	}
+	if dur <= 0 && e.DurationSecs != nil {
+		dur = *e.DurationSecs
+	}
+	if dur <= 0 {
+		return 0
+	}
+	return p.PositionSecs / dur
 }
 
 func pageWindow(page, limit, total int) (int, int) {

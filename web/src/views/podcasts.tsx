@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { api, getToken, media } from "../api";
-import { IconPause, IconPlay, IconScan } from "../components/svg";
+import { IconCheck, IconPause, IconPlay, IconScan } from "../components/svg";
 import { fmt, fmtRel } from "../util";
 import {
-  backLink, badge, c, errStyle, ghostBtn, grid, input, muted, primaryBtn, sectionTitle,
+  backLink, badge, c, errStyle, ghostBtn, grid, input, muted, primaryBtn, progressMini, sectionTitle,
 } from "../styles";
 
 type Podcast = {
@@ -16,6 +16,7 @@ type Episode = {
   id: number; podcastId: number; title: string | null; description: string | null;
   pubDate: number | null; durationSecs: number | null; enclosureBytes: number | null;
   downloadedAt: number | null; hasFile: boolean; streamUrl?: string;
+  positionSecs?: number; percent?: number; isFinished?: boolean;
 };
 
 type PodcastDetailBody = Podcast & { episodes: Episode[]; changed?: boolean };
@@ -138,11 +139,43 @@ function PodcastShow(props: { id: number; onBack: () => void; onChanged: () => v
   const [paused, setPaused] = useState(true);
   const [maxEp, setMaxEp] = useState("");
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const seekRef = useRef(0);
+  const lastPostRef = useRef(0);
+  const playingRef = useRef<number | null>(null);
+  playingRef.current = playing;
 
   const load = () => api(`/podcasts/${props.id}`)
     .then((r: PodcastDetailBody) => { setPod(r); setMaxEp(String(r.maxEpisodes)); })
     .catch(() => setPod(null));
   useEffect(() => { setPlaying(null); load(); }, [props.id]);
+
+  const saveProgress = (epId: number, pos: number, finished = false) => {
+    if (playingRef.current !== epId) return;
+    const a = audioRef.current;
+    const ep = (pod?.episodes || []).find((x) => x.id === epId);
+    const dur = a && isFinite(a.duration) && a.duration > 0 ? a.duration : (ep?.durationSecs || 0);
+    if (pos <= 1 && !finished) return;
+    lastPostRef.current = Date.now();
+    api(`/podcasts/episodes/${epId}/progress`, { method: "POST", body: JSON.stringify({ position: pos, duration: dur, finished }) }).catch(() => {});
+  };
+
+  useEffect(() => {
+    const onUnload = () => {
+      const a = audioRef.current;
+      const epId = playingRef.current;
+      if (!a || epId == null || a.currentTime <= 1 || a.ended) return;
+      fetch(`/api/core/podcasts/episodes/${epId}/progress`, {
+        method: "POST", keepalive: true,
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${getToken()}` },
+        body: JSON.stringify({ position: a.currentTime, duration: isFinite(a.duration) ? a.duration : 0, finished: false }),
+      }).catch(() => {});
+    };
+    addEventListener("pagehide", onUnload);
+    return () => {
+      removeEventListener("pagehide", onUnload);
+      onUnload();
+    };
+  }, []);
 
   const refreshFeed = async () => {
     setErr(""); setMsg(""); setBusy(true);
@@ -178,12 +211,15 @@ function PodcastShow(props: { id: number; onBack: () => void; onChanged: () => v
       else a.pause();
       return;
     }
+    if (playing != null) saveProgress(playing, a.currentTime);
     setPlaying(ep.id);
     a.src = media(ep.streamUrl);
+    seekRef.current = ep.positionSecs && ep.positionSecs > 0 && !ep.isFinished ? ep.positionSecs : 0;
     a.play().catch(() => setPaused(true));
   };
 
   const eps = pod?.episodes || [];
+  const resumeEp = eps.find((e) => e.hasFile && e.positionSecs && e.positionSecs > 0 && !e.isFinished);
 
   return (
     <div>
@@ -229,6 +265,14 @@ function PodcastShow(props: { id: number; onBack: () => void; onChanged: () => v
             </div>
             {msg && <p style={muted}>{msg}</p>}
             {err && <p style={errStyle}>{err}</p>}
+            {resumeEp && (
+              <button style={primaryBtn} type="button" onClick={() => play(resumeEp)}>
+                <span style={{ display: "inline-flex", gap: "0.45rem", alignItems: "center" }}>
+                  <IconPlay size={14} /> Resume
+                  {resumeEp.durationSecs ? ` · ${fmt(Math.max(0, resumeEp.durationSecs - (resumeEp.positionSecs || 0)))} left` : ""}
+                </span>
+              </button>
+            )}
           </div>
         </div>
       ) : (
@@ -238,14 +282,34 @@ function PodcastShow(props: { id: number; onBack: () => void; onChanged: () => v
       <audio
         ref={audioRef} preload="none"
         style={{ display: playing == null ? "none" : "block", width: "100%", marginTop: "1.4rem", marginBottom: "0.6rem" }}
+        onLoadedMetadata={() => {
+          const a = audioRef.current;
+          if (a && seekRef.current > 0) { a.currentTime = seekRef.current; seekRef.current = 0; }
+        }}
         onPlay={() => setPaused(false)}
-        onPause={() => setPaused(true)}
-        onEnded={() => setPaused(true)}
+        onPause={() => {
+          setPaused(true);
+          const a = audioRef.current;
+          if (a && playingRef.current != null && !a.ended) saveProgress(playingRef.current, a.currentTime);
+        }}
+        onTimeUpdate={() => {
+          const a = audioRef.current;
+          if (!a || playingRef.current == null) return;
+          if (Date.now() - lastPostRef.current >= 15000) saveProgress(playingRef.current, a.currentTime);
+        }}
+        onEnded={() => {
+          setPaused(true);
+          if (playingRef.current == null) return;
+          const epId = playingRef.current;
+          saveProgress(epId, audioRef.current?.currentTime || 0, true);
+          setPod((p) => p ? { ...p, episodes: p.episodes.map((e) => e.id === epId ? { ...e, isFinished: true, percent: 1 } : e) } : p);
+        }}
       />
 
       <div style={{ marginTop: "1.2rem" }}>
         {eps.map((ep) => {
           const active = playing === ep.id;
+          const inProg = !ep.isFinished && (ep.positionSecs || 0) > 0;
           return (
             <div key={ep.id} style={{ display: "flex", gap: "0.9rem", alignItems: "center", padding: "0.7rem 0.2rem", borderBottom: `1px solid ${c.lineSoft}` }}>
               <button
@@ -268,8 +332,11 @@ function PodcastShow(props: { id: number; onBack: () => void; onChanged: () => v
                 <span style={{ display: "block", fontSize: "0.78rem", color: c.muted }}>
                   {ep.pubDate ? fmtRel(ep.pubDate) : "unknown date"}
                   {ep.durationSecs ? ` · ${fmt(ep.durationSecs)}` : ""}
+                  {inProg && ep.durationSecs ? ` · ${fmt(Math.max(0, ep.durationSecs - (ep.positionSecs || 0)))} left` : ""}
                 </span>
               </span>
+              {inProg && <span style={progressMini(ep.percent || 0)} />}
+              {ep.isFinished && <span style={{ color: c.ok, display: "inline-flex", padding: "0.4rem" }}><IconCheck size={13} /></span>}
               {ep.hasFile ? <span style={badge}>downloaded</span> : <span style={{ ...muted, fontSize: "0.75rem" }}>not downloaded</span>}
             </div>
           );

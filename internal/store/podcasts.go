@@ -409,3 +409,107 @@ func (d *DB) MarkFileMissing(fileID int64) error {
 	_, err := d.Exec(`UPDATE files SET missing = 1 WHERE id = ?`, fileID)
 	return err
 }
+
+// EpisodeProgress is per-user playback state for a podcast episode row.
+type EpisodeProgress struct {
+	UserID       int64
+	EpisodeID    int64
+	PositionSecs float64
+	DurationSecs *float64
+	IsFinished   bool
+	UpdatedAt    int64
+}
+
+const episodeProgressCols = `user_id, episode_id, position_secs, duration_secs, is_finished, updated_at`
+
+func scanEpisodeProgress(row interface{ Scan(...any) error }) (*EpisodeProgress, error) {
+	var p EpisodeProgress
+	var fin int
+	var dur sql.NullFloat64
+	err := row.Scan(&p.UserID, &p.EpisodeID, &p.PositionSecs, &dur, &fin, &p.UpdatedAt)
+	if dur.Valid {
+		v := dur.Float64
+		p.DurationSecs = &v
+	}
+	p.IsFinished = fin != 0
+	return &p, err
+}
+
+func (d *DB) GetEpisodeProgress(userID, episodeID int64) (*EpisodeProgress, error) {
+	p, err := scanEpisodeProgress(d.QueryRow(`SELECT `+episodeProgressCols+` FROM podcast_episode_progress WHERE user_id = ? AND episode_id = ?`, userID, episodeID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+func (d *DB) SetEpisodeProgress(p *EpisodeProgress) error {
+	fin := 0
+	if p.IsFinished {
+		fin = 1
+	}
+	_, err := d.Exec(`INSERT INTO podcast_episode_progress (user_id, episode_id, position_secs, duration_secs, is_finished, updated_at)
+		VALUES (?,?,?,?,?,?)
+		ON CONFLICT(user_id, episode_id) DO UPDATE SET
+			position_secs = excluded.position_secs,
+			duration_secs = excluded.duration_secs,
+			is_finished = excluded.is_finished,
+			updated_at = excluded.updated_at`,
+		p.UserID, p.EpisodeID, p.PositionSecs, p.DurationSecs, fin, nowMilli())
+	return err
+}
+
+// EpisodeProgressByPodcast returns the user's progress rows for every episode
+// of one podcast, keyed by episode id.
+func (d *DB) EpisodeProgressByPodcast(userID, podcastID int64) (map[int64]*EpisodeProgress, error) {
+	rows, err := d.Query(`SELECT `+episodeProgressCols+` FROM podcast_episode_progress
+		WHERE user_id = ? AND episode_id IN (SELECT id FROM podcast_episodes WHERE podcast_id = ?)`, userID, podcastID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]*EpisodeProgress{}
+	for rows.Next() {
+		p, err := scanEpisodeProgress(rows)
+		if err != nil {
+			return nil, err
+		}
+		out[p.EpisodeID] = p
+	}
+	return out, rows.Err()
+}
+
+// LatestEpisodeProgressByPodcast returns the user's most recently updated
+// progress row per podcast (newest first wins), keyed by podcast id — the
+// "continue listening" anchor.
+func (d *DB) LatestEpisodeProgressByPodcast(userID int64) (map[int64]*EpisodeProgress, error) {
+	rows, err := d.Query(`SELECT p.user_id, p.episode_id, p.position_secs, p.duration_secs, p.is_finished, p.updated_at, e.podcast_id FROM podcast_episode_progress p
+		JOIN podcast_episodes e ON e.id = p.episode_id
+		WHERE p.user_id = ? ORDER BY p.updated_at DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]*EpisodeProgress{}
+	for rows.Next() {
+		var podcastID int64
+		var p EpisodeProgress
+		var fin int
+		var dur sql.NullFloat64
+		if err := rows.Scan(&p.UserID, &p.EpisodeID, &p.PositionSecs, &dur, &fin, &p.UpdatedAt, &podcastID); err != nil {
+			return nil, err
+		}
+		if dur.Valid {
+			v := dur.Float64
+			p.DurationSecs = &v
+		}
+		p.IsFinished = fin != 0
+		if _, seen := out[podcastID]; !seen {
+			out[podcastID] = &p
+		}
+	}
+	return out, rows.Err()
+}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -15,7 +16,8 @@ import (
 
 // Books/comics scanner (SPEC §3 style): every .epub/.pdf/.cbz file is its own
 // edition; files that resolve to the same title+author share one work through
-// the works unique-index upsert. .cbr is detected and skipped with a log line.
+// the works unique-index upsert. .cbr needs an external extractor (unrar or
+// unar) on PATH — without one it is detected and skipped with a log line.
 
 var bookExts = map[string]bool{".epub": true, ".pdf": true, ".cbz": true}
 
@@ -43,6 +45,7 @@ func scanBooksLibrary(db *store.DB, lib *store.Library, coversDir string, tr *tr
 	if err != nil {
 		return 0, err
 	}
+	cbrTool := cbrExtractor()
 	var docs []bookDoc
 	err = filepath.WalkDir(abs, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -55,11 +58,11 @@ func scanBooksLibrary(db *store.DB, lib *store.Library, coversDir string, tr *tr
 			return nil
 		}
 		ext := strings.ToLower(filepath.Ext(d.Name()))
-		if ext == ".cbr" {
-			fmt.Fprintf(os.Stderr, "libteca: cbr not supported yet, skipped: %s\n", p)
+		if ext == ".cbr" && cbrTool == "" {
+			fmt.Fprintf(os.Stderr, "libteca: cbr skipped (no unrar/unar on PATH): %s\n", p)
 			return nil
 		}
-		if !bookExts[ext] {
+		if ext != ".cbr" && !bookExts[ext] {
 			return nil
 		}
 		fi, _ := d.Info()
@@ -79,7 +82,7 @@ func scanBooksLibrary(db *store.DB, lib *store.Library, coversDir string, tr *tr
 		if size, mtime, ok, serr := db.FileStatByPath(d.path); serr == nil && ok && size == d.size && mtime == d.mtime {
 			continue
 		}
-		if perr := probeBook(d); perr != nil {
+		if perr := probeBook(d, cbrTool); perr != nil {
 			fmt.Fprintf(os.Stderr, "libteca: skip %s: %v\n", d.path, perr)
 			continue
 		}
@@ -92,7 +95,7 @@ func scanBooksLibrary(db *store.DB, lib *store.Library, coversDir string, tr *tr
 	return count, nil
 }
 
-func probeBook(d *bookDoc) error {
+func probeBook(d *bookDoc, cbrTool string) error {
 	switch d.format {
 	case "epub":
 		info, err := ParseEPUB(d.path)
@@ -103,6 +106,12 @@ func probeBook(d *bookDoc) error {
 		d.pageCount, d.cover, d.toc = info.PageCount, info.Cover, info.TOC
 	case "cbz":
 		n, cover, err := probeCBZ(d.path)
+		if err != nil {
+			return err
+		}
+		d.pageCount, d.cover = n, cover
+	case "cbr":
+		n, cover, err := probeCBR(d.path, cbrTool)
 		if err != nil {
 			return err
 		}
@@ -248,6 +257,118 @@ func pdfPageCount(p string) int {
 		return 0
 	}
 	return n
+}
+
+const cbrMaxPages = 2000
+const cbrMaxCoverBytes = 20 << 20
+
+// cbrExtractor returns "unrar" or "unar" when one is on PATH, else "".
+// Resolved once per scan (not cached) so environments and tests can change
+// PATH between runs.
+func cbrExtractor() string {
+	if _, err := exec.LookPath("unrar"); err == nil {
+		return "unrar"
+	}
+	if _, err := exec.LookPath("unar"); err == nil {
+		return "unar"
+	}
+	return ""
+}
+
+// probeCBR lists the archive via the extractor (unrar lb / lsar), filters and
+// naturally sorts image entries like probeCBZ does, and extracts the first
+// page as the cover (unrar p / unar into a temp dir). Zero deps: the archive
+// itself is never parsed in-process.
+func probeCBR(p, tool string) (int, []byte, error) {
+	names, err := cbrList(p, tool)
+	if err != nil {
+		return 0, nil, err
+	}
+	pages := cbrPageNames(names)
+	if len(pages) == 0 {
+		return 0, nil, nil
+	}
+	cover, err := cbrExtract(tool, p, pages[0])
+	if err != nil {
+		return 0, nil, err
+	}
+	return len(pages), cover, nil
+}
+
+func cbrList(p, tool string) ([]string, error) {
+	var cmd *exec.Cmd
+	if tool == "unrar" {
+		cmd = exec.Command(tool, "lb", p)
+	} else {
+		cmd = exec.Command("lsar", p)
+	}
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			names = append(names, line)
+		}
+	}
+	// lsar prints the archive's own name as a header line before the entries
+	if tool == "unar" && len(names) > 0 && names[0] == filepath.Base(p) {
+		names = names[1:]
+	}
+	return names, nil
+}
+
+func cbrPageNames(names []string) []string {
+	var out []string
+	for _, n := range names {
+		if !cbzImgExts[strings.ToLower(filepath.Ext(n))] {
+			continue
+		}
+		if base := filepath.Base(n); strings.HasPrefix(base, ".") || strings.Contains(strings.ToUpper(n), "__MACOSX") {
+			continue
+		}
+		out = append(out, n)
+		if len(out) >= cbrMaxPages {
+			break
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return natLess(out[i], out[j]) })
+	return out
+}
+
+func cbrExtract(tool, archive, name string) ([]byte, error) {
+	var data []byte
+	if tool == "unrar" {
+		out, err := exec.Command(tool, "p", "-inul", archive, name).Output()
+		if err != nil {
+			return nil, err
+		}
+		data = out
+	} else {
+		dir, err := os.MkdirTemp("", "libteca-cbr-")
+		if err != nil {
+			return nil, err
+		}
+		defer os.RemoveAll(dir)
+		if err := exec.Command(tool, "-q", "-f", "-o", dir, archive, name).Run(); err != nil {
+			return nil, err
+		}
+		filepath.WalkDir(dir, func(p string, e os.DirEntry, err error) error {
+			if err != nil || e.IsDir() || data != nil {
+				return nil
+			}
+			data, err = os.ReadFile(p)
+			return nil
+		})
+		if data == nil {
+			return nil, fmt.Errorf("unar extracted nothing for %s", name)
+		}
+	}
+	if len(data) > cbrMaxCoverBytes {
+		data = data[:cbrMaxCoverBytes]
+	}
+	return data, nil
 }
 
 func fileTitleAuthor(name string) (string, string) {

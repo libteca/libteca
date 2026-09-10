@@ -368,3 +368,69 @@ func TestPodcastOPMLImportExportRoundtrip(t *testing.T) {
 		t.Fatalf("garbage opml = %d, want 400", code)
 	}
 }
+
+func TestPodcastEpisodeProgressPersistence(t *testing.T) {
+	a, db, token := newPodcastTestAPI(t)
+	srv := mountPodcastServer(t, a, db)
+	fs := newPodcastFeedServer(t, "Progress Cast")
+
+	code, body := doPodcastReq(t, srv, "POST", "/api/core/podcasts", token, map[string]any{"feedUrl": fs.URL + "/feed"})
+	if code != 201 {
+		t.Fatalf("subscribe = %d %v", code, body)
+	}
+	podID := strconv.FormatInt(int64(body["id"].(float64)), 10)
+
+	code, body = doPodcastReq(t, srv, "GET", "/api/core/podcasts/"+podID, token, nil)
+	if code != 200 {
+		t.Fatalf("detail = %d %v", code, body)
+	}
+	eps := body["episodes"].([]any)
+	em := eps[0].(map[string]any)
+	if _, ok := em["positionSecs"]; !ok {
+		t.Fatalf("episodes missing progress fields: %v", em)
+	}
+	if em["positionSecs"].(float64) != 0 || em["percent"].(float64) != 0 || em["isFinished"].(bool) {
+		t.Fatalf("fresh episode should be unplayed: %v", em)
+	}
+	epID := strconv.FormatInt(int64(em["id"].(float64)), 10)
+
+	// unauthenticated write bounces
+	if code, _ = doPodcastReq(t, srv, "POST", "/api/core/podcasts/episodes/"+epID+"/progress", "", map[string]any{"position": 10}); code != 401 {
+		t.Fatalf("unauthenticated progress = %d, want 401", code)
+	}
+
+	code, body = doPodcastReq(t, srv, "POST", "/api/core/podcasts/episodes/"+epID+"/progress", token, map[string]any{"position": 30, "duration": 60})
+	if code != 200 || body["positionSecs"].(float64) != 30 || body["percent"].(float64) != 0.5 || body["isFinished"].(bool) {
+		t.Fatalf("progress post = %d %v", code, body)
+	}
+
+	code, body = doPodcastReq(t, srv, "GET", "/api/core/podcasts/"+podID, token, nil)
+	if code != 200 {
+		t.Fatalf("detail = %d", code)
+	}
+	em = body["episodes"].([]any)[0].(map[string]any)
+	if em["positionSecs"].(float64) != 30 || em["percent"].(float64) != 0.5 || em["isFinished"].(bool) {
+		t.Fatalf("detail lost progress: %v", em)
+	}
+
+	// explicit finished flag
+	code, body = doPodcastReq(t, srv, "POST", "/api/core/podcasts/episodes/"+epID+"/progress", token, map[string]any{"position": 30, "duration": 60, "finished": true})
+	if code != 200 || body["isFinished"].(bool) != true {
+		t.Fatalf("finished post = %d %v", code, body)
+	}
+
+	// unknown episode
+	if code, _ = doPodcastReq(t, srv, "POST", "/api/core/podcasts/episodes/999999/progress", token, map[string]any{"position": 1}); code != 404 {
+		t.Fatalf("unknown episode progress = %d, want 404", code)
+	}
+
+	// deleting the podcast cascades episode progress away
+	if code, _ = doPodcastReq(t, srv, "DELETE", "/api/core/podcasts/"+podID, token, nil); code != 200 {
+		t.Fatalf("delete failed: %d", code)
+	}
+	var n int
+	db.QueryRow(`SELECT COUNT(*) FROM podcast_episode_progress`).Scan(&n)
+	if n != 0 {
+		t.Fatalf("podcast delete left %d progress rows", n)
+	}
+}

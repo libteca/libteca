@@ -1,8 +1,10 @@
 package jellyfin
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -87,7 +89,20 @@ func newPodEnv(t *testing.T) *podEnv {
 
 func (e *podEnv) get(t *testing.T, path string, token string) (*httptest.ResponseRecorder, string) {
 	t.Helper()
-	req := httptest.NewRequest("GET", path, nil)
+	return e.req(t, "GET", path, token, nil)
+}
+
+func (e *podEnv) req(t *testing.T, method, path, token string, body any) (*httptest.ResponseRecorder, string) {
+	t.Helper()
+	var rd io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rd = bytes.NewReader(data)
+	}
+	req := httptest.NewRequest(method, path, rd)
 	if token != "" {
 		req.Header.Set("X-Emby-Token", token)
 	}
@@ -165,5 +180,77 @@ func TestPodcastEpisodeStreamAndAuth(t *testing.T) {
 	}
 	if body != "fake-podcast-bytes" {
 		t.Fatalf("stream bytes = %q", body)
+	}
+}
+
+func TestPodcastEpisodeProgressUserData(t *testing.T) {
+	e := newPodEnv(t)
+	epPath := fmt.Sprintf("/Audio/podcast/pe%d/progress", e.epID)
+	if rec, _ := e.req(t, "POST", epPath, "", map[string]any{"PositionTicks": 123450000}); rec.Code != 401 {
+		t.Fatalf("unauthenticated progress post: status %d, want 401", rec.Code)
+	}
+
+	rec, body := e.req(t, "POST", epPath, e.token, map[string]any{"ItemId": fmt.Sprintf("pe%d", e.epID), "PositionTicks": 123450000})
+	if rec.Code != 200 {
+		t.Fatalf("progress post: status %d: %s", rec.Code, body)
+	}
+
+	rec, body = e.get(t, fmt.Sprintf("/Items?ParentId=pod%d", e.podID), e.token)
+	if rec.Code != 200 {
+		t.Fatalf("status %d: %s", rec.Code, body)
+	}
+	var dto struct {
+		Items []struct {
+			Id       string `json:"Id"`
+			UserData struct {
+				PlaybackPositionTicks int64   `json:"PlaybackPositionTicks"`
+				PlayedPercentage      float64 `json:"PlayedPercentage"`
+				IsPlayed              bool    `json:"IsPlayed"`
+			} `json:"UserData"`
+		} `json:"Items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &dto); err != nil {
+		t.Fatal(err)
+	}
+	if len(dto.Items) != 1 {
+		t.Fatalf("want 1 episode item: %s", body)
+	}
+	ud := dto.Items[0].UserData
+	if ud.PlaybackPositionTicks != 123450000 {
+		t.Fatalf("PlaybackPositionTicks = %d, want 123450000", ud.PlaybackPositionTicks)
+	}
+	if ud.IsPlayed || ud.PlayedPercentage < 0.68 || ud.PlayedPercentage > 0.69 {
+		t.Fatalf("UserData wrong: %+v", ud)
+	}
+
+	// show item carries the latest in-progress position for continue listening
+	rec, body = e.get(t, fmt.Sprintf("/Items?ParentId=lib%d", e.libID), e.token)
+	if rec.Code != 200 || !strings.Contains(body, `"PlaybackPositionTicks":123450000`) {
+		t.Fatalf("show item missing resume position: %s", body)
+	}
+
+	// near the end marks played
+	rec, _ = e.req(t, "POST", epPath, e.token, map[string]any{"PositionTicks": 17960000000})
+	if rec.Code != 200 {
+		t.Fatalf("finish post failed: %d", rec.Code)
+	}
+	rec, body = e.get(t, fmt.Sprintf("/Items?ParentId=pod%d", e.podID), e.token)
+	var dto2 struct {
+		Items []struct {
+			UserData struct {
+				PlaybackPositionTicks int64 `json:"PlaybackPositionTicks"`
+				IsPlayed              bool  `json:"IsPlayed"`
+			} `json:"UserData"`
+		} `json:"Items"`
+	}
+	json.Unmarshal(rec.Body.Bytes(), &dto2)
+	if !dto2.Items[0].UserData.IsPlayed {
+		t.Fatalf("finished episode not IsPlayed: %s", body)
+	}
+
+	// finished show resets its resume position
+	rec, body = e.get(t, fmt.Sprintf("/Items?ParentId=lib%d", e.libID), e.token)
+	if !strings.Contains(body, `"PlaybackPositionTicks":0`) {
+		t.Fatalf("finished show should reset resume position: %s", body)
 	}
 }

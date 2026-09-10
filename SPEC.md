@@ -311,6 +311,17 @@ beyond create/revoke, no podcasts, no OPDS, no backups tooling (document
   + ABS and Kavita instance importers (read-only foreign DBs, dryRun plans);
   packaging (make release → 4-platform artifacts + SHA256SUMS, systemd unit,
   teploy template); README w/ honest compat matrix.
+- Wave 3: metadata providers behind one interface (meta.go Registry: TMDB,
+  Audible, MusicBrainz, OpenLibrary, ComicVine; DB-cached 14d; env keys
+  LIBTECA_TMDB_KEY / LIBTECA_COMICVINE_KEY) + matching flow (auto-apply only
+  on single strong match >= 0.85 Levenshtein, else manual inbox at
+  #/matching with Apply/Skip/override); fsnotify watch (2s debounce,
+  per-library; 6h sweep; 24h boot reconcile; missing-file reconciliation;
+  --watch flag, fsnotify dep added); podcast episode progress (migration
+  0007, ABS + Jellyfin UserData shapes, web resume); playlist web UI +
+  play-all; OPDS thumbnails (stdlib box-average downscale, thumb cache);
+  CBR via unrar/unar exec when present; `libteca backup` subcommand
+  (VACUUM INTO + covers mirror + prune).
 
 **Owed — human-owned (founder), in order:**
 
@@ -323,13 +334,15 @@ beyond create/revoke, no podcasts, no OPDS, no backups tooling (document
    capture).
 4. PLAN §14 launch decisions (public repo timing, media-hub archive, license).
 
-**Owed — code, next session:** podcast episode progress persistence
-(episodes aren't editions; needs schema + face wiring); fsnotify watch;
-providers (TMDB/Audible/etc. — biggest remaining feature block); CBR;
-playlist web UI consumption; sw.js offline for #/read; neutron-go publish
-(blocker: repo private + relative replace; also blocks CI + container image);
-teploy template registration in teploy's index (device-mapping gap noted —
-/dev/dri not expressible in teploy.yml format today).
+**Owed — code, next session:** TMDB episode titles via /tv/{id}/season/{n};
+genres column migration (movie/tv genres live in settings KV today); refresh-
+meta as background job + SSE for large libraries; multi-file m4b Audible
+chapter distribution; OpenLibrary Fetch author resolution; Darwin fd-limit
+caveat for watch on huge libraries; neutron-go publish (blocks CI, container
+image, teploy registration); teploy /dev/dri passthrough upstream feature.
+
+**Demo/testing:** data/demo + data/demo-media (seeded via tools/seed), admin
+via --init-admin; server on :8096 — the founder's browser-test instance.
 
 **Known warts:** episode titles from filename quality (providers pending);
 `--init-admin` first-run only; OPDS covers unsized (image == thumbnail);

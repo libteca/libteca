@@ -1,6 +1,15 @@
 // libteca service worker — cache-first for same-origin static assets,
 // never for media/API. Version-keyed; old caches are dropped on activate.
-const VERSION = "libteca-v1";
+//
+// What works offline:
+//   - any navigation to / (the shell serves every hash route, #/read
+//     included — hash changes are same-document, only / hits the network)
+//   - every /assets/ chunk fetched once while online, which includes the
+//     reader's lazy chunks (epubjs, jszip, the shared commonjs chunk) —
+//     hashed names rule out install-time precaching from this verbatim
+//     file, so reader code is cached on first reader use
+//   - NOT offline: book files, streams, covers, everything under NEVER
+const VERSION = "libteca-v2";
 const CACHE = "libteca-" + VERSION;
 const NEVER = [/\/api\//, /^\/s\//, /^\/stream\//, /^\/covers\//, /^\/subtitles\//, /^\/Videos\//, /^\/Audio\//];
 

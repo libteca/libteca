@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -61,6 +62,7 @@ func (a *API) Mount(r *neutron.Router) {
 	a.MountPlaylists(r)
 	a.MountLinking(r)
 	a.MountImport(r)
+	a.MountProviders(r)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -172,6 +174,37 @@ func (a *API) scanLibrary(w http.ResponseWriter, r *http.Request) {
 	a.mu.Unlock()
 	go a.runScan(run, lib)
 	writeJSON(w, 202, map[string]any{"status": "scanning", "jobId": jobID})
+}
+
+var ErrScanRunning = errors.New("scan already running")
+
+// TriggerScan starts a library scan through the same lock and job machinery
+// as POST /libraries/{id}/scan. It returns ErrScanRunning when a scan is
+// already in flight for the library (in-process run or running job row).
+func (a *API) TriggerScan(libraryID int64) (int64, error) {
+	lib, err := a.DB.Library(libraryID)
+	if err != nil {
+		return 0, err
+	}
+	if jobs, err := a.DB.ListScanJobs(libraryID, 1); err == nil && len(jobs) > 0 && jobs[0].Status == "running" {
+		return 0, ErrScanRunning
+	}
+	a.mu.Lock()
+	if run := a.runs[libraryID]; run != nil && !run.isClosed() {
+		a.mu.Unlock()
+		return 0, ErrScanRunning
+	}
+	delete(a.runs, libraryID)
+	jobID, err := a.DB.CreateScanJob(libraryID)
+	if err != nil {
+		a.mu.Unlock()
+		return 0, err
+	}
+	run := newScanRun(jobID, libraryID)
+	a.runs[libraryID] = run
+	a.mu.Unlock()
+	go a.runScan(run, lib)
+	return jobID, nil
 }
 
 const scanPersistInterval = 2 * time.Second

@@ -314,3 +314,144 @@ func TestScanBooksLibrary(t *testing.T) {
 	}
 	rows.Close()
 }
+
+// fakeExtractor writes an executable shell script mimicking the subset of
+// unrar/lsar/unar behavior libteca uses: `unrar lb` lists names, `unrar p`
+// prints one entry to stdout, `lsar` lists with the archive name as header,
+// `unar -o dir` extracts into dir.
+func fakeExtractor(t *testing.T, name, script string) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+"/usr/bin:/bin")
+	return dir
+}
+
+const fakeUnrar = `#!/bin/sh
+case "$1" in
+lb) printf 'p2.jpg\np10.jpg\np001.jpg\nnote.txt\n__MACOSX/p.jpg\n.hidden.jpg\n' ;;
+p)  if [ "$4" = "p001.jpg" ]; then printf 'cbr-cover-bytes'; fi ;;
+esac
+`
+
+const fakeLsar = `#!/bin/sh
+printf '%s\np2.jpg\np10.jpg\np001.jpg\nnote.txt\n' "$1"
+`
+
+const fakeUnar = `#!/bin/sh
+# called as: unar -q -f -o DIR ARCHIVE NAME
+if [ "$6" = "p001.jpg" ]; then printf 'unar-cover-bytes' > "$4/p001.jpg"; fi
+`
+
+func TestCBRExtractorDetection(t *testing.T) {
+	t.Setenv("PATH", "/nonexistent")
+	if got := cbrExtractor(); got != "" {
+		t.Fatalf("cbrExtractor = %q with empty PATH", got)
+	}
+	fakeExtractor(t, "unrar", fakeUnrar)
+	if got := cbrExtractor(); got != "unrar" {
+		t.Fatalf("cbrExtractor = %q, want unrar", got)
+	}
+}
+
+func TestProbeCBRUnrar(t *testing.T) {
+	fakeExtractor(t, "unrar", fakeUnrar)
+	p := filepath.Join(t.TempDir(), "comic.cbr")
+	os.WriteFile(p, []byte("Rar!"), 0o644)
+	n, cover, err := probeCBR(p, "unrar")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Fatalf("pages = %d, want 3 (txt, __MACOSX, hidden excluded)", n)
+	}
+	if string(cover) != "cbr-cover-bytes" {
+		t.Fatalf("cover = %q", cover)
+	}
+}
+
+func TestProbeCBRUnar(t *testing.T) {
+	dir := fakeExtractor(t, "lsar", fakeLsar)
+	os.WriteFile(filepath.Join(dir, "unar"), []byte(fakeUnar), 0o755)
+	p := filepath.Join(t.TempDir(), "Comic.cbr")
+	os.WriteFile(p, []byte("Rar!"), 0o644)
+	n, cover, err := probeCBR(p, "unar")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Fatalf("pages = %d, want 3", n)
+	}
+	if string(cover) != "unar-cover-bytes" {
+		t.Fatalf("cover = %q", cover)
+	}
+}
+
+func TestScanCBRSkippedWithoutExtractor(t *testing.T) {
+	t.Setenv("PATH", "/nonexistent")
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "comic.cbr"), []byte("Rar!"), 0o644)
+	db.AddLibrary("Comics", "comics", root)
+	n, err := Library(db, &store.Library{ID: 1, Type: "comics", Path: root}, filepath.Join(t.TempDir(), "covers"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("scanned = %d, want 0 without extractor", n)
+	}
+	var files int
+	db.QueryRow(`SELECT COUNT(*) FROM files`).Scan(&files)
+	if files != 0 {
+		t.Fatalf("file rows = %d, want 0", files)
+	}
+}
+
+func TestScanBooksLibraryCBR(t *testing.T) {
+	fakeExtractor(t, "unrar", fakeUnrar)
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "Comic.cbr"), []byte("Rar!"), 0o644)
+	covers := filepath.Join(t.TempDir(), "covers")
+	os.MkdirAll(covers, 0o755)
+	db.AddLibrary("Comics", "comics", root)
+
+	n, err := Library(db, &store.Library{ID: 1, Type: "comics", Path: root}, covers, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("scanned = %d, want 1", n)
+	}
+	var format string
+	var pages sql.NullInt64
+	var coverPath sql.NullString
+	err = db.QueryRow(`SELECT e.format, e.page_count, w.cover_path
+		FROM editions e JOIN works w ON w.id = e.work_id`).Scan(&format, &pages, &coverPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if format != "cbr" || !pages.Valid || pages.Int64 != 3 {
+		t.Fatalf("edition = %s pages = %v", format, pages)
+	}
+	if !coverPath.Valid {
+		t.Fatal("cbr cover not written")
+	}
+	cover, err := os.ReadFile(filepath.Join(covers, coverPath.String))
+	if err != nil || string(cover) != "cbr-cover-bytes" {
+		t.Fatalf("cover file = %q, %v", cover, err)
+	}
+}

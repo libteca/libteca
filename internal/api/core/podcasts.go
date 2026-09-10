@@ -28,6 +28,7 @@ func (a *API) MountPodcasts(r *neutron.Router) {
 	r.HandleFunc("GET /podcasts/export-opml", a.podcastExportOPML)
 	r.HandleFunc("POST /podcasts/import-opml", a.podcastImportOPML)
 	r.HandleFunc("GET /podcasts/episodes/{epId}/stream", a.podcastEpisodeStream)
+	r.HandleFunc("POST /podcasts/episodes/{epId}/progress", a.podcastEpisodeProgress)
 	r.HandleFunc("GET /podcasts/{id}", a.podcastDetail)
 	r.HandleFunc("POST /podcasts/{id}/refresh", func(w http.ResponseWriter, req *http.Request) { a.podcastRefresh(svc, w, req) })
 	r.HandleFunc("PATCH /podcasts/{id}", a.podcastPatch)
@@ -69,7 +70,7 @@ func (a *API) podcastSubscribe(svc *podcast.Service, w http.ResponseWriter, r *h
 		writeJSON(w, 502, map[string]string{"error": err.Error()})
 		return
 	}
-	a.writePodcastDetail(w, 201, p)
+	a.writePodcastDetail(w, r, 201, p)
 }
 
 func (a *API) podcastList(w http.ResponseWriter, r *http.Request) {
@@ -95,25 +96,26 @@ func (a *API) podcastDetail(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
 	}
-	a.writePodcastDetail(w, 200, p)
+	a.writePodcastDetail(w, r, 200, p)
 }
 
-func (a *API) writePodcastDetail(w http.ResponseWriter, status int, p *store.Podcast) {
-	writeJSON(w, status, a.podcastDetailBody(p))
+func (a *API) writePodcastDetail(w http.ResponseWriter, r *http.Request, status int, p *store.Podcast) {
+	writeJSON(w, status, a.podcastDetailBody(p, auth.UserID(r)))
 }
 
-func (a *API) podcastDetailBody(p *store.Podcast) map[string]any {
+func (a *API) podcastDetailBody(p *store.Podcast, userID int64) map[string]any {
 	eps, err := a.DB.PodcastEpisodes(p.ID)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
+	progs, _ := a.DB.EpisodeProgressByPodcast(userID, p.ID)
 	downloaded := 0
 	epJSON := make([]map[string]any, 0, len(eps))
 	for i := range eps {
 		if eps[i].FileID != nil {
 			downloaded++
 		}
-		epJSON = append(epJSON, episodeJSON(&eps[i]))
+		epJSON = append(epJSON, episodeJSON(&eps[i], progs[eps[i].ID]))
 	}
 	body := podcastJSON(p, len(eps), downloaded)
 	body["episodes"] = epJSON
@@ -134,7 +136,7 @@ func (a *API) podcastRefresh(svc *podcast.Service, w http.ResponseWriter, r *htt
 		writeJSON(w, 502, map[string]string{"error": err.Error()})
 		return
 	}
-	body := a.podcastDetailBody(p)
+	body := a.podcastDetailBody(p, auth.UserID(r))
 	body["changed"] = changed
 	writeJSON(w, 200, body)
 }
@@ -166,7 +168,7 @@ func (a *API) podcastPatch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
 	}
-	a.writePodcastDetail(w, 200, p)
+	a.writePodcastDetail(w, r, 200, p)
 }
 
 func (a *API) podcastDelete(svc *podcast.Service, w http.ResponseWriter, r *http.Request) {
@@ -279,6 +281,48 @@ func (a *API) podcastEpisodeStream(w http.ResponseWriter, r *http.Request) {
 	serveFile(w, r, path)
 }
 
+func (a *API) podcastEpisodeProgress(w http.ResponseWriter, r *http.Request) {
+	ep, err := a.DB.EpisodeByID(auth.Atoi64(r.PathValue("epId")))
+	if errors.Is(err, store.ErrNotFound) {
+		writeJSON(w, 404, map[string]string{"error": "episode not found"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	var body struct {
+		Position float64 `json:"position"`
+		Duration float64 `json:"duration"`
+		Finished *bool   `json:"finished"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid body"})
+		return
+	}
+	p := &store.EpisodeProgress{
+		UserID: auth.UserID(r), EpisodeID: ep.ID,
+		PositionSecs: body.Position,
+		IsFinished:   body.Finished != nil && *body.Finished,
+	}
+	dur := body.Duration
+	if dur == 0 && ep.DurationSecs != nil {
+		dur = *ep.DurationSecs
+	}
+	if dur > 0 {
+		p.DurationSecs = &dur
+		if body.Position >= dur-5 {
+			p.IsFinished = true
+		}
+	}
+	if err := a.DB.SetEpisodeProgress(p); err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	pct, pos, fin := episodeProgressView(ep, p)
+	writeJSON(w, 200, map[string]any{"positionSecs": pos, "percent": pct, "isFinished": fin})
+}
+
 func absoluteHTTPURL(s string) bool {
 	u, err := url.Parse(s)
 	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
@@ -295,18 +339,42 @@ func podcastJSON(p *store.Podcast, episodeCount, downloadedCount int) map[string
 	}
 }
 
-func episodeJSON(e *store.PodcastEpisode) map[string]any {
+func episodeJSON(e *store.PodcastEpisode, prog *store.EpisodeProgress) map[string]any {
 	m := map[string]any{
 		"id": e.ID, "podcastId": e.PodcastID, "guid": e.GUID, "title": e.Title,
 		"description": e.Description, "pubDate": e.PubDate, "durationSecs": e.DurationSecs,
 		"enclosureUrl": e.EnclosureURL, "enclosureBytes": e.EnclosureBytes,
 		"downloadedAt": e.DownloadedAt, "hasFile": e.FileID != nil,
 	}
+	pct, pos, fin := episodeProgressView(e, prog)
+	m["positionSecs"] = pos
+	m["percent"] = pct
+	m["isFinished"] = fin
 	if e.FileID != nil {
 		m["fileId"] = *e.FileID
 		m["streamUrl"] = "/api/core/podcasts/episodes/" + strconv.FormatInt(e.ID, 10) + "/stream"
 	}
 	return m
+}
+
+func episodeProgressView(e *store.PodcastEpisode, prog *store.EpisodeProgress) (pct, pos float64, fin bool) {
+	if prog == nil {
+		return 0, 0, false
+	}
+	dur := 0.0
+	if prog.DurationSecs != nil {
+		dur = *prog.DurationSecs
+	}
+	if dur <= 0 && e.DurationSecs != nil {
+		dur = *e.DurationSecs
+	}
+	if dur > 0 {
+		pct = prog.PositionSecs / dur
+		if pct > 1 {
+			pct = 1
+		}
+	}
+	return pct, prog.PositionSecs, prog.IsFinished
 }
 
 func coverURL(p *string) string {

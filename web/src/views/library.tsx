@@ -30,6 +30,18 @@ export function LibraryView(props: { lib?: number }) {
   const [dir, setDir] = useState("asc");
   const [filter, setFilter] = useState("all");
   const [loaded, setLoaded] = useState(false);
+  const [metaBusy, setMetaBusy] = useState(false);
+  const [metaMsg, setMetaMsg] = useState("");
+
+  const improveMeta = async () => {
+    if (!lib || metaBusy) return;
+    setMetaBusy(true);
+    setMetaMsg("");
+    const res = await api(`/libraries/${lib}/refresh-meta`, { method: "POST" });
+    setMetaBusy(false);
+    if (res.error) { setMetaMsg(res.error); return; }
+    setMetaMsg(`Matched ${res.matched} · auto-applied ${res.autoApplied} · rest in inbox`);
+  };
 
   const scan = useScan(() => { refreshWorks(); });
   const refreshWorks = () => {
@@ -80,6 +92,9 @@ export function LibraryView(props: { lib?: number }) {
                 onClick={() => setFilter(f.value)}>{f.label}</button>
             ))}
           </div>
+          <button style={ghostBtn} disabled={metaBusy || scan.scanning} onClick={improveMeta}>
+            {metaBusy ? "Working…" : "Improve metadata"}
+          </button>
           <button style={ghostBtn} disabled={scan.scanning} onClick={() => scan.start(lib)}>
             <span style={{ display: "inline-flex", gap: "0.45rem", alignItems: "center" }}>
               <IconScan size={14} />
@@ -90,6 +105,11 @@ export function LibraryView(props: { lib?: number }) {
       </div>
       {(scanLine || activeLib) && (
         <p style={{ ...muted, marginBottom: "1rem", minHeight: "1.2em" }}>{scanLine || (activeLib ? `${activeLib.path}` : "")}</p>
+      )}
+      {metaMsg && (
+        <p style={{ ...muted, marginBottom: "1rem" }}>
+          {metaMsg} · <a href="#/matching" style={{ color: c.accent }}>review inbox</a>
+        </p>
       )}
       {works.length === 0
         ? loaded
