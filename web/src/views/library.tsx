@@ -4,7 +4,7 @@ import { useScan } from "../scan";
 import { useRefreshMeta } from "../refresh-meta";
 import { Cover } from "../components/cover";
 import { EmptyState, QuietLoad } from "../components/rail";
-import { IconChevronDown, IconScan } from "../components/svg";
+import { IconChevronDown } from "../components/svg";
 import { coverRatio } from "../util";
 import {
   c, card, cardMeta, cardTitle, filterBtn, filterBtnOn, filterTrack, ghostBtn,
@@ -88,7 +88,7 @@ export function LibraryView(props: { lib?: number }) {
             </select>
             <span style={selectChevron}><IconChevronDown size={12} /></span>
           </div>
-          <button className="press" style={ghostBtn} aria-label={dir === "asc" ? "Ascending" : "Descending"}
+          <button className="press" style={{ ...ghostBtn, border: "none", color: c.muted, padding: "0.35rem 0" }} aria-label={dir === "asc" ? "Ascending" : "Descending"}
             onClick={() => setDir(dir === "asc" ? "desc" : "asc")}>
             {dir === "asc" ? "A–Z" : "Z–A"}
           </button>
@@ -104,17 +104,16 @@ export function LibraryView(props: { lib?: number }) {
             ))}
           </div>
           <span style={{ flex: 1, minWidth: "0.4rem" }} />
-          <button className="press" style={ghostBtn} disabled={meta.running || scan.scanning} onClick={() => { if (lib) meta.start(lib); }}>
-            {meta.running ? "Improving" : "Improve metadata"}
+          <button className="press" style={{ ...ghostBtn, border: "none", color: c.muted, padding: "0.35rem 0" }} disabled={meta.running || scan.scanning} onClick={() => { if (lib) meta.start(lib); }}>
+            {meta.running ? "Improving" : "Match"}
           </button>
-          <button className="press" style={ghostBtn} disabled={scan.scanning} onClick={() => scan.start(lib)}>
-            <IconScan size={14} />
+          <button className="press" style={{ ...ghostBtn, border: "none", color: c.muted, padding: "0.35rem 0" }} disabled={scan.scanning} onClick={() => scan.start(lib)}>
             {scan.scanning ? "Scanning" : "Scan"}
           </button>
         </div>
       </div>
-      {(scanLine || (activeLib && !metaLine)) && (
-        <p style={{ ...muted, marginBottom: "0.85rem", minHeight: "1.2em" }}>{scanLine || (activeLib ? activeLib.path : "")}</p>
+      {scanLine && (
+        <p style={{ ...muted, marginBottom: "0.85rem" }}>{scanLine}</p>
       )}
       {metaLine && (
         <p style={{ ...muted, marginBottom: "0.85rem" }}>

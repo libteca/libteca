@@ -1,4 +1,4 @@
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import { api, getToken, setToken } from "./api";
 import { brand, c, center, content, headerBar, headerInner, linkBtn, nav, navLink, page } from "./styles";
 import { Login } from "./views/login";
@@ -11,7 +11,7 @@ import { AdminView } from "./views/admin";
 import { MatchingView } from "./views/matching";
 import { PodcastsView } from "./views/podcasts";
 import { PlaylistsView } from "./views/playlists";
-import { IconHome, IconLibrary, IconMusic, IconPodcast, IconSpinner } from "./components/svg";
+import { IconSpinner } from "./components/svg";
 
 type View = { name: string; id?: number; q?: string; lib?: number; edition?: number; format?: string };
 
@@ -41,7 +41,7 @@ const globalCss = `
 .rail-x, .topbar-x { scrollbar-width: none; }
 .rail-x::-webkit-scrollbar, .topbar-x::-webkit-scrollbar { display: none; }
 a { color: inherit; }
-::selection { background: rgba(10, 132, 255, 0.35); }
+::selection { background: rgba(10, 132, 255, 0.22); }
 select option { background: #141518; color: #f5f5f7; }
 video::cue { background: rgba(0,0,0,0.7); }
 
@@ -51,49 +51,44 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   outline-offset: 2px;
 }
 
-.rail-card, .cover-card, .lib-tile {
-  transition: transform 150ms var(--ease), filter 150ms ease;
-}
-.rail-card:hover, .cover-card:hover {
-  transform: translateY(-2px);
-  filter: brightness(1.08);
-}
-.rail-card:active, .cover-card:active { transform: translateY(0); filter: brightness(1.03); }
-.lib-tile:hover { transform: translateY(-1px); filter: brightness(1.06); }
+.coverimg { transition: transform 0.5s var(--ease); }
+.rail-card:hover .coverimg, .cover-card:hover .coverimg { transform: scale(1.06); }
 
-.press { transition: opacity 140ms ease, transform 140ms var(--ease); }
-.press:active { opacity: 0.72; }
+.rail-nav { opacity: 0; transition: opacity 180ms ease; }
+section:hover .rail-nav, section:focus-within .rail-nav { opacity: 1; }
+
+.press { transition: opacity 140ms ease; }
+.press:active { opacity: 0.7; }
 
 .row-hit { transition: background 140ms ease; }
-.row-hit:hover { background: rgba(255,255,255,0.03); }
+.row-hit:hover { background: rgba(255,255,255,0.028); }
 
 .search-wrap {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.28rem 0.85rem;
+  gap: 0.45rem;
+  padding: 0.2rem 0.2rem 0.2rem 0.85rem;
   border-radius: 999px;
-  background: #141518;
-  border: 1px solid #26282d;
-  min-height: 36px;
-  transition: border-color 140ms ease, box-shadow 140ms ease;
+  background: transparent;
+  border: 1px solid transparent;
+  min-height: 34px;
+  transition: background 160ms ease, border-color 160ms ease;
 }
-.search-wrap:focus-within {
-  border-color: #0a84ff;
-  box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.18);
+.search-wrap:hover, .search-wrap:focus-within {
+  background: #141518;
+  border-color: #26282d;
 }
 
 select.pill {
   appearance: none;
   -webkit-appearance: none;
-  background: #141518;
-  color: #c7c9ce;
-  border: 1px solid #26282d;
-  border-radius: 980px;
-  padding: 0.35rem 2rem 0.35rem 0.95rem;
+  background: transparent;
+  color: #86868b;
+  border: none;
+  padding: 0.25rem 1.6rem 0.25rem 0;
   font-size: 0.82rem;
   font-family: inherit;
-  min-height: 36px;
+  min-height: 32px;
   cursor: pointer;
 }
 
@@ -108,46 +103,51 @@ input[type="range"].seek {
   min-width: 4rem;
 }
 input[type="range"].seek::-webkit-slider-runnable-track {
-  height: 5px;
+  height: 3px;
   border-radius: 999px;
   background: transparent;
 }
 input[type="range"].seek::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
   background: #f5f5f7;
   margin-top: -4.5px;
   border: none;
-  box-shadow: 0 1px 4px rgba(0,0,0,0.45);
-  transition: transform 140ms var(--ease);
 }
-input[type="range"].seek:hover::-webkit-slider-thumb { transform: scale(1.12); }
 input[type="range"].seek::-moz-range-track {
-  height: 5px;
-  border-radius: 999px;
-  background: transparent;
-  border: none;
+  height: 3px; border-radius: 999px; background: transparent; border: none;
 }
 input[type="range"].seek::-moz-range-thumb {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: #f5f5f7;
-  border: none;
+  width: 12px; height: 12px; border-radius: 50%; background: #f5f5f7; border: none;
 }
 
 @keyframes libteca-spin { to { transform: rotate(360deg); } }
-.spin { animation: libteca-spin 0.75s linear infinite; }
+.spin { animation: libteca-spin 0.8s linear infinite; }
+
+.menu {
+  position: absolute; right: 0; top: calc(100% + 0.35rem);
+  min-width: 10.5rem; padding: 0.35rem;
+  background: #141518; border: 1px solid #26282d; border-radius: 12px;
+  box-shadow: 0 18px 40px rgba(0,0,0,0.5); z-index: 60;
+}
+.menu a, .menu button {
+  display: block; width: 100%; text-align: left;
+  background: none; border: none; color: #c7c9ce;
+  font: inherit; font-size: 0.84rem; padding: 0.5rem 0.7rem;
+  border-radius: 8px; cursor: pointer; text-decoration: none;
+}
+.menu a:hover, .menu button:hover { background: rgba(255,255,255,0.05); color: #f5f5f7; }
 
 @media (max-width: 760px) {
   .nav-label { display: none; }
+  .rail-nav { opacity: 1; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .rail-card, .cover-card, .lib-tile, .press, .spin, .row-hit { transition: none; animation: none; }
-  .rail-card:hover, .cover-card:hover, .lib-tile:hover { transform: none; filter: none; }
+  .coverimg, .press, .spin, .row-hit, .rail-nav { transition: none; animation: none; }
+  .rail-card:hover .coverimg, .cover-card:hover .coverimg { transform: none; }
 }
 `;
 
@@ -155,14 +155,23 @@ export function App() {
   const [ready, setReady] = useState(false);
   const [view, setView] = useState<View>(() => parseHash());
   const [me, setMe] = useState<{ name: string; isAdmin: boolean } | null>(null);
+  const [menu, setMenu] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     setToken(localStorage.getItem("libteca-token") || "");
     if (!getToken()) { setReady(true); return; }
     api("/me").then((u) => { setMe(u); setReady(true); }).catch(() => { setReady(true); });
-    const onHash = () => setView(parseHash());
+    const onHash = () => { setView(parseHash()); setMenu(false); };
     addEventListener("hashchange", onHash);
-    return () => removeEventListener("hashchange", onHash);
+    const onDoc = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenu(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => {
+      removeEventListener("hashchange", onHash);
+      document.removeEventListener("mousedown", onDoc);
+    };
   }, []);
 
   if (!ready) return <div style={center} role="status" aria-label="Loading"><IconSpinner size={22} /></div>;
@@ -180,30 +189,35 @@ export function App() {
         <div className="topbar-x" style={{ ...headerInner, overflowX: "auto" }}>
           <a href="#/home" style={brand}>libteca</a>
           <nav style={nav}>
-            <a href="#/home" style={navItem(view.name === "home")} aria-current={view.name === "home" ? "page" : undefined}>
-              <IconHome size={15} /> <span className="nav-label">Home</span>
-            </a>
-            <a href="#/library" style={navItem(view.name === "library")} aria-current={view.name === "library" ? "page" : undefined}>
-              <IconLibrary size={15} /> <span className="nav-label">Library</span>
-            </a>
-            <a href="#/podcasts" style={navItem(view.name === "podcasts")} aria-current={view.name === "podcasts" ? "page" : undefined}>
-              <IconPodcast size={15} /> <span className="nav-label">Podcasts</span>
-            </a>
-            <a href="#/playlists" style={navItem(view.name === "playlists")} aria-current={view.name === "playlists" ? "page" : undefined}>
-              <IconMusic size={15} /> <span className="nav-label">Playlists</span>
-            </a>
-            {me.isAdmin && <a href="#/admin" style={navItem(view.name === "admin")} aria-current={view.name === "admin" ? "page" : undefined}>Admin</a>}
-            {me.isAdmin && <a href="#/matching" style={navItem(view.name === "matching")} aria-current={view.name === "matching" ? "page" : undefined}>Matching</a>}
+            <a href="#/home" style={navItem(view.name === "home")} aria-current={view.name === "home" ? "page" : undefined}>Home</a>
+            <a href="#/library" style={navItem(view.name === "library")} aria-current={view.name === "library" ? "page" : undefined}>Library</a>
+            <a href="#/podcasts" style={navItem(view.name === "podcasts")} aria-current={view.name === "podcasts" ? "page" : undefined}>Podcasts</a>
           </nav>
           <SearchBox />
-          <button
-            className="press"
-            style={{ ...linkBtn, marginLeft: "auto", flexShrink: 0, whiteSpace: "nowrap" }}
-            onClick={() => { localStorage.removeItem("libteca-token"); setToken(""); location.hash = "#/"; location.reload(); }}
-            aria-label={`Sign out ${me.name}`}
-          >
-            {me.name}
-          </button>
+          <div ref={menuRef} style={{ marginLeft: "auto", flexShrink: 0, position: "relative" }}>
+            <button
+              className="press"
+              style={{ ...linkBtn, whiteSpace: "nowrap" }}
+              onClick={() => setMenu((v) => !v)}
+              aria-expanded={menu}
+              aria-haspopup="menu"
+            >
+              {me.name}
+            </button>
+            {menu && (
+              <div className="menu" role="menu">
+                <a href="#/playlists" role="menuitem">Playlists</a>
+                {me.isAdmin && <a href="#/admin" role="menuitem">Admin</a>}
+                {me.isAdmin && <a href="#/matching" role="menuitem">Matching</a>}
+                <button
+                  role="menuitem"
+                  onClick={() => { localStorage.removeItem("libteca-token"); setToken(""); location.hash = "#/"; location.reload(); }}
+                >
+                  Sign out
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </header>
       <div style={content}>

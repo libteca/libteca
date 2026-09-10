@@ -15,7 +15,7 @@ export function Rail(props: { title: string; children: ComponentChildren }) {
     <section style={{ marginBottom: "2.4rem" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <h2 style={railTitle}>{props.title}</h2>
-        <div style={{ display: "flex", gap: "0.15rem" }}>
+        <div className="rail-nav" style={{ display: "flex", gap: "0.15rem" }}>
           <button className="press" style={iconBtn} aria-label={`Scroll ${props.title} left`} onClick={() => scrollBy(-1)}>
             <IconChevronLeft size={16} />
           </button>

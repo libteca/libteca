@@ -1,5 +1,5 @@
 import { useState } from "preact/hooks";
-import { errStyle, input, loginCard, loginSub, loginTitle, loginWrap, primaryBtn } from "../styles";
+import { c, errStyle, input, loginCard, loginSub, loginTitle, loginWrap, primaryBtn } from "../styles";
 
 export function Login(props: { onLogin: () => void }) {
   const [name, setName] = useState("");
@@ -22,14 +22,14 @@ export function Login(props: { onLogin: () => void }) {
         <h1 style={loginTitle}>libteca</h1>
         <p style={loginSub}>Your library.</p>
         <input
-          style={{ ...input, minHeight: "42px" }}
+          style={{ ...input, minHeight: "42px", background: "transparent", border: "none", borderBottom: `1px solid ${c.line}`, borderRadius: 0, paddingLeft: 0 }}
           placeholder="Username"
           autoComplete="username"
           value={name}
           onInput={(e) => setName((e.target as HTMLInputElement).value)}
         />
         <input
-          style={{ ...input, minHeight: "42px" }}
+          style={{ ...input, minHeight: "42px", background: "transparent", border: "none", borderBottom: `1px solid ${c.line}`, borderRadius: 0, paddingLeft: 0 }}
           type="password"
           placeholder="Password"
           autoComplete="current-password"
@@ -37,7 +37,7 @@ export function Login(props: { onLogin: () => void }) {
           onInput={(e) => setPass((e.target as HTMLInputElement).value)}
         />
         {err && <p style={errStyle}>{err}</p>}
-        <button className="press" style={{ ...primaryBtn, width: "100%", alignSelf: "stretch", minHeight: "42px", fontSize: "0.98rem" }} type="submit">Sign in</button>
+        <button className="press" style={{ ...primaryBtn, marginTop: "0.6rem" }} type="submit">Sign in</button>
       </form>
     </div>
   );

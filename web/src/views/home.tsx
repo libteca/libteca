@@ -1,9 +1,8 @@
 import { useEffect, useState } from "preact/hooks";
 import { api, type Library, type RecentItem, type ResumeItem } from "../api";
 import { EmptyState, QuietLoad, Rail, RailCard } from "../components/rail";
-import { TypeIcon } from "../components/svg";
 import { coverRatio, fmt, typeLabel } from "../util";
-import { cardMeta, cardTitle, libTile, libTileIcon, primaryBtn, railTitle } from "../styles";
+import { c, muted, primaryBtn, railTitle } from "../styles";
 
 export function Home() {
   const [resume, setResume] = useState<ResumeItem[]>([]);
@@ -80,14 +79,14 @@ export function Home() {
             </EmptyState>
           )
         ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(14.5rem, 1fr))", gap: "0.7rem" }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem 1.6rem" }}>
             {libs.map((l) => (
-              <a key={l.id} href={`#/library?lib=${l.id}`} className="lib-tile" style={libTile}>
-                <span style={libTileIcon}><TypeIcon type={l.type} size={16} /></span>
-                <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", minWidth: 0 }}>
-                  <span style={{ ...cardTitle, margin: 0 }}>{l.name}</span>
-                  <span style={cardMeta}>{typeLabel(l.type)}</span>
-                </span>
+              <a key={l.id} href={`#/library?lib=${l.id}`} className="press" style={{
+                color: c.textDim, textDecoration: "none", fontSize: "0.95rem", letterSpacing: "-0.01em",
+                padding: "0.35rem 0", minHeight: "36px", display: "inline-flex", alignItems: "baseline", gap: "0.45rem",
+              }}>
+                {l.name}
+                <span style={{ ...muted, fontSize: "0.75rem" }}>{typeLabel(l.type)}</span>
               </a>
             ))}
           </div>

@@ -15,11 +15,7 @@ const READER_FORMATS: ReadonlySet<string> = new Set(["epub", "cbz", "pdf"]);
 
 function GenreChips(props: { genres?: string[] }) {
   if (!props.genres?.length) return null;
-  return (
-    <p style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem", margin: "0.2rem 0 0" }}>
-      {props.genres.map((g) => <span key={g} style={badge}>{g}</span>)}
-    </p>
-  );
+  return <p style={{ ...muted, fontSize: "0.84rem" }}>{props.genres.join("  ·  ")}</p>;
 }
 
 function readerProgress(e: { isFinished?: boolean; percent?: number; page?: number; pageCount?: number }) {

@@ -124,12 +124,11 @@ export const loginWrap: CSSProperties = {
 export const loginCard: CSSProperties = {
   display: "flex",
   flexDirection: "column",
-  gap: "0.75rem",
-  background: c.bgRaised,
-  border: `1px solid ${c.line}`,
-  borderRadius: "18px",
-  padding: "2.4rem 2rem 2rem",
-  width: "22.5rem",
+  gap: "0.85rem",
+  background: "none",
+  border: "none",
+  padding: 0,
+  width: "20rem",
   maxWidth: "100%",
 };
 
@@ -238,24 +237,23 @@ export const tabRow: CSSProperties = { display: "flex", gap: "0.4rem", flexWrap:
 
 export const tab: CSSProperties = {
   background: "none",
-  border: `1px solid ${c.line}`,
-  borderRadius: "999px",
-  padding: "0.35rem 0.9rem",
-  fontSize: "0.82rem",
+  border: "none",
+  borderRadius: 0,
+  padding: "0.35rem 0",
+  fontSize: "0.9rem",
   cursor: "pointer",
-  color: c.textDim,
+  color: c.muted,
   fontFamily: font,
   minHeight: "36px",
   display: "inline-flex",
   alignItems: "center",
   textDecoration: "none",
+  letterSpacing: "-0.01em",
 };
 
 export const tabActive: CSSProperties = {
   ...tab,
-  background: c.text,
-  color: c.bg,
-  borderColor: c.text,
+  color: c.text,
   fontWeight: 600,
 };
 
@@ -490,18 +488,11 @@ export const statusFill: CSSProperties = {
 };
 
 export const libToolbar: CSSProperties = {
-  position: "sticky",
-  top: HEADER_H,
-  zIndex: 20,
-  margin: "0 -1.6rem 1.1rem",
-  padding: "0.7rem 1.6rem 0.8rem",
-  background: "rgba(12, 13, 15, 0.88)",
-  backdropFilter: "saturate(180%) blur(16px)",
-  WebkitBackdropFilter: "saturate(180%) blur(16px)",
-  borderBottom: `1px solid ${c.lineSoft}`,
+  margin: "0 0 1.4rem",
+  padding: 0,
   display: "flex",
   flexDirection: "column",
-  gap: "0.55rem",
+  gap: "0.65rem",
 };
 
 export const libTile: CSSProperties = {
@@ -531,18 +522,17 @@ export const libTileIcon: CSSProperties = {
 
 export const filterTrack: CSSProperties = {
   display: "flex",
-  gap: "0.15rem",
-  border: `1px solid ${c.line}`,
-  borderRadius: "999px",
-  padding: "0.15rem",
-  background: c.bgRaised,
+  gap: "1rem",
+  border: "none",
+  padding: 0,
+  background: "none",
 };
 
 export const filterBtn: CSSProperties = {
   border: "none",
-  borderRadius: "999px",
-  padding: "0.28rem 0.8rem",
-  fontSize: "0.8rem",
+  borderRadius: 0,
+  padding: "0.28rem 0",
+  fontSize: "0.82rem",
   cursor: "pointer",
   background: "none",
   color: c.muted,
@@ -552,8 +542,7 @@ export const filterBtn: CSSProperties = {
 
 export const filterBtnOn: CSSProperties = {
   ...filterBtn,
-  background: c.text,
-  color: c.bg,
+  color: c.text,
   fontWeight: 600,
 };
 

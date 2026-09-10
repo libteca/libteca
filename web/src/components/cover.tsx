@@ -12,7 +12,7 @@ function hueFor(id: number) {
 
 const wrap: CSSProperties = { position: "relative", width: "100%" };
 
-const img: CSSProperties = { width: "100%", height: "100%", objectFit: "cover", display: "block" };
+const img: CSSProperties = { width: "100%", height: "100%", objectFit: "cover", display: "block", willChange: "transform" };
 
 const letter: CSSProperties = {
   color: "rgba(245, 245, 247, 0.82)",
@@ -23,7 +23,7 @@ const letter: CSSProperties = {
 
 const barOuter: CSSProperties = {
   position: "absolute", left: "0.5rem", right: "0.5rem", bottom: "0.45rem",
-  height: "4px", borderRadius: "999px", background: "rgba(255,255,255,0.22)", overflow: "hidden",
+  height: "3px", borderRadius: "999px", background: "rgba(255,255,255,0.18)", overflow: "hidden",
 };
 
 export function Cover(props: { has: boolean; id: number; title: string; progress?: number; ratio?: CoverRatio }) {
@@ -31,21 +31,21 @@ export function Cover(props: { has: boolean; id: number; title: string; progress
   const box: CSSProperties = {
     width: "100%",
     aspectRatio: props.ratio === "square" ? "1 / 1" : "2 / 3",
-    borderRadius: "10px",
+    borderRadius: "6px",
     overflow: "hidden",
     display: "block",
-    boxShadow: c.coverShadow,
+    boxShadow: "0 12px 32px rgba(0,0,0,0.38)",
   };
   return (
     <div style={wrap}>
       {props.has
-        ? <div style={box}><img style={img} src={media(`/covers/${props.id}.jpg`)} alt="" loading="lazy" /></div>
+        ? <div style={box}><img className="coverimg" style={img} src={media(`/covers/${props.id}.jpg`)} alt="" loading="lazy" /></div>
         : <div style={{ ...box, background: hueFor(props.id), display: "flex", alignItems: "center", justifyContent: "center" }}>
             <span style={letter}>{props.title.charAt(0).toUpperCase()}</span>
           </div>}
       {pct != null && pct > 0 && (
         <div style={barOuter}>
-          <div style={{ display: "block", height: "100%", width: `${pct * 100}%`, background: c.accent, borderRadius: "999px" }} />
+          <div style={{ display: "block", height: "100%", width: `${pct * 100}%`, background: "#fff", borderRadius: "999px" }} />
         </div>
       )}
     </div>
