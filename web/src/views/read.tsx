@@ -4,6 +4,7 @@ import { CbzReader } from "../reader/cbz";
 import { EpubReader } from "../reader/epub";
 import { PdfReader } from "../reader/pdf";
 import type { ReadingProgress } from "../reader/shared";
+import { IconSpinner } from "../components/svg";
 import { c, font, linkBtn } from "../styles";
 
 type EditionInfo = { id: number; format: string; title: string; isFinished?: boolean };
@@ -54,7 +55,7 @@ export function ReadView(props: { edition: number; work?: number; format?: strin
   }, [props.work]);
 
   if (!loaded) {
-    return <div style={paneStyle}><span style={c.muted}>loading…</span></div>;
+    return <div style={paneStyle} role="status" aria-label="Loading"><IconSpinner size={22} /></div>;
   }
   if (error || !info) {
     return (

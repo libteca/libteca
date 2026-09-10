@@ -343,6 +343,7 @@ func (w *Watcher) addDir(dir string, libID int64) {
 		return
 	}
 	if err := w.fw.Add(dir); err != nil {
+		fmt.Fprintf(os.Stderr, "libteca: watch add %s: %v\n", dir, err)
 		return
 	}
 	w.dirs[dir] = libID

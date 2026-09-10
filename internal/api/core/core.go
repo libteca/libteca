@@ -26,13 +26,16 @@ type API struct {
 
 	mu   sync.Mutex
 	runs map[int64]*scanRun
+
+	metaMu   sync.Mutex
+	metaRuns map[int64]*metaRun
 }
 
 func New(db *store.DB, dataDir string) *API {
 	if n, err := db.FailRunningScanJobs(); err == nil && n > 0 {
 		fmt.Printf("libteca: marked %d interrupted scan job(s) as error\n", n)
 	}
-	return &API{DB: db, DataDir: dataDir, runs: map[int64]*scanRun{}}
+	return &API{DB: db, DataDir: dataDir, runs: map[int64]*scanRun{}, metaRuns: map[int64]*metaRun{}}
 }
 
 func (a *API) MountPublic(r *neutron.Router) {

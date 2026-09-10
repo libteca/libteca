@@ -59,6 +59,30 @@ export function IconChevronDown(p: IconProps) {
   );
 }
 
+export function IconChevronUp(p: IconProps) {
+  return (
+    <svg {...svgProps(p.size ?? 14)}>
+      <path d="M6 14.5l6-6 6 6" />
+    </svg>
+  );
+}
+
+export function IconX(p: IconProps) {
+  return (
+    <svg {...svgProps(p.size ?? 14)}>
+      <path d="M6 6l12 12M18 6L6 18" />
+    </svg>
+  );
+}
+
+export function IconSpinner(p: IconProps) {
+  return (
+    <svg {...svgProps(p.size ?? 20)} className="spin" aria-hidden>
+      <circle cx="12" cy="12" r="8" strokeDasharray="36 20" />
+    </svg>
+  );
+}
+
 export function IconBack30(p: IconProps) {
   return (
     <svg {...svgProps(p.size ?? 18)}>

@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { api, media, type EditionDetail, type WorkDetail } from "../api";
 import { Cover } from "../components/cover";
+import { QuietLoad } from "../components/rail";
 import { AudioPlayer, type AudioController, type PlayerFile } from "../players/audio";
 import { VideoPlayer } from "../players/video";
-import { IconCheck, IconPlay, IconBook } from "../components/svg";
+import { IconBook, IconCheck, IconChevronLeft, IconPlay } from "../components/svg";
 import {
   badge, backLink, c, chapterList, chapterRow, ghostBtn, input, muted, primaryBtn,
-  progressMini, tabRow, workHead, workMeta, workTitle,
+  progressMini, tab, tabActive, tabRow, workCover, workHead, workMeta, workTitle,
 } from "../styles";
 import { editionState, fmt, formatLabel } from "../util";
 
@@ -45,7 +46,7 @@ export function WorkView(props: { id: number }) {
     setEdition(withPos ? withPos.id : (w.editions[0]?.id || 0));
   }, [w]);
 
-  if (!w) return <p style={muted}>loading…</p>;
+  if (!w) return <QuietLoad />;
   const first = w.editions[0];
   const isTV = w.editions.some((e) => e.seasonNum !== undefined);
   const isMusic = first && first.format === "audio" && !first.chapters?.length && w.editions.length > 1;
@@ -59,9 +60,9 @@ export function WorkView(props: { id: number }) {
   if (isMovie) {
     return (
       <div>
-        <button style={backLink} onClick={() => history.back()}>{"< Library"}</button>
+        <BackButton />
         <div style={workHead}>
-          <div style={{ width: "9.5rem", flexShrink: 0 }}><Cover has={w.hasCover} id={w.id} title={w.title} /></div>
+          <div style={workCover}><Cover has={w.hasCover} id={w.id} title={w.title} /></div>
           <div style={workMeta}>
             <h2 style={workTitle}>{w.title}</h2>
             <p style={muted}>{w.author}</p>
@@ -83,7 +84,11 @@ export function WorkView(props: { id: number }) {
 }
 
 function BackButton() {
-  return <button style={backLink} onClick={() => history.back()}>{"< Library"}</button>;
+  return (
+    <button className="press" style={backLink} onClick={() => history.back()}>
+      <IconChevronLeft size={16} /> Library
+    </button>
+  );
 }
 
 function EpisodeList(props: { w: WorkDetail; onPlay: (id: number) => void }) {
@@ -93,7 +98,7 @@ function EpisodeList(props: { w: WorkDetail; onPlay: (id: number) => void }) {
     <div>
       <BackButton />
       <div style={workHead}>
-        <div style={{ width: "9.5rem", flexShrink: 0 }}><Cover has={props.w.hasCover} id={props.w.id} title={props.w.title} /></div>
+        <div style={workCover}><Cover has={props.w.hasCover} id={props.w.id} title={props.w.title} /></div>
         <div style={workMeta}>
           <h2 style={workTitle}>{props.w.title}</h2>
           <GenreChips genres={props.w.genres} />
@@ -112,7 +117,7 @@ function EpisodeList(props: { w: WorkDetail; onPlay: (id: number) => void }) {
           const st = editionState(e);
           return (
             <div key={e.id} style={{ display: "flex", alignItems: "center", gap: "0.35rem", borderBottom: `1px solid ${c.lineSoft}` }}>
-              <button style={{ ...chapterRow, width: "auto", flex: 1, minWidth: 0, borderBottom: "none", color: e.isFinished ? c.faint : c.textDim }} onClick={() => props.onPlay(e.id)}>
+              <button className="row-hit" style={{ ...chapterRow, width: "auto", flex: 1, minWidth: 0, borderBottom: "none", color: e.isFinished ? c.faint : c.textDim }} onClick={() => props.onPlay(e.id)}>
                 <span style={{ display: "flex", gap: "0.7rem", alignItems: "baseline", minWidth: 0 }}>
                   <span style={{ color: c.faint, fontVariantNumeric: "tabular-nums" }}>{e.episodeNum}.</span>
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.title}</span>
@@ -157,7 +162,7 @@ function TrackList(props: { w: WorkDetail }) {
     <div>
       <BackButton />
       <div style={workHead}>
-        <div style={{ width: "9.5rem", flexShrink: 0 }}><Cover has={props.w.hasCover} id={props.w.id} title={props.w.title} /></div>
+        <div style={workCover}><Cover has={props.w.hasCover} id={props.w.id} title={props.w.title} ratio="square" /></div>
         <div style={workMeta}>
           <h2 style={workTitle}>{props.w.title}</h2>
           <p style={muted}>{props.w.author} · {tracks.length} tracks</p>
@@ -167,7 +172,7 @@ function TrackList(props: { w: WorkDetail }) {
       <div style={chapterList}>
         {tracks.map((t, i) => (
           <div key={t.id} style={{ display: "flex", alignItems: "center", gap: "0.35rem", borderBottom: `1px solid ${c.lineSoft}` }}>
-            <button style={{ ...chapterRow, width: "auto", flex: 1, minWidth: 0, borderBottom: "none", color: i === idx ? c.text : c.textDim }} onClick={() => { setIdx(i); ctl.current?.playAt(i, 0); }}>
+            <button className="row-hit" style={{ ...chapterRow, width: "auto", flex: 1, minWidth: 0, borderBottom: "none", color: i === idx ? c.text : c.textDim }} onClick={() => { setIdx(i); ctl.current?.playAt(i, 0); }}>
               <span style={{ display: "flex", gap: "0.7rem", alignItems: "baseline", minWidth: 0 }}>
                 <span style={{ color: c.faint, fontVariantNumeric: "tabular-nums" }}>{i + 1}.</span>
                 <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.title}</span>
@@ -247,7 +252,7 @@ function EditionsView(props: { w: WorkDetail; editionId: number; setEdition: (id
     <div>
       <BackButton />
       <div style={workHead}>
-        <div style={{ width: "9.5rem", flexShrink: 0 }}><Cover has={w.hasCover} id={w.id} title={w.title} progress={ed.position && ed.duration ? ed.position / ed.duration : rp?.pct} /></div>
+        <div style={workCover}><Cover has={w.hasCover} id={w.id} title={w.title} progress={ed.position && ed.duration ? ed.position / ed.duration : rp?.pct} /></div>
         <div style={workMeta}>
           <h2 style={workTitle}>{w.title}</h2>
           <p style={muted}>{w.author}</p>
@@ -263,22 +268,11 @@ function EditionsView(props: { w: WorkDetail; editionId: number; setEdition: (id
               const st = readerProgress(e) || editionState(e);
               const sel = e.id === ed.id;
               return (
-                <button key={e.id} onClick={() => { props.setEdition(e.id); setPlaying(false); setPos(0); }}
+                <button key={e.id} className="press" onClick={() => { props.setEdition(e.id); setPlaying(false); setPos(0); }}
                   title={st.label}
-                  style={{
-                    display: "inline-flex", gap: "0.55rem", alignItems: "center", cursor: "pointer", fontFamily: "inherit",
-                    border: `1px solid ${sel ? c.accent : c.line}`, background: sel ? c.accentSoft : "none",
-                    borderRadius: "9px", padding: "0.45rem 0.8rem",
-                  }}>
-                  <span style={badge}>{formatLabel(e.format)}</span>
-                  <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", lineHeight: 1.25 }}>
-                    <span style={{ fontSize: "0.78rem", color: sel ? c.text : c.muted }}>{st.label}</span>
-                    {st.pct > 0 && !e.isFinished && (
-                      <span style={{ width: "4.5rem", height: "3px", borderRadius: "999px", background: c.line, overflow: "hidden", display: "block", marginTop: "0.2rem" }}>
-                        <span style={{ display: "block", height: "100%", width: `${st.pct * 100}%`, background: c.accent, borderRadius: "999px" }} />
-                      </span>
-                    )}
-                  </span>
+                  style={sel ? tabActive : tab}>
+                  {formatLabel(e.format)}
+                  {e.isFinished ? " · Finished" : st.pct > 0 ? ` · ${st.label}` : ""}
                 </button>
               );
             })}
@@ -316,7 +310,7 @@ function EditionsView(props: { w: WorkDetail; editionId: number; setEdition: (id
           {ed.chapters.map((ch, i) => {
             const active = currentChapter === ch.title;
             return (
-              <button key={i} style={{ ...chapterRow, color: active ? c.text : c.textDim }} onClick={() => {
+                <button key={i} className="row-hit" style={{ ...chapterRow, color: active ? c.text : c.textDim }} onClick={() => {
                 const fi = fileIndexOf(ch.fileId);
                 if (fi < 0) return;
                 setPlaying(true);
@@ -328,7 +322,7 @@ function EditionsView(props: { w: WorkDetail; editionId: number; setEdition: (id
             );
           })}
           {ed.chapters.length === 0 && files.map((f, i) => (
-            <button key={f.id} style={chapterRow} onClick={() => { setPlaying(true); setTimeout(() => ctl.current?.playAt(i, 0), 0); }}>
+            <button key={f.id} className="row-hit" style={chapterRow} onClick={() => { setPlaying(true); setTimeout(() => ctl.current?.playAt(i, 0), 0); }}>
               <span>Part {i + 1}</span>
               <span style={muted}>{fmt(f.duration)}</span>
             </button>

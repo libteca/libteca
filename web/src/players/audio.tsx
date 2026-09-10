@@ -192,34 +192,41 @@ export function AudioPlayer(props: {
           }
         }}
       />
-      {props.artwork && <img src={props.artwork} alt="" style={{ width: "2.4rem", height: "2.4rem", borderRadius: "5px", objectFit: "cover", flexShrink: 0 }} />}
-      <div style={{ display: "flex", flexDirection: "column", minWidth: 0, width: "11rem", flexShrink: 1 }}>
-        <span style={{ fontSize: "0.85rem", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{props.header}</span>
-        <span style={{ fontSize: "0.73rem", color: c.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+      {props.artwork && <img src={props.artwork} alt="" style={{ width: "3rem", height: "3rem", borderRadius: "8px", objectFit: "cover", flexShrink: 0, boxShadow: "0 4px 14px rgba(0,0,0,0.4)" }} />}
+      <div style={{ display: "flex", flexDirection: "column", minWidth: 0, width: "12rem", flexShrink: 1 }}>
+        <span style={{ fontSize: "0.88rem", fontWeight: 600, letterSpacing: "-0.01em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{props.header}</span>
+        <span style={{ fontSize: "0.75rem", color: c.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {props.sub || props.files[curIdx.current]?.title}
         </span>
       </div>
-      <div style={{ display: "flex", gap: "0.15rem", alignItems: "center", flexShrink: 0 }}>
-        <button style={{ ...barBtn, color: c.muted }} title="Back 30s" onClick={() => nudge(-30)}><IconBack30 size={18} /></button>
-        <button style={barBtn} title="Play or pause" onClick={toggle}>
-          {playing ? <IconPause size={20} /> : <IconPlay size={20} />}
+      <div style={{ display: "flex", gap: "0.1rem", alignItems: "center", flexShrink: 0 }}>
+        <button className="press" style={{ ...barBtn, color: c.muted }} aria-label="Back 30 seconds" title="Back 30s" onClick={() => nudge(-30)}><IconBack30 size={18} /></button>
+        <button className="press" style={barBtn} aria-label={playing ? "Pause" : "Play"} title="Play or pause" onClick={toggle}>
+          {playing ? <IconPause size={22} /> : <IconPlay size={22} />}
         </button>
-        <button style={{ ...barBtn, color: c.muted }} title="Forward 30s" onClick={() => nudge(30)}><IconFwd30 size={18} /></button>
+        <button className="press" style={{ ...barBtn, color: c.muted }} aria-label="Forward 30 seconds" title="Forward 30s" onClick={() => nudge(30)}><IconFwd30 size={18} /></button>
       </div>
       <span style={{ fontSize: "0.75rem", color: c.muted, fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>{fmtClock(abs)}</span>
       <input
         type="range" min={0} max={Math.max(1, Math.floor(total))} step={1} value={Math.floor(abs)}
         className="seek"
-        style={{ flex: 1, minWidth: "4rem", accentColor: c.accent }}
+        style={{
+          flex: 1, minWidth: "4rem",
+          background: `linear-gradient(90deg, ${c.accent} ${total > 0 ? (abs / total) * 100 : 0}%, ${c.line} ${total > 0 ? (abs / total) * 100 : 0}%)`,
+          backgroundSize: "100% 5px",
+          backgroundRepeat: "no-repeat",
+          backgroundPosition: "center",
+          borderRadius: "999px",
+        }}
         onInput={(e) => seekAbs(Number((e.target as HTMLInputElement).value))}
         aria-label="Seek"
       />
       <span style={{ fontSize: "0.75rem", color: c.muted, fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>{fmtClock(total)}</span>
-      <div style={{ display: "flex", gap: "0.35rem", alignItems: "center", flexShrink: 0 }}>
-        <button style={{ ...barBtn, fontSize: "0.75rem", fontWeight: 600, color: c.textDim, width: "auto", padding: "0.4rem 0.55rem", fontVariantNumeric: "tabular-nums" }} title="Playback speed" onClick={cycleRate}>{rate}x</button>
+      <div style={{ display: "flex", gap: "0.2rem", alignItems: "center", flexShrink: 0 }}>
+        <button className="press" style={{ ...barBtn, fontSize: "0.78rem", fontWeight: 600, color: c.textDim, width: "auto", minWidth: "36px", padding: "0 0.65rem", fontVariantNumeric: "tabular-nums", borderRadius: "999px" }} aria-label="Playback speed" title="Playback speed" onClick={cycleRate}>{rate}x</button>
         <div style={{ position: "relative", display: "inline-flex" }}>
-          <button style={{ ...barBtn, color: sleepMin || sleepLeft ? c.accent : c.muted }} title="Sleep timer">
-            <IconMoon size={15} />
+          <button className="press" style={{ ...barBtn, color: sleepMin || sleepLeft ? c.accent : c.muted }} aria-label="Sleep timer" title="Sleep timer">
+            <IconMoon size={16} />
           </button>
           <select
             value={sleepMin}
@@ -239,5 +246,5 @@ export function AudioPlayer(props: {
 const barBtn: preact.JSX.CSSProperties = {
   background: "none", border: "none", color: c.text, cursor: "pointer",
   display: "inline-flex", alignItems: "center", justifyContent: "center",
-  width: "2.2rem", height: "2.2rem", borderRadius: "50%", padding: 0,
+  width: "36px", height: "36px", borderRadius: "50%", padding: 0, flexShrink: 0,
 };

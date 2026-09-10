@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { api, media, type WorkDetail } from "../api";
 import { fmtClock } from "../util";
-import { ghostBtn, iconBtn, muted, rowBetween, backLink, c } from "../styles";
-import { IconCC, IconFullscreen, IconVolume, IconVolumeOff } from "../components/svg";
+import { backLink, c, ghostBtn, iconBtn, muted, videoEl } from "../styles";
+import { IconCC, IconChevronLeft, IconFullscreen, IconVolume, IconVolumeOff } from "../components/svg";
 
 export function VideoPlayer(props: {
   w: WorkDetail;
@@ -58,6 +58,7 @@ export function VideoPlayer(props: {
       else if (e.key === "f" || e.key === "F") { if (document.fullscreenElement) document.exitFullscreen(); else v.requestFullscreen?.(); }
       else if (e.key === "m" || e.key === "M") { v.muted = !v.muted; setIsMuted(v.muted); }
       else if (e.key === "c" || e.key === "C") { toggleCC(); }
+      else if (e.key === "Escape" && !document.fullscreenElement) { save(saved.current); props.onClose(); }
     };
     addEventListener("keydown", onKey);
     return () => removeEventListener("keydown", onKey);
@@ -88,60 +89,66 @@ export function VideoPlayer(props: {
     e.seasonNum !== undefined && e.id !== ed.id && e.seasonNum === ed.seasonNum && e.episodeNum === (ed.episodeNum || 0) + 1);
 
   return (
-    <div>
-      <div style={rowBetween}>
-        <button style={backLink} onClick={props.onClose}>{`< ${props.w.title}`}</button>
-        <p style={muted}>{ed.title}{time > 0 ? ` · ${fmtClock(time)} / ${fmtClock(ed.duration)}` : null}</p>
+    <div style={{ position: "fixed", inset: 0, zIndex: 35, background: "#000", display: "flex", flexDirection: "column" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "0.8rem", padding: "0.35rem 1.1rem", minHeight: "3.2rem" }}>
+        <button className="press" style={{ ...backLink, marginBottom: 0, color: "#f5f5f7" }} onClick={() => { save(saved.current); props.onClose(); }}>
+          <IconChevronLeft size={16} /> {props.w.title}
+        </button>
+        <p style={{ ...muted, marginLeft: "auto", fontSize: "0.82rem" }}>
+          {ed.title}{time > 0 ? ` · ${fmtClock(time)} / ${fmtClock(ed.duration)}` : null}
+        </p>
       </div>
-      <video
-        ref={ref}
-        controls
-        autoPlay
-        playsInline
-        poster={props.w.hasCover ? media(`/covers/${props.w.id}.jpg`) : undefined}
-        src={media(`/stream/${fileId}`)}
-        onLoadedMetadata={() => {
-          const v = ref.current;
-          if (v && ed.position && ed.position > 0 && ed.position < ed.duration - 5) v.currentTime = ed.position;
-        }}
-        onTimeUpdate={() => {
-          const v = ref.current;
-          if (!v) return;
-          saved.current = v.currentTime;
-          setTime(v.currentTime);
-          if ("mediaSession" in navigator && navigator.mediaSession.setPositionState) {
-            try {
-              navigator.mediaSession.setPositionState({ duration: ed.duration || v.duration, playbackRate: v.playbackRate, position: Math.min(v.currentTime, ed.duration || v.duration) });
-            } catch { /* invalid state */ }
-          }
-        }}
-        onPause={() => { save(saved.current); if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "paused"; }}
-        onPlay={() => { if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "playing"; }}
-        onEnded={() => { save(ed.duration, true); if (next) props.onSelectEdition(next.id); else props.onClose(); }}
-      >
-        {subs ? <track kind="subtitles" src={media(`/subtitles/${fileId}`)} srcLang="en" label="Subtitles" /> : null}
-      </video>
-      <div style={{ display: "flex", gap: "0.6rem", marginTop: "0.8rem", alignItems: "center" }}>
-        <button style={ghostBtn} onClick={() => { save(saved.current); props.onClose(); }}>Save & close</button>
+      <div style={{ flex: 1, minHeight: 0, background: "#000" }}>
+        <video
+          ref={ref}
+          controls
+          autoPlay
+          playsInline
+          poster={props.w.hasCover ? media(`/covers/${props.w.id}.jpg`) : undefined}
+          src={media(`/stream/${fileId}`)}
+          style={videoEl}
+          onLoadedMetadata={() => {
+            const v = ref.current;
+            if (v && ed.position && ed.position > 0 && ed.position < ed.duration - 5) v.currentTime = ed.position;
+          }}
+          onTimeUpdate={() => {
+            const v = ref.current;
+            if (!v) return;
+            saved.current = v.currentTime;
+            setTime(v.currentTime);
+            if ("mediaSession" in navigator && navigator.mediaSession.setPositionState) {
+              try {
+                navigator.mediaSession.setPositionState({ duration: ed.duration || v.duration, playbackRate: v.playbackRate, position: Math.min(v.currentTime, ed.duration || v.duration) });
+              } catch { /* invalid state */ }
+            }
+          }}
+          onPause={() => { save(saved.current); if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "paused"; }}
+          onPlay={() => { if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "playing"; }}
+          onEnded={() => { save(ed.duration, true); if (next) props.onSelectEdition(next.id); else props.onClose(); }}
+        >
+          {subs ? <track kind="subtitles" src={media(`/subtitles/${fileId}`)} srcLang="en" label="Subtitles" /> : null}
+        </video>
+      </div>
+      <div style={{ display: "flex", gap: "0.45rem", padding: "0.65rem 1.1rem 0.85rem", alignItems: "center" }}>
+        <button className="press" style={ghostBtn} onClick={() => { save(saved.current); props.onClose(); }}>Save & close</button>
         {subs ? (
-          <button style={ccOn ? { ...iconBtn, color: c.accent } : iconBtn} title="Subtitles (c)" onClick={toggleCC}>
+          <button className="press" style={ccOn ? { ...iconBtn, color: c.accent } : iconBtn} aria-label="Subtitles" title="Subtitles (c)" onClick={toggleCC}>
             <IconCC size={16} />
           </button>
         ) : null}
-        <button style={iconBtn} title="Mute (m)" onClick={() => { const v = ref.current; if (v) { v.muted = !v.muted; setIsMuted(v.muted); } }}>
+        <button className="press" style={iconBtn} aria-label={isMuted ? "Unmute" : "Mute"} title="Mute (m)" onClick={() => { const v = ref.current; if (v) { v.muted = !v.muted; setIsMuted(v.muted); } }}>
           {isMuted ? <IconVolumeOff size={16} /> : <IconVolume size={16} />}
         </button>
-        <button style={iconBtn} title="Fullscreen (f)" onClick={() => { const v = ref.current; if (document.fullscreenElement) document.exitFullscreen(); else v?.requestFullscreen?.(); }}>
+        <button className="press" style={iconBtn} aria-label="Fullscreen" title="Fullscreen (f)" onClick={() => { const v = ref.current; if (document.fullscreenElement) document.exitFullscreen(); else v?.requestFullscreen?.(); }}>
           <IconFullscreen size={16} />
         </button>
         <span style={{ flex: 1 }} />
         {next ? (
-          <button style={ghostBtn} onClick={() => { save(saved.current); props.onSelectEdition(next.id); }}>
+          <button className="press" style={ghostBtn} onClick={() => { save(saved.current); props.onSelectEdition(next.id); }}>
             Next episode
           </button>
         ) : null}
       </div>
-      <p style={{ ...muted, marginTop: "0.6rem", fontSize: "0.78rem" }}>space play · arrows 10s · f fullscreen · m mute · c subtitles</p>
     </div>
   );
 }

@@ -1,10 +1,11 @@
 import { useEffect, useState } from "preact/hooks";
 import { api, getToken, type Library, type ScanEvent } from "../api";
 import { useScan } from "../scan";
-import { IconScan } from "../components/svg";
+import { IconChevronDown, IconChevronLeft, IconScan } from "../components/svg";
 import { fmtRel } from "../util";
 import {
-  backLink, badge, c, ghostBtn, input, loginCard, mono, muted, primaryBtn, sectionTitle, td, th, table,
+  backLink, badge, c, formCard, ghostBtn, input, mono, muted, primaryBtn, sectionTitle,
+  selectChevron, selectWrap, td, th, table,
 } from "../styles";
 
 const TYPES = ["audiobooks", "movies", "tv", "music", "books", "comics"];
@@ -47,19 +48,22 @@ export function AdminView() {
 
   return (
     <div>
-      <button style={backLink} onClick={() => history.back()}>{"< Library"}</button>
+      <button className="press" style={backLink} onClick={() => history.back()}><IconChevronLeft size={16} /> Library</button>
       <h2 style={sectionTitle}>Admin</h2>
 
       <h3 style={{ ...sectionTitle, fontSize: "1rem", marginTop: "2rem" }}>Libraries</h3>
       {libs.map((l) => <AdminLibRow key={l.id} lib={l} />)}
       {libs.length === 0 && <p style={muted}>No libraries configured.</p>}
 
-      <form style={{ ...loginCard, marginTop: "1.6rem", marginBottom: "2.4rem" }} onSubmit={add}>
+      <form style={{ ...formCard, marginTop: "1.6rem", marginBottom: "2.4rem" }} onSubmit={add}>
         <h3 style={{ ...sectionTitle, fontSize: "1rem" }}>Add library</h3>
         <input style={input} placeholder="name" value={name} onInput={(e) => setName((e.target as HTMLInputElement).value)} />
-        <select style={input} value={type} onChange={(e) => setType((e.target as HTMLSelectElement).value)}>
-          {TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-        </select>
+        <div style={{ ...selectWrap, width: "100%", display: "flex" }}>
+          <select className="pill" style={{ width: "100%" }} value={type} onChange={(e) => setType((e.target as HTMLSelectElement).value)} aria-label="Library type">
+            {TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+          </select>
+          <span style={selectChevron}><IconChevronDown size={12} /></span>
+        </div>
         <input style={input} placeholder="/path/to/media" value={path} onInput={(e) => setPath((e.target as HTMLInputElement).value)} />
         <button style={primaryBtn} type="submit">Add & scan</button>
         {msg && <p style={muted}>{msg}</p>}
@@ -192,7 +196,7 @@ function UsersSection(props: { users: AdminUser[]; onChanged: () => void }) {
         </div>
       )}
 
-      <form style={{ ...loginCard, marginTop: "1.6rem" }} onSubmit={create}>
+      <form style={{ ...formCard, marginTop: "1.6rem" }} onSubmit={create}>
         <h3 style={{ ...sectionTitle, fontSize: "1rem" }}>Add user</h3>
         <input style={input} placeholder="name" value={name} onInput={(e) => setName((e.target as HTMLInputElement).value)} />
         <input style={input} type="password" placeholder="password (min 8 chars)" value={password} onInput={(e) => setPassword((e.target as HTMLInputElement).value)} />
@@ -288,11 +292,14 @@ function ImportSection() {
     <section style={{ marginBottom: "2.4rem" }}>
       <h3 style={{ ...sectionTitle, fontSize: "1rem" }}>Import</h3>
       <p style={{ ...muted, marginBottom: "0.9rem" }}>Migrate an existing Audiobookshelf or Kavita instance. The foreign database is only read.</p>
-      <div style={{ ...loginCard, marginTop: 0, width: "26rem" }}>
-        <select style={input} value={source} onChange={(e) => { setSource((e.target as HTMLSelectElement).value); setPlan(null); }}>
-          <option value="abs">Audiobookshelf (data dir)</option>
-          <option value="kavita">Kavita (app.db)</option>
-        </select>
+      <div style={{ ...formCard, marginTop: 0, width: "26rem" }}>
+        <div style={{ ...selectWrap, width: "100%", display: "flex" }}>
+          <select className="pill" style={{ width: "100%" }} value={source} onChange={(e) => { setSource((e.target as HTMLSelectElement).value); setPlan(null); }} aria-label="Import source">
+            <option value="abs">Audiobookshelf (data dir)</option>
+            <option value="kavita">Kavita (app.db)</option>
+          </select>
+          <span style={selectChevron}><IconChevronDown size={12} /></span>
+        </div>
         <input
           style={input}
           placeholder={source === "abs" ? "/config/dir (contains abs_database.db)" : "/path/to/app.db"}
@@ -412,7 +419,7 @@ function TokensSection(props: { users: AdminUser[] }) {
         </div>
       )}
 
-      <form style={{ ...loginCard, marginTop: "1.6rem" }} onSubmit={create}>
+      <form style={{ ...formCard, marginTop: "1.6rem" }} onSubmit={create}>
         <h3 style={{ ...sectionTitle, fontSize: "1rem" }}>Issue token</h3>
         <input style={input} placeholder="label (e.g. phone)" value={label} onInput={(e) => setLabel((e.target as HTMLInputElement).value)} />
         <button style={primaryBtn} type="submit">Issue</button>

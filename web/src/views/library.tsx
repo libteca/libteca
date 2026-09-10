@@ -1,11 +1,14 @@
 import { useEffect, useState } from "preact/hooks";
 import { api, type Library, type Work } from "../api";
 import { useScan } from "../scan";
+import { useRefreshMeta } from "../refresh-meta";
 import { Cover } from "../components/cover";
-import { EmptyState } from "../components/rail";
-import { IconScan } from "../components/svg";
+import { EmptyState, QuietLoad } from "../components/rail";
+import { IconChevronDown, IconScan } from "../components/svg";
+import { coverRatio } from "../util";
 import {
-  card, cardMeta, cardTitle, c, ghostBtn, grid, muted, rowBetween, tab, tabActive,
+  c, card, cardMeta, cardTitle, filterBtn, filterBtnOn, filterTrack, ghostBtn,
+  gridFor, libToolbar, muted, selectChevron, selectWrap, tab, tabActive,
 } from "../styles";
 
 const SORTS = [
@@ -30,20 +33,10 @@ export function LibraryView(props: { lib?: number }) {
   const [dir, setDir] = useState("asc");
   const [filter, setFilter] = useState("all");
   const [loaded, setLoaded] = useState(false);
-  const [metaBusy, setMetaBusy] = useState(false);
-  const [metaMsg, setMetaMsg] = useState("");
-
-  const improveMeta = async () => {
-    if (!lib || metaBusy) return;
-    setMetaBusy(true);
-    setMetaMsg("");
-    const res = await api(`/libraries/${lib}/refresh-meta`, { method: "POST" });
-    setMetaBusy(false);
-    if (res.error) { setMetaMsg(res.error); return; }
-    setMetaMsg(`Matched ${res.matched} · auto-applied ${res.autoApplied} · rest in inbox`);
-  };
 
   const scan = useScan(() => { refreshWorks(); });
+  const meta = useRefreshMeta(() => { refreshWorks(); });
+
   const refreshWorks = () => {
     if (!lib) return;
     api(`/libraries/${lib}/works?sort=${sort}&dir=${dir}&filter=${filter}`)
@@ -58,15 +51,24 @@ export function LibraryView(props: { lib?: number }) {
   useEffect(refreshWorks, [lib, sort, dir, filter]);
 
   const activeLib = libs.find((l) => l.id === lib);
+  const ratio = coverRatio(activeLib?.type);
   const scanLine = scan.event && (scan.scanning
-    ? `Scanning… ${scan.event.filesSeen} files${scan.event.worksChanged ? ` · ${scan.event.worksChanged} changed` : ""}`
+    ? `Scanning ${scan.event.filesSeen} files${scan.event.worksChanged ? ` · ${scan.event.worksChanged} changed` : ""}`
     : scan.event.status === "error" ? `Scan failed${scan.event.error ? `: ${scan.event.error}` : ""}`
     : scan.event.filesAdded ? `Scan done · ${scan.event.filesAdded} added` : "");
 
+  const metaLine = meta.running
+    ? `Improving metadata${meta.event?.total ? ` · ${meta.event.matched || 0} of ${meta.event.total}` : ""}`
+    : meta.event?.status === "done"
+      ? `Matched ${meta.event.matched ?? 0} · auto-applied ${meta.event.autoApplied ?? 0}`
+      : meta.event?.status === "error"
+        ? (meta.event.error || "Metadata refresh failed")
+        : "";
+
   return (
     <div>
-      <div style={rowBetween}>
-        <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
+      <div style={libToolbar}>
+        <div style={{ display: "flex", gap: "0.35rem", flexWrap: "wrap" }}>
           {libs.map((l) => (
             <a key={l.id} href={`#/library?lib=${l.id}`} style={{ textDecoration: "none" }}
               onClick={() => setLib(l.id)}>
@@ -74,52 +76,61 @@ export function LibraryView(props: { lib?: number }) {
             </a>
           ))}
         </div>
-        <div style={{ display: "flex", gap: "0.6rem", alignItems: "center" }}>
-          <select style={{ background: c.bgRaised, color: c.textDim, border: `1px solid ${c.line}`, borderRadius: "999px", padding: "0.32rem 0.7rem", fontSize: "0.85rem", fontFamily: "inherit" }}
-            value={sort} onChange={(e) => setSort((e.target as HTMLSelectElement).value)}>
-            {SORTS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
-          </select>
-          <button style={ghostBtn} title={dir === "asc" ? "Ascending" : "Descending"}
+        <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+          <div style={selectWrap}>
+            <select
+              className="pill"
+              aria-label="Sort"
+              value={sort}
+              onChange={(e) => setSort((e.target as HTMLSelectElement).value)}
+            >
+              {SORTS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+            </select>
+            <span style={selectChevron}><IconChevronDown size={12} /></span>
+          </div>
+          <button className="press" style={ghostBtn} aria-label={dir === "asc" ? "Ascending" : "Descending"}
             onClick={() => setDir(dir === "asc" ? "desc" : "asc")}>
             {dir === "asc" ? "A–Z" : "Z–A"}
           </button>
-          <div style={{ display: "flex", gap: "0.25rem", border: `1px solid ${c.line}`, borderRadius: "999px", padding: "0.15rem" }}>
+          <div style={filterTrack} role="tablist" aria-label="Filter">
             {FILTERS.map((f) => (
-              <button key={f.value}
-                style={filter === f.value
-                  ? { border: "none", borderRadius: "999px", padding: "0.22rem 0.75rem", fontSize: "0.8rem", cursor: "pointer", background: c.text, color: c.bg, fontWeight: 600, fontFamily: "inherit" }
-                  : { border: "none", borderRadius: "999px", padding: "0.22rem 0.75rem", fontSize: "0.8rem", cursor: "pointer", background: "none", color: c.muted, fontFamily: "inherit" }}
-                onClick={() => setFilter(f.value)}>{f.label}</button>
+              <button
+                key={f.value}
+                role="tab"
+                aria-selected={filter === f.value}
+                style={filter === f.value ? filterBtnOn : filterBtn}
+                onClick={() => setFilter(f.value)}
+              >{f.label}</button>
             ))}
           </div>
-          <button style={ghostBtn} disabled={metaBusy || scan.scanning} onClick={improveMeta}>
-            {metaBusy ? "Working…" : "Improve metadata"}
+          <span style={{ flex: 1, minWidth: "0.4rem" }} />
+          <button className="press" style={ghostBtn} disabled={meta.running || scan.scanning} onClick={() => { if (lib) meta.start(lib); }}>
+            {meta.running ? "Improving" : "Improve metadata"}
           </button>
-          <button style={ghostBtn} disabled={scan.scanning} onClick={() => scan.start(lib)}>
-            <span style={{ display: "inline-flex", gap: "0.45rem", alignItems: "center" }}>
-              <IconScan size={14} />
-              {scan.scanning ? "Scanning…" : "Scan"}
-            </span>
+          <button className="press" style={ghostBtn} disabled={scan.scanning} onClick={() => scan.start(lib)}>
+            <IconScan size={14} />
+            {scan.scanning ? "Scanning" : "Scan"}
           </button>
         </div>
       </div>
-      {(scanLine || activeLib) && (
-        <p style={{ ...muted, marginBottom: "1rem", minHeight: "1.2em" }}>{scanLine || (activeLib ? `${activeLib.path}` : "")}</p>
+      {(scanLine || (activeLib && !metaLine)) && (
+        <p style={{ ...muted, marginBottom: "0.85rem", minHeight: "1.2em" }}>{scanLine || (activeLib ? activeLib.path : "")}</p>
       )}
-      {metaMsg && (
-        <p style={{ ...muted, marginBottom: "1rem" }}>
-          {metaMsg} · <a href="#/matching" style={{ color: c.accent }}>review inbox</a>
+      {metaLine && (
+        <p style={{ ...muted, marginBottom: "0.85rem" }}>
+          {metaLine}
+          {meta.event?.status === "done" && <> · <a href="#/matching" style={{ color: c.accent }}>review inbox</a></>}
         </p>
       )}
       {works.length === 0
         ? loaded
           ? <EmptyState title={filter === "all" ? "No works yet" : "Nothing matches this filter"}
               hint={filter === "all" ? "Add a library in Admin and scan." : "Try a different filter."} />
-          : <p style={muted}>loading…</p>
-        : <div style={grid}>
+          : <QuietLoad />
+        : <div style={gridFor(activeLib?.type)}>
             {works.map((w) => (
-              <a key={w.id} href={`#/work?id=${w.id}`} style={card}>
-                <Cover has={w.hasCover} id={w.id} title={w.title} />
+              <a key={w.id} href={`#/work?id=${w.id}`} className="cover-card" style={card}>
+                <Cover has={w.hasCover} id={w.id} title={w.title} ratio={ratio} />
                 <p style={cardTitle}>{w.title}</p>
                 <p style={cardMeta}>{w.author}</p>
               </a>

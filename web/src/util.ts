@@ -49,6 +49,10 @@ export function typeLabel(t: string) {
   return TYPE_LABELS[t] || t;
 }
 
+export function coverRatio(type?: string): "poster" | "square" {
+  return type === "music" || type === "podcasts" ? "square" : "poster";
+}
+
 const FORMAT_LABELS: Record<string, string> = {
   m4b: "M4B", mp3: "MP3", audio: "AUDIO", video: "VIDEO",
   epub: "EPUB", cbz: "CBZ", pdf: "PDF",

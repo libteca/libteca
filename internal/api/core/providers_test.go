@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/libteca/libteca/internal/meta"
 	"github.com/libteca/libteca/internal/store"
@@ -112,6 +113,25 @@ func callHandler(t *testing.T, method, path, id, body string, h func(w http.Resp
 		t.Fatalf("bad response body %q: %v", rec.Body.String(), err)
 	}
 	return rec.Code, out
+}
+
+func waitRefresh(t *testing.T, a *API, libID int64) map[string]any {
+	t.Helper()
+	id := strconv.FormatInt(libID, 10)
+	code, body := callHandler(t, "POST", "/libraries/1/refresh-meta", id, ``, a.refreshMeta)
+	if code != 202 && code != 409 {
+		t.Fatalf("refresh POST code = %d body = %v", code, body)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		_, snap := callHandler(t, "GET", "/libraries/1/refresh-meta", id, ``, a.refreshMetaStatus)
+		if st, _ := snap["status"].(string); st != "running" {
+			return snap
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("refresh-meta did not finish")
+	return nil
 }
 
 func workCols(t *testing.T, db *store.DB, workID int64) (provider, description string, hasCover bool) {
@@ -244,10 +264,7 @@ func TestRefreshMetaAutoApply(t *testing.T) {
 	a, db, libID := newMatchingAPI(t, "audiobooks", fp)
 	workID := addMatchWork(t, db, libID, "Project Hail Mary", "Andy Weir", "[]")
 
-	code, body := callHandler(t, "POST", "/libraries/1/refresh-meta", strconv.FormatInt(libID, 10), ``, a.refreshMeta)
-	if code != 200 {
-		t.Fatalf("code = %d body = %v", code, body)
-	}
+	body := waitRefresh(t, a, libID)
 	if body["matched"] != float64(1) || body["autoApplied"] != float64(1) {
 		t.Fatalf("body = %v", body)
 	}
@@ -277,7 +294,7 @@ func TestRefreshMetaAmbiguousGoesToInbox(t *testing.T) {
 	a, db, libID := newMatchingAPI(t, "audiobooks", fp)
 	workID := addMatchWork(t, db, libID, "Project Hail Mary", "Andy Weir", "[]")
 
-	_, body := callHandler(t, "POST", "/libraries/1/refresh-meta", strconv.FormatInt(libID, 10), ``, a.refreshMeta)
+	body := waitRefresh(t, a, libID)
 	if body["autoApplied"] != float64(0) || body["matched"] != float64(1) {
 		t.Fatalf("body = %v", body)
 	}
@@ -298,7 +315,7 @@ func TestRefreshMetaLowSimilarityStays(t *testing.T) {
 	a, db, libID := newMatchingAPI(t, "audiobooks", fp)
 	addMatchWork(t, db, libID, "Project Hail Mary", "Andy Weir", "[]")
 
-	_, body := callHandler(t, "POST", "/libraries/1/refresh-meta", strconv.FormatInt(libID, 10), ``, a.refreshMeta)
+	body := waitRefresh(t, a, libID)
 	if body["autoApplied"] != float64(0) {
 		t.Fatalf("body = %v", body)
 	}
@@ -312,7 +329,7 @@ func TestRefreshMetaProviderErrorBlocksAutoApply(t *testing.T) {
 	a, db, libID := newMatchingAPI(t, "audiobooks", okay, broken)
 	workID := addMatchWork(t, db, libID, "Project Hail Mary", "Andy Weir", "[]")
 
-	_, body := callHandler(t, "POST", "/libraries/1/refresh-meta", strconv.FormatInt(libID, 10), ``, a.refreshMeta)
+	body := waitRefresh(t, a, libID)
 	if body["autoApplied"] != float64(0) {
 		t.Fatalf("body = %v — a failed sweep must not auto-apply", body)
 	}
@@ -330,7 +347,7 @@ func TestRefreshMetaSkipsMarkedWorks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, body := callHandler(t, "POST", "/libraries/1/refresh-meta", strconv.FormatInt(libID, 10), ``, a.refreshMeta)
+	body := waitRefresh(t, a, libID)
 	if body["matched"] != float64(0) || body["autoApplied"] != float64(0) {
 		t.Fatalf("body = %v", body)
 	}

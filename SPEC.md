@@ -341,10 +341,9 @@ beyond create/revoke, no podcasts, no OPDS, no backups tooling (document
    capture).
 4. PLAN §14 launch decisions (public repo timing, media-hub archive, license).
 
-**Owed — code, next session:** refresh-meta as background job + SSE for
-large libraries; Darwin fd-limit caveat for watch on huge libraries;
-neutron-go publish (blocks CI, container image, teploy registration);
-teploy /dev/dri passthrough upstream feature.
+**Owed — code, next session:** neutron-go publish (blocks CI, container
+image, teploy registration); teploy /dev/dri passthrough is a Teploy-format
+gap, not libteca. Darwin watch logs Add failures (dir-only watches already).
 
 **Demo/testing:** data/demo + data/demo-media (seeded via tools/seed), admin
 via --init-admin; server on :8096 — the founder's browser-test instance.

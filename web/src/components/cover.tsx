@@ -1,6 +1,8 @@
 import type { CSSProperties } from "preact";
 import { media } from "../api";
-import { c } from "../styles";
+import { c, serif } from "../styles";
+
+export type CoverRatio = "poster" | "square";
 
 const HUES = ["#3a3f4a", "#443a4a", "#3a4a44", "#4a443a", "#46394a", "#39464a"];
 
@@ -10,34 +12,35 @@ function hueFor(id: number) {
 
 const wrap: CSSProperties = { position: "relative", width: "100%" };
 
-const box: CSSProperties = {
-  width: "100%", aspectRatio: "2 / 3", borderRadius: "8px",
-  overflow: "hidden", display: "block", boxShadow: c.coverShadow,
-};
-
 const img: CSSProperties = { width: "100%", height: "100%", objectFit: "cover", display: "block" };
 
-const placeholder: CSSProperties = {
-  ...box, background: c.bgRaised, display: "flex", alignItems: "center", justifyContent: "center",
-};
-
 const letter: CSSProperties = {
-  color: c.textDim, fontSize: "2rem", fontWeight: 700,
-  fontFamily: "'Iowan Old Style', Georgia, serif",
+  color: "rgba(245, 245, 247, 0.82)",
+  fontSize: "2.1rem",
+  fontWeight: 700,
+  fontFamily: serif,
 };
 
 const barOuter: CSSProperties = {
-  position: "absolute", left: "0.5rem", right: "0.5rem", bottom: "0.4rem",
-  height: "3px", borderRadius: "999px", background: "rgba(255,255,255,0.25)", overflow: "hidden",
+  position: "absolute", left: "0.5rem", right: "0.5rem", bottom: "0.45rem",
+  height: "4px", borderRadius: "999px", background: "rgba(255,255,255,0.22)", overflow: "hidden",
 };
 
-export function Cover(props: { has: boolean; id: number; title: string; progress?: number }) {
+export function Cover(props: { has: boolean; id: number; title: string; progress?: number; ratio?: CoverRatio }) {
   const pct = props.progress != null ? Math.max(0, Math.min(1, props.progress)) : null;
+  const box: CSSProperties = {
+    width: "100%",
+    aspectRatio: props.ratio === "square" ? "1 / 1" : "2 / 3",
+    borderRadius: "10px",
+    overflow: "hidden",
+    display: "block",
+    boxShadow: c.coverShadow,
+  };
   return (
     <div style={wrap}>
       {props.has
         ? <div style={box}><img style={img} src={media(`/covers/${props.id}.jpg`)} alt="" loading="lazy" /></div>
-        : <div style={{ ...placeholder, background: hueFor(props.id) }}>
+        : <div style={{ ...box, background: hueFor(props.id), display: "flex", alignItems: "center", justifyContent: "center" }}>
             <span style={letter}>{props.title.charAt(0).toUpperCase()}</span>
           </div>}
       {pct != null && pct > 0 && (

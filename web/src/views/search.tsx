@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import { api, media, type SearchItem } from "../api";
+import { api, type SearchItem } from "../api";
 import { Cover } from "../components/cover";
+import { QuietLoad } from "../components/rail";
 import { IconSearch, TypeIcon } from "../components/svg";
-import { debounce, typeLabel } from "../util";
-import { c, input, muted, sectionTitle } from "../styles";
+import { coverRatio, debounce, typeLabel } from "../util";
+import { c, card, cardMeta, cardTitle, eyebrow, gridFor, muted, sectionTitle } from "../styles";
 
 const GROUP_ORDER = ["movies", "tv", "music", "audiobooks", "books", "comics"];
 
@@ -49,8 +50,8 @@ export function SearchBox() {
   };
 
   return (
-    <div ref={boxRef} style={{ position: "relative", flex: "1 1 12rem", maxWidth: "26rem", minWidth: "8rem" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", ...input, padding: "0.4rem 0.7rem", borderRadius: "999px" }}>
+    <div ref={boxRef} style={{ position: "relative", flex: "1 1 11rem", maxWidth: "22rem", minWidth: "7.5rem" }}>
+      <div className="search-wrap">
         <span style={{ color: c.muted, display: "inline-flex" }}><IconSearch size={14} /></span>
         <input
           value={q}
@@ -68,17 +69,18 @@ export function SearchBox() {
       {open && items.length > 0 && (
         <div style={{
           position: "absolute", top: "calc(100% + 0.4rem)", left: 0, right: 0,
-          background: c.bgRaised, border: `1px solid ${c.line}`, borderRadius: "12px",
-          boxShadow: "0 12px 32px rgba(0,0,0,0.55)", overflow: "hidden", zIndex: 50,
+          background: c.bgRaised, border: `1px solid ${c.line}`, borderRadius: "14px",
+          boxShadow: "0 16px 40px rgba(0,0,0,0.55)", overflow: "hidden", zIndex: 50,
           maxHeight: "60vh", overflowY: "auto",
         }}>
           {group(items).map(([type, list]) => (
             <div key={type}>
-              <p style={{ margin: 0, padding: "0.5rem 0.8rem 0.25rem", fontSize: "0.7rem", textTransform: "uppercase", letterSpacing: "0.08em", color: c.faint }}>{typeLabel(type)}</p>
+              <p style={{ ...eyebrow, padding: "0.65rem 0.85rem 0.2rem", margin: 0 }}>{typeLabel(type)}</p>
               {list.slice(0, 5).map((it) => (
                 <a key={it.workId} href={`#/work?id=${it.workId}`} onClick={() => setOpen(false)}
-                  style={{ display: "flex", gap: "0.7rem", alignItems: "center", padding: "0.45rem 0.8rem", textDecoration: "none", color: c.text }}>
-                  <span style={{ width: "1.5rem", flexShrink: 0 }}><Cover has={it.hasCover} id={it.workId} title={it.title} /></span>
+                  className="row-hit"
+                  style={{ display: "flex", gap: "0.7rem", alignItems: "center", padding: "0.5rem 0.85rem", textDecoration: "none", color: c.text, minHeight: "44px" }}>
+                  <span style={{ width: "2.1rem", flexShrink: 0 }}><Cover has={it.hasCover} id={it.workId} title={it.title} ratio={coverRatio(type)} /></span>
                   <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
                     <span style={{ fontSize: "0.85rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.title}</span>
                     {it.author && <span style={{ fontSize: "0.73rem", color: c.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.author}</span>}
@@ -88,8 +90,8 @@ export function SearchBox() {
               ))}
             </div>
           ))}
-          <button onClick={go} style={{ display: "block", width: "100%", textAlign: "center", background: "none", border: "none", borderTop: `1px solid ${c.lineSoft}`, color: c.accent, fontSize: "0.8rem", padding: "0.55rem", cursor: "pointer", fontFamily: "inherit" }}>
-            All results for “{q.trim()}”
+          <button onClick={go} style={{ display: "block", width: "100%", textAlign: "center", background: "none", border: "none", borderTop: `1px solid ${c.lineSoft}`, color: c.accent, fontSize: "0.8rem", padding: "0.65rem", cursor: "pointer", fontFamily: "inherit", minHeight: "36px" }}>
+            All results
           </button>
         </div>
       )}
@@ -111,19 +113,20 @@ export function SearchPage(props: { q: string }) {
 
   return (
     <div>
-      <h2 style={sectionTitle}>Search</h2>
+      <h2 style={sectionTitle}>{props.q}</h2>
       <p style={{ ...muted, marginBottom: "1.4rem" }}>
-        {items.length > 0 ? `${items.length} result${items.length === 1 ? "" : "s"} for “${props.q}”` : done ? `Nothing found for “${props.q}”` : "searching…"}
+        {items.length > 0 ? `${items.length} result${items.length === 1 ? "" : "s"}` : done ? "Nothing found." : ""}
       </p>
+      {!done && items.length === 0 && <QuietLoad />}
       {group(items).map(([type, list]) => (
         <section key={type} style={{ marginBottom: "1.8rem" }}>
-          <p style={{ margin: "0 0 0.8rem", fontSize: "0.75rem", textTransform: "uppercase", letterSpacing: "0.08em", color: c.faint }}>{typeLabel(type)}</p>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(8.5rem, 1fr))", gap: "1.2rem" }}>
+          <p style={eyebrow}>{typeLabel(type)}</p>
+          <div style={gridFor(type)}>
             {list.map((it) => (
-              <a key={it.workId} href={`#/work?id=${it.workId}`} style={{ textDecoration: "none", color: "inherit" }}>
-                <Cover has={it.hasCover} id={it.workId} title={it.title} progress={it.percent || undefined} />
-                <p style={{ margin: "0.5rem 0 0", fontWeight: 600, fontSize: "0.88rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.title}</p>
-                <p style={{ margin: 0, color: c.muted, fontSize: "0.78rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.author}</p>
+              <a key={it.workId} href={`#/work?id=${it.workId}`} className="cover-card" style={card}>
+                <Cover has={it.hasCover} id={it.workId} title={it.title} progress={it.percent || undefined} ratio={coverRatio(type)} />
+                <p style={cardTitle}>{it.title}</p>
+                <p style={cardMeta}>{it.author}</p>
               </a>
             ))}
           </div>

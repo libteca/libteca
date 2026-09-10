@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { api, media } from "../api";
-import { IconBack30, IconFwd30, IconPause, IconPlay } from "../components/svg";
+import { EmptyState, QuietLoad } from "../components/rail";
+import { IconBack30, IconChevronDown, IconChevronLeft, IconChevronUp, IconFwd30, IconPause, IconPlay, IconX } from "../components/svg";
 import { fmt, fmtClock } from "../util";
 import {
-  backLink, badge, c, errStyle, ghostBtn, input, linkBtn, muted, primaryBtn, sectionTitle,
+  backLink, badge, c, errStyle, ghostBtn, iconBtn, input, linkBtn, muted, playerBar, primaryBtn, sectionTitle,
 } from "../styles";
 
 type Playlist = {
@@ -62,7 +63,7 @@ function PlaylistPlayer(props: { items: PlaylistItem[]; onDone: () => void }) {
   };
 
   return (
-    <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "rgba(18, 19, 22, 0.92)", backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)", borderTop: `1px solid ${c.lineSoft}`, padding: "0.7rem 1.4rem", display: "flex", gap: "0.9rem", alignItems: "center", zIndex: 30 }}>
+    <div style={playerBar}>
       <audio
         ref={audioRef}
         src={item ? media(`/editions/${item.editionId}/download`) : undefined}
@@ -76,30 +77,38 @@ function PlaylistPlayer(props: { items: PlaylistItem[]; onDone: () => void }) {
         onEnded={ended}
       />
       <div style={{ display: "flex", flexDirection: "column", minWidth: 0, width: "13rem", flexShrink: 1 }}>
-        <span style={{ fontSize: "0.85rem", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item ? item.title : ""}</span>
-        <span style={{ fontSize: "0.73rem", color: c.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        <span style={{ fontSize: "0.88rem", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item ? item.title : ""}</span>
+        <span style={{ fontSize: "0.75rem", color: c.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {idx + 1} / {props.items.length} · {item?.workTitle}
         </span>
       </div>
-      <div style={{ display: "flex", gap: "0.15rem", alignItems: "center", flexShrink: 0 }}>
-        <button style={{ ...barBtn, color: c.muted }} title="Previous" onClick={() => jump(idx - 1)}><IconBack30 size={18} /></button>
-        <button style={barBtn} title="Play or pause" onClick={toggle}>
-          {playing ? <IconPause size={20} /> : <IconPlay size={20} />}
+      <div style={{ display: "flex", gap: "0.1rem", alignItems: "center", flexShrink: 0 }}>
+        <button className="press" style={{ ...iconBtn, color: c.muted }} aria-label="Previous" title="Previous" onClick={() => jump(idx - 1)}><IconBack30 size={18} /></button>
+        <button className="press" style={{ ...iconBtn, color: c.text }} aria-label={playing ? "Pause" : "Play"} title="Play or pause" onClick={toggle}>
+          {playing ? <IconPause size={22} /> : <IconPlay size={22} />}
         </button>
-        <button style={{ ...barBtn, color: c.muted }} title="Next" onClick={() => jump(idx + 1)}><IconFwd30 size={18} /></button>
+        <button className="press" style={{ ...iconBtn, color: c.muted }} aria-label="Next" title="Next" onClick={() => jump(idx + 1)}><IconFwd30 size={18} /></button>
       </div>
       <span style={{ fontSize: "0.75rem", color: c.muted, fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>{fmtClock(elapsed)}</span>
-      <span style={{ fontSize: "0.75rem", color: c.faint, fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>{fmtClock(duration)}</span>
-      <button style={{ ...linkBtn, marginLeft: "auto", flexShrink: 0 }} onClick={props.onDone}>Stop</button>
+      <input
+        type="range" min={0} max={Math.max(1, Math.floor(duration))} step={1} value={Math.floor(elapsed)}
+        className="seek"
+        style={{
+          flex: 1, minWidth: "4rem",
+          background: `linear-gradient(90deg, ${c.accent} ${duration > 0 ? (elapsed / duration) * 100 : 0}%, ${c.line} ${duration > 0 ? (elapsed / duration) * 100 : 0}%)`,
+          backgroundSize: "100% 5px", backgroundRepeat: "no-repeat", backgroundPosition: "center", borderRadius: "999px",
+        }}
+        onInput={(e) => {
+          const a = audioRef.current;
+          if (a) a.currentTime = Number((e.target as HTMLInputElement).value);
+        }}
+        aria-label="Seek"
+      />
+      <span style={{ fontSize: "0.75rem", color: c.muted, fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>{fmtClock(duration)}</span>
+      <button className="press" style={{ ...linkBtn, marginLeft: "0.2rem", flexShrink: 0 }} onClick={props.onDone}>Stop</button>
     </div>
   );
 }
-
-const barBtn: preact.JSX.CSSProperties = {
-  background: "none", border: "none", color: c.text, cursor: "pointer",
-  display: "inline-flex", alignItems: "center", justifyContent: "center",
-  width: "2.2rem", height: "2.2rem", borderRadius: "50%", padding: 0,
-};
 
 export function PlaylistsView(props: { id?: number }) {
   if (props.id != null) return <PlaylistDetail id={props.id} />;
@@ -147,7 +156,7 @@ function PlaylistList() {
     <div>
       <h2 style={sectionTitle}>Playlists</h2>
       {lists.length === 0
-        ? <p style={muted}>No playlists yet. Create one below, or add editions from a work page.</p>
+        ? <EmptyState title="No playlists yet" hint="Create one below, or add editions from a work page." />
         : (
           <div style={{ borderTop: `1px solid ${c.lineSoft}` }}>
             {lists.map((p) => (
@@ -208,13 +217,13 @@ function PlaylistDetail(props: { id: number }) {
     refresh();
   };
 
-  if (!p) return <p style={muted}>loading…</p>;
+  if (!p) return <QuietLoad />;
 
   const audioItems = p.items.filter((it) => it.format === "audio");
 
   return (
     <div style={{ paddingBottom: playing ? "5rem" : 0 }}>
-      <button style={backLink} onClick={() => { location.hash = "#/playlists"; }}>{"< Playlists"}</button>
+      <button className="press" style={backLink} onClick={() => { location.hash = "#/playlists"; }}><IconChevronLeft size={16} /> Playlists</button>
       <div style={{ display: "flex", gap: "1rem", alignItems: "center", flexWrap: "wrap", marginBottom: "1.2rem" }}>
         <h2 style={{ ...sectionTitle, margin: 0 }}>{p.name}</h2>
         <span style={muted}>{p.songCount} items · {fmt(p.durationSecs)} · {p.owner}</span>
@@ -228,7 +237,7 @@ function PlaylistDetail(props: { id: number }) {
       </div>
       {err && <p style={errStyle}>{err}</p>}
       {p.items.length === 0 ? (
-        <p style={muted}>Empty playlist. Add editions from a work page.</p>
+        <EmptyState title="Empty playlist" hint="Add editions from a work page." />
       ) : (
         <div style={{ borderTop: `1px solid ${c.lineSoft}` }}>
           {p.items.map((it, i) => (
@@ -245,11 +254,11 @@ function PlaylistDetail(props: { id: number }) {
               <span style={{ display: "flex", gap: "0.6rem", alignItems: "center", flexShrink: 0 }}>
                 <span style={badge}>{it.format}</span>
                 <span style={muted}>{it.durationSecs > 0 ? fmt(it.durationSecs) : "—"}</span>
-                <span style={{ display: "flex", gap: "0.1rem" }}>
-                  <button style={{ ...linkBtn, padding: "0.15rem 0.3rem" }} disabled={i === 0 || moving} title="Move up" onClick={() => move(it.editionId, it.position - 1)}>↑</button>
-                  <button style={{ ...linkBtn, padding: "0.15rem 0.3rem" }} disabled={i === p.items.length - 1 || moving} title="Move down" onClick={() => move(it.editionId, it.position + 1)}>↓</button>
+                <span style={{ display: "flex", gap: "0.05rem" }}>
+                  <button className="press" style={iconBtn} disabled={i === 0 || moving} aria-label="Move up" title="Move up" onClick={() => move(it.editionId, it.position - 1)}><IconChevronUp size={14} /></button>
+                  <button className="press" style={iconBtn} disabled={i === p.items.length - 1 || moving} aria-label="Move down" title="Move down" onClick={() => move(it.editionId, it.position + 1)}><IconChevronDown size={14} /></button>
                 </span>
-                <button style={{ ...linkBtn, color: c.danger, padding: "0.15rem 0.3rem" }} title="Remove" onClick={() => removeItem(it.editionId)}>✕</button>
+                <button className="press" style={{ ...iconBtn, color: c.danger }} aria-label="Remove" title="Remove" onClick={() => removeItem(it.editionId)}><IconX size={14} /></button>
               </span>
             </div>
           ))}

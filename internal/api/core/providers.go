@@ -38,6 +38,8 @@ func (a *API) MountProviders(r *neutron.Router) {
 	r.HandleFunc("POST /works/{id}/skip", a.skipWork)
 	r.HandleFunc("GET /matching/inbox", a.matchingInbox)
 	r.HandleFunc("POST /libraries/{id}/refresh-meta", a.refreshMeta)
+	r.HandleFunc("GET /libraries/{id}/refresh-meta", a.refreshMetaStatus)
+	r.HandleFunc("GET /libraries/{id}/refresh-meta/events", a.refreshMetaEvents)
 }
 
 var (
@@ -542,24 +544,159 @@ func (a *API) matchingInbox(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, out)
 }
 
-// refreshMeta matches every inbox work in the library (works with a
-// match-skip marker are already excluded by the inbox query). AUTO-APPLY only
-// when every provider answered, exactly one candidate exists, and the title
-// similarity is >= autoApplyMin; everything else stays in the inbox for
-// manual review.
+type metaSnap struct {
+	Status      string `json:"status"`
+	Matched     int    `json:"matched"`
+	AutoApplied int    `json:"autoApplied"`
+	Total       int    `json:"total"`
+	Error       string `json:"error,omitempty"`
+}
+
+type metaRun struct {
+	mu     sync.Mutex
+	snap   metaSnap
+	subs   []chan metaSnap
+	closed bool
+}
+
+func (r *metaRun) publish(s metaSnap) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.snap = s
+	for _, ch := range r.subs {
+		select {
+		case ch <- s:
+		default:
+		}
+	}
+}
+
+func (r *metaRun) snapshot() metaSnap {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.snap
+}
+
+func (r *metaRun) subscribe() chan metaSnap {
+	ch := make(chan metaSnap, 8)
+	r.mu.Lock()
+	s := r.snap
+	if r.closed {
+		r.mu.Unlock()
+		ch <- s
+		close(ch)
+		return ch
+	}
+	r.subs = append(r.subs, ch)
+	r.mu.Unlock()
+	ch <- s
+	return ch
+}
+
+func (r *metaRun) finish(s metaSnap) {
+	r.mu.Lock()
+	r.snap = s
+	r.closed = true
+	subs := r.subs
+	r.subs = nil
+	r.mu.Unlock()
+	for _, ch := range subs {
+		select {
+		case ch <- s:
+		default:
+		}
+		close(ch)
+	}
+}
+
+// refreshMeta starts a background match pass over the library inbox.
+// AUTO-APPLY only when every provider answered, exactly one candidate exists,
+// and the title similarity is >= autoApplyMin. Returns 202 immediately;
+// progress is on GET /libraries/{id}/refresh-meta and the SSE events route.
 func (a *API) refreshMeta(w http.ResponseWriter, r *http.Request) {
 	id := auth.Atoi64(r.PathValue("id"))
 	if _, err := a.DB.Library(id); err != nil {
 		writeJSON(w, 404, map[string]string{"error": "library not found"})
 		return
 	}
-	inbox, err := a.DB.MatchingInbox(id)
-	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+	a.metaMu.Lock()
+	if run := a.metaRuns[id]; run != nil {
+		s := run.snapshot()
+		if s.Status == "running" {
+			a.metaMu.Unlock()
+			writeJSON(w, 409, map[string]any{"status": "already_running", "matched": s.Matched, "autoApplied": s.AutoApplied, "total": s.Total})
+			return
+		}
+	}
+	run := &metaRun{snap: metaSnap{Status: "running"}}
+	a.metaRuns[id] = run
+	a.metaMu.Unlock()
+	go a.runRefreshMeta(context.WithoutCancel(r.Context()), id, run)
+	writeJSON(w, 202, map[string]any{"status": "running", "matched": 0, "autoApplied": 0, "total": 0})
+}
+
+func (a *API) refreshMetaStatus(w http.ResponseWriter, r *http.Request) {
+	id := auth.Atoi64(r.PathValue("id"))
+	a.metaMu.Lock()
+	run := a.metaRuns[id]
+	a.metaMu.Unlock()
+	if run == nil {
+		writeJSON(w, 200, map[string]any{"status": "idle", "matched": 0, "autoApplied": 0, "total": 0})
 		return
 	}
+	writeJSON(w, 200, run.snapshot())
+}
+
+func (a *API) refreshMetaEvents(w http.ResponseWriter, r *http.Request) {
+	id := auth.Atoi64(r.PathValue("id"))
+	fl, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "no flush", 500)
+		return
+	}
+	a.metaMu.Lock()
+	run := a.metaRuns[id]
+	a.metaMu.Unlock()
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	if run == nil {
+		fmt.Fprintf(w, "event: progress\ndata: {\"status\":\"idle\",\"matched\":0,\"autoApplied\":0,\"total\":0}\n\n")
+		fl.Flush()
+		return
+	}
+	ch := run.subscribe()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case s, ok := <-ch:
+			if !ok {
+				return
+			}
+			b, _ := json.Marshal(s)
+			fmt.Fprintf(w, "event: progress\ndata: %s\n\n", b)
+			fl.Flush()
+			if s.Status != "running" {
+				return
+			}
+		}
+	}
+}
+
+func (a *API) runRefreshMeta(ctx context.Context, libID int64, run *metaRun) {
+	inbox, err := a.DB.MatchingInbox(libID)
+	if err != nil {
+		run.finish(metaSnap{Status: "error", Error: err.Error()})
+		return
+	}
+	total := len(inbox)
+	run.publish(metaSnap{Status: "running", Total: total})
 	var matched, applied int
 	for i := range inbox {
+		if ctx.Err() != nil {
+			run.finish(metaSnap{Status: "error", Matched: matched, AutoApplied: applied, Total: total, Error: "canceled"})
+			return
+		}
 		iw := &inbox[i]
 		wv, err := a.DB.WorkByID(iw.ID)
 		if err != nil {
@@ -570,16 +707,18 @@ func (a *API) refreshMeta(w http.ResponseWriter, r *http.Request) {
 			q.Author = *iw.Author
 		}
 		matched++
-		cands, failures := a.searchAll(r.Context(), q)
+		run.publish(metaSnap{Status: "running", Matched: matched, AutoApplied: applied, Total: total})
+		cands, failures := a.searchAll(ctx, q)
 		if failures == 0 && len(cands) == 1 && titleSimilarity(iw.Title, cands[0].Title) >= autoApplyMin {
-			if res, err := a.fetchResult(r.Context(), cands[0].Provider, cands[0].ID); err == nil {
+			if res, err := a.fetchResult(ctx, cands[0].Provider, cands[0].ID); err == nil {
 				if _, err := a.applyResult(wv, iw.LibraryType, res); err == nil {
 					applied++
+					run.publish(metaSnap{Status: "running", Matched: matched, AutoApplied: applied, Total: total})
 				}
 			}
 		}
 	}
-	writeJSON(w, 200, map[string]any{"matched": matched, "autoApplied": applied})
+	run.finish(metaSnap{Status: "done", Matched: matched, AutoApplied: applied, Total: total})
 }
 
 // titleSimilarity is a case-insensitive Levenshtein ratio (1 = identical).

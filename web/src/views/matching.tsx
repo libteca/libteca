@@ -1,7 +1,9 @@
 import { useEffect, useState } from "preact/hooks";
 import { api } from "../api";
 import { Cover } from "../components/cover";
-import { backLink, badge, c, ghostBtn, input, muted, primaryBtn, sectionTitle } from "../styles";
+import { EmptyState, QuietLoad } from "../components/rail";
+import { IconChevronLeft } from "../components/svg";
+import { backLink, badge, c, ghostBtn, input, muted, primaryBtn, sectionTitle, workCover, workHead, workMeta, workTitle } from "../styles";
 
 type InboxItem = {
   id: number; libraryId: number; libraryName: string; libraryType: string;
@@ -13,7 +15,7 @@ type Candidate = {
   year: number | null; description: string; coverURL: string;
 };
 
-const coverBox = { width: "3rem", aspectRatio: "2 / 3", borderRadius: "5px", objectFit: "cover", display: "block", background: c.bgRaised, flexShrink: 0 } as const;
+const coverBox = { width: "3.2rem", aspectRatio: "2 / 3", borderRadius: "6px", objectFit: "cover", display: "block", background: c.bgRaised, flexShrink: 0 } as const;
 
 export function MatchingView() {
   const [queue, setQueue] = useState<InboxItem[]>([]);
@@ -23,6 +25,7 @@ export function MatchingView() {
   const [qAuthor, setQAuthor] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+  const [loaded, setLoaded] = useState(false);
 
   useEffect(() => { loadQueue(); }, []);
 
@@ -34,7 +37,7 @@ export function MatchingView() {
       setQTitle("");
       setQAuthor("");
       setMsg("");
-    }).catch(() => setQueue([]));
+    }).catch(() => setQueue([])).finally(() => setLoaded(true));
   };
 
   const current = queue[idx];
@@ -89,51 +92,50 @@ export function MatchingView() {
 
   return (
     <div>
-      <button style={backLink} onClick={() => history.back()}>{"< Admin"}</button>
+      <button className="press" style={backLink} onClick={() => history.back()}><IconChevronLeft size={16} /> Admin</button>
       <h2 style={sectionTitle}>Metadata inbox</h2>
-      {queue.length === 0 ? (
-        <p style={muted}>Nothing to match. Run "Improve metadata" on a library to look up missing descriptions.</p>
+      {!loaded ? (
+        <QuietLoad />
+      ) : queue.length === 0 ? (
+        <EmptyState title="Nothing to match" hint={'Run "Improve metadata" on a library to look up missing descriptions.'} />
       ) : current ? (
         <div>
-          <div style={{ display: "flex", gap: "1.2rem", alignItems: "flex-start", marginBottom: "1.2rem", flexWrap: "wrap" }}>
-            <div style={{ width: "6rem", flexShrink: 0 }}>
+          <div style={workHead}>
+            <div style={{ ...workCover, width: "10rem" }}>
               <Cover has={current.hasCover} id={current.id} title={current.title} />
             </div>
-            <div style={{ minWidth: "16rem", flex: 1 }}>
-              <h3 style={{ margin: 0, fontSize: "1.15rem", letterSpacing: "-0.01em" }}>{current.title}</h3>
-              <p style={{ ...muted, margin: "0.25rem 0 0.6rem" }}>{current.author || "unknown author"}</p>
-              <span style={badge}>{current.libraryName}</span>{" "}
-              <span style={badge}>{current.libraryType}</span>
-              <p style={{ ...muted, fontSize: "0.8rem", marginTop: "0.6rem" }}>
-                {idx + 1} of {queue.length} in queue
-              </p>
+            <div style={workMeta}>
+              <h3 style={workTitle}>{current.title}</h3>
+              <p style={muted}>{current.author || "Unknown author"}</p>
+              <span style={badge}>{current.libraryName}</span>
+              <p style={{ ...muted, fontSize: "0.8rem" }}>{idx + 1} of {queue.length}</p>
+              <button className="press" style={ghostBtn} disabled={busy} onClick={skip}>Skip</button>
             </div>
-            <button style={ghostBtn} disabled={busy} onClick={skip}>Skip this work</button>
           </div>
 
           <div style={{ display: "flex", gap: "0.6rem", marginBottom: "1.2rem", flexWrap: "wrap" }}>
-            <input style={{ ...input, width: "16rem" }} placeholder="query title override"
+            <input style={{ ...input, width: "16rem" }} placeholder="Title override"
               value={qTitle} onInput={(e) => setQTitle((e.target as HTMLInputElement).value)} />
-            <input style={{ ...input, width: "12rem" }} placeholder="author override"
+            <input style={{ ...input, width: "12rem" }} placeholder="Author override"
               value={qAuthor} onInput={(e) => setQAuthor((e.target as HTMLInputElement).value)} />
-            <button style={ghostBtn} disabled={busy} onClick={runMatch}>
-              {busy ? "Searching…" : candidates ? "Search again" : "Search"}
+            <button className="press" style={ghostBtn} disabled={busy} onClick={runMatch}>
+              {busy ? "Searching" : candidates ? "Search again" : "Search"}
             </button>
           </div>
 
           {msg && <p style={{ ...muted, marginBottom: "1rem" }}>{msg}</p>}
 
           {candidates && candidates.length > 0 && (
-            <div style={{ display: "flex", flexDirection: "column", gap: "0.8rem", maxWidth: "46rem" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.7rem", maxWidth: "46rem" }}>
               {candidates.map((cand, i) => (
                 <div key={`${cand.provider}-${cand.id}-${i}`}
-                  style={{ display: "flex", gap: "0.9rem", padding: "0.9rem", background: c.bgRaised, border: `1px solid ${c.line}`, borderRadius: "11px" }}>
+                  style={{ display: "flex", gap: "0.9rem", padding: "0.95rem", background: c.bgRaised, border: `1px solid ${c.lineSoft}`, borderRadius: "14px" }}>
                   {cand.coverURL
                     ? <img style={coverBox} src={cand.coverURL} alt="" loading="lazy" />
-                    : <div style={{ ...coverBox, width: "3rem" }} />}
+                    : <div style={{ ...coverBox, width: "3.2rem" }} />}
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{ display: "flex", gap: "0.5rem", alignItems: "baseline", flexWrap: "wrap" }}>
-                      <span style={{ fontWeight: 600, fontSize: "0.95rem" }}>{cand.title}</span>
+                      <span style={{ fontWeight: 600, fontSize: "0.95rem", letterSpacing: "-0.01em" }}>{cand.title}</span>
                       <span style={badge}>{cand.provider}</span>
                       {cand.year != null && <span style={{ ...muted, fontSize: "0.8rem" }}>{cand.year}</span>}
                     </div>
@@ -144,7 +146,7 @@ export function MatchingView() {
                       </p>
                     )}
                   </div>
-                  <button style={{ ...primaryBtn, flexShrink: 0, alignSelf: "center" }} disabled={busy} onClick={() => apply(cand)}>Apply</button>
+                  <button className="press" style={{ ...primaryBtn, flexShrink: 0, alignSelf: "center" }} disabled={busy} onClick={() => apply(cand)}>Apply</button>
                 </div>
               ))}
             </div>
@@ -154,15 +156,15 @@ export function MatchingView() {
             <div style={{ marginTop: "2rem" }}>
               <p style={{ ...muted, fontSize: "0.8rem", marginBottom: "0.4rem" }}>Up next</p>
               {queue.slice(idx + 1, idx + 6).map((w) => (
-                <p key={w.id} style={{ ...muted, fontSize: "0.85rem", margin: 0 }}>
-                  {w.title}{w.author ? ` — ${w.author}` : ""} <span style={{ ...badge, fontSize: "0.66rem" }}>{w.libraryName}</span>
+                <p key={w.id} style={{ ...muted, fontSize: "0.85rem", margin: 0, padding: "0.25rem 0" }}>
+                  {w.title}{w.author ? ` — ${w.author}` : ""}
                 </p>
               ))}
             </div>
           )}
         </div>
       ) : (
-        <p style={muted}>loading…</p>
+        <QuietLoad />
       )}
     </div>
   );

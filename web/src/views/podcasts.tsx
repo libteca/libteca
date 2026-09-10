@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { api, getToken, media } from "../api";
-import { IconCheck, IconPause, IconPlay, IconScan } from "../components/svg";
-import { fmt, fmtRel } from "../util";
+import { EmptyState, QuietLoad } from "../components/rail";
+import { IconCheck, IconChevronLeft, IconPause, IconPlay, IconScan } from "../components/svg";
+import { fmt, fmtClock, fmtRel } from "../util";
 import {
-  backLink, badge, c, errStyle, ghostBtn, grid, input, muted, primaryBtn, progressMini, sectionTitle,
+  backLink, badge, c, errStyle, ghostBtn, gridSquare, iconBtn, input, muted, playerBar, primaryBtn,
+  progressMini, sectionTitle, workTitle,
 } from "../styles";
 
 type Podcast = {
@@ -26,7 +28,7 @@ function tokened(url: string) {
 }
 
 const coverBox: preact.JSX.CSSProperties = {
-  width: "100%", aspectRatio: "1 / 1", borderRadius: "8px", overflow: "hidden",
+  width: "100%", aspectRatio: "1 / 1", borderRadius: "10px", overflow: "hidden",
   boxShadow: c.coverShadow, background: c.bgRaised, display: "flex",
   alignItems: "center", justifyContent: "center", flexShrink: 0,
 };
@@ -87,11 +89,11 @@ export function PodcastsView() {
       <h2 style={sectionTitle}>Podcasts</h2>
 
       {pods.length === 0 ? (
-        <p style={muted}>No subscriptions yet. Add a feed URL above or import an OPML file.</p>
+        <EmptyState title="No subscriptions yet" hint="Add a feed URL or import an OPML file." />
       ) : (
-        <div style={{ ...grid, gridTemplateColumns: "repeat(auto-fill, minmax(8.5rem, 1fr))" }}>
+        <div style={gridSquare}>
           {pods.map((p) => (
-            <button key={p.id} type="button" onClick={() => setSelected(p.id)} style={{ background: "none", border: "none", padding: 0, textAlign: "left", cursor: "pointer", display: "block", color: "inherit", fontFamily: "inherit" }}>
+            <button key={p.id} type="button" onClick={() => setSelected(p.id)} className="cover-card" style={{ background: "none", border: "none", padding: 0, textAlign: "left", cursor: "pointer", display: "block", color: "inherit", fontFamily: "inherit" }}>
               <PodcastCover pod={p} />
               <p style={{ margin: "0.5rem 0 0", fontWeight: 600, fontSize: "0.88rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.title}</p>
               <p style={{ margin: 0, color: c.muted, fontSize: "0.78rem" }}>
@@ -137,6 +139,8 @@ function PodcastShow(props: { id: number; onBack: () => void; onChanged: () => v
   const [busy, setBusy] = useState(false);
   const [playing, setPlaying] = useState<number | null>(null);
   const [paused, setPaused] = useState(true);
+  const [elapsed, setElapsed] = useState(0);
+  const [duration, setDuration] = useState(0);
   const [maxEp, setMaxEp] = useState("");
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const seekRef = useRef(0);
@@ -222,13 +226,13 @@ function PodcastShow(props: { id: number; onBack: () => void; onChanged: () => v
   const resumeEp = eps.find((e) => e.hasFile && e.positionSecs && e.positionSecs > 0 && !e.isFinished);
 
   return (
-    <div>
-      <button style={backLink} onClick={props.onBack}>{"< Podcasts"}</button>
+    <div style={{ paddingBottom: playing != null ? "5.2rem" : 0 }}>
+      <button className="press" style={backLink} onClick={props.onBack}><IconChevronLeft size={16} /> Podcasts</button>
       {pod ? (
-        <div style={{ display: "flex", gap: "1.6rem", alignItems: "flex-start", flexWrap: "wrap" }}>
-          <PodcastCover pod={pod} size="8.5rem" />
-          <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem", alignItems: "flex-start", minWidth: 0, flex: 1 }}>
-            <h2 style={{ margin: 0, fontSize: "1.6rem", letterSpacing: "-0.02em" }}>{pod.title}</h2>
+        <div style={{ display: "flex", gap: "2rem", alignItems: "flex-start", flexWrap: "wrap" }}>
+          <PodcastCover pod={pod} size="12rem" />
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.65rem", alignItems: "flex-start", minWidth: 0, flex: 1 }}>
+            <h2 style={workTitle}>{pod.title}</h2>
             {pod.author && <p style={muted}>{pod.author}</p>}
             <p style={muted}>
               {pod.episodeCount} episodes · {pod.downloadedCount} downloaded
@@ -276,15 +280,17 @@ function PodcastShow(props: { id: number; onBack: () => void; onChanged: () => v
           </div>
         </div>
       ) : (
-        <p style={muted}>Loading…</p>
+        <QuietLoad />
       )}
 
       <audio
         ref={audioRef} preload="none"
-        style={{ display: playing == null ? "none" : "block", width: "100%", marginTop: "1.4rem", marginBottom: "0.6rem" }}
+        style={{ display: "none" }}
         onLoadedMetadata={() => {
           const a = audioRef.current;
-          if (a && seekRef.current > 0) { a.currentTime = seekRef.current; seekRef.current = 0; }
+          if (!a) return;
+          if (seekRef.current > 0) { a.currentTime = seekRef.current; seekRef.current = 0; }
+          if (isFinite(a.duration) && a.duration > 0) setDuration(a.duration);
         }}
         onPlay={() => setPaused(false)}
         onPause={() => {
@@ -295,6 +301,8 @@ function PodcastShow(props: { id: number; onBack: () => void; onChanged: () => v
         onTimeUpdate={() => {
           const a = audioRef.current;
           if (!a || playingRef.current == null) return;
+          setElapsed(a.currentTime);
+          if (isFinite(a.duration) && a.duration > 0) setDuration(a.duration);
           if (Date.now() - lastPostRef.current >= 15000) saveProgress(playingRef.current, a.currentTime);
         }}
         onEnded={() => {
@@ -319,8 +327,8 @@ function PodcastShow(props: { id: number; onBack: () => void; onChanged: () => v
                 aria-label={active && !paused ? `Pause ${ep.title || "episode"}` : `Play ${ep.title || "episode"}`}
                 style={{
                   background: "none", border: "none", cursor: ep.streamUrl ? "pointer" : "default",
-                  color: ep.streamUrl ? c.text : c.faint, padding: "0.4rem", display: "inline-flex",
-                  alignItems: "center", justifyContent: "center",
+                  color: ep.streamUrl ? c.text : c.faint, padding: 0, display: "inline-flex",
+                  alignItems: "center", justifyContent: "center", width: "36px", height: "36px", flexShrink: 0,
                 }}
               >
                 {active && !paused ? <IconPause size={16} /> : <IconPlay size={16} />}
@@ -343,6 +351,42 @@ function PodcastShow(props: { id: number; onBack: () => void; onChanged: () => v
         })}
         {pod && eps.length === 0 && <p style={muted}>No episodes yet. Refresh the feed to fetch the catalog.</p>}
       </div>
+      {playing != null && pod && (
+        <div style={playerBar}>
+          <div style={{ width: "3rem", flexShrink: 0 }}><PodcastCover pod={pod} /></div>
+          <div style={{ display: "flex", flexDirection: "column", minWidth: 0, width: "12rem", flexShrink: 1 }}>
+            <span style={{ fontSize: "0.88rem", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {eps.find((e) => e.id === playing)?.title || pod.title}
+            </span>
+            <span style={{ fontSize: "0.75rem", color: c.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{pod.title}</span>
+          </div>
+          <button
+            className="press"
+            type="button"
+            style={{ ...iconBtn, color: c.text }}
+            aria-label={paused ? "Play" : "Pause"}
+            onClick={() => { const ep = eps.find((e) => e.id === playing); if (ep) play(ep); }}
+          >
+            {paused ? <IconPlay size={22} /> : <IconPause size={22} />}
+          </button>
+          <span style={{ fontSize: "0.75rem", color: c.muted, fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>{fmtClock(elapsed)}</span>
+          <input
+            type="range" min={0} max={Math.max(1, Math.floor(duration))} step={1} value={Math.floor(elapsed)}
+            className="seek"
+            style={{
+              flex: 1, minWidth: "4rem",
+              background: `linear-gradient(90deg, ${c.accent} ${duration > 0 ? (elapsed / duration) * 100 : 0}%, ${c.line} ${duration > 0 ? (elapsed / duration) * 100 : 0}%)`,
+              backgroundSize: "100% 5px", backgroundRepeat: "no-repeat", backgroundPosition: "center", borderRadius: "999px",
+            }}
+            onInput={(e) => {
+              const a = audioRef.current;
+              if (a) a.currentTime = Number((e.target as HTMLInputElement).value);
+            }}
+            aria-label="Seek"
+          />
+          <span style={{ fontSize: "0.75rem", color: c.muted, fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>{fmtClock(duration)}</span>
+        </div>
+      )}
     </div>
   );
 }
