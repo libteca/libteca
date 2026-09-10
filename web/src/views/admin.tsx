@@ -67,6 +67,7 @@ export function AdminView() {
 
       <UsersSection users={users} onChanged={refreshUsers} />
       <TokensSection users={users} />
+      <ImportSection />
 
       <ScanJobs libs={libs} />
     </div>
@@ -251,6 +252,97 @@ function UserRow(props: { u: AdminUser; onChanged: () => void }) {
         )}
       </td>
     </tr>
+  );
+}
+
+type ImportPlan = {
+  source: string;
+  libraries: { name: string; type: string; new: boolean; works: number; editions: number; skipped: number }[];
+  works: number; editions: number; files: number; progressRows: number; playlists: number;
+  users: { name: string; isAdmin: boolean; exists: boolean; tempPassword?: string }[];
+  warnings: string[];
+};
+
+function ImportSection() {
+  const [source, setSource] = useState("abs");
+  const [path, setPath] = useState("");
+  const [plan, setPlan] = useState<ImportPlan | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [confirmRun, setConfirmRun] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  const run = async (dryRun: boolean) => {
+    setBusy(true);
+    setMsg("");
+    const body = source === "abs" ? { dataDir: path, dryRun } : { dbPath: path, dryRun };
+    const res = await api(`/import/${source}`, { method: "POST", body: JSON.stringify(body) });
+    setBusy(false);
+    if (res.error) { setMsg(res.error); return; }
+    setPlan(res.plan);
+    if (!dryRun) setConfirmRun(false);
+  };
+
+  const imported = plan?.users.filter((u) => u.tempPassword) || [];
+
+  return (
+    <section style={{ marginBottom: "2.4rem" }}>
+      <h3 style={{ ...sectionTitle, fontSize: "1rem" }}>Import</h3>
+      <p style={{ ...muted, marginBottom: "0.9rem" }}>Migrate an existing Audiobookshelf or Kavita instance. The foreign database is only read.</p>
+      <div style={{ ...loginCard, marginTop: 0, width: "26rem" }}>
+        <select style={input} value={source} onChange={(e) => { setSource((e.target as HTMLSelectElement).value); setPlan(null); }}>
+          <option value="abs">Audiobookshelf (data dir)</option>
+          <option value="kavita">Kavita (app.db)</option>
+        </select>
+        <input
+          style={input}
+          placeholder={source === "abs" ? "/config/dir (contains abs_database.db)" : "/path/to/app.db"}
+          value={path}
+          onInput={(e) => setPath((e.target as HTMLInputElement).value)}
+        />
+        <div style={{ display: "flex", gap: "0.6rem" }}>
+          <button style={ghostBtn} type="button" disabled={busy || !path} onClick={() => run(true)}>{busy ? "Working…" : "Plan"}</button>
+          {confirmRun ? (
+            <span style={{ display: "inline-flex", gap: "0.5rem", alignItems: "center" }}>
+              <button style={{ ...ghostBtn, color: c.danger, borderColor: c.danger }} type="button" disabled={busy} onClick={() => run(false)}>Import now</button>
+              <button style={ghostBtn} type="button" onClick={() => setConfirmRun(false)}>Cancel</button>
+            </span>
+          ) : (
+            <button style={primaryBtn} type="button" disabled={busy || !path} onClick={() => setConfirmRun(true)}>Import</button>
+          )}
+        </div>
+        {msg && <p style={{ color: c.danger, margin: 0, fontSize: "0.85rem" }}>{msg}</p>}
+      </div>
+
+      {plan && (
+        <div style={{ marginTop: "1rem", background: c.bgRaised, border: `1px solid ${c.line}`, borderRadius: "9px", padding: "0.9rem", maxWidth: "46rem" }}>
+          <p style={{ ...muted, marginBottom: "0.5rem" }}>
+            {plan.libraries.length} librar{plan.libraries.length === 1 ? "y" : "ies"} · {plan.works} works · {plan.editions} editions · {plan.files} files · {plan.progressRows} progress rows
+            {plan.playlists > 0 && ` · ${plan.playlists} playlists`}
+          </p>
+          {plan.libraries.map((l) => (
+            <p key={l.name} style={{ ...muted, fontSize: "0.8rem", margin: 0 }}>
+              {l.name} ({l.type}) — {l.works} works, {l.editions} editions{l.skipped > 0 ? `, ${l.skipped} skipped` : ""}
+            </p>
+          ))}
+          {plan.warnings.length > 0 && (
+            <div style={{ marginTop: "0.6rem" }}>
+              {plan.warnings.map((w, i) => (
+                <p key={i} style={{ ...muted, fontSize: "0.8rem", color: c.textDim, margin: 0 }}>{w}</p>
+              ))}
+            </div>
+          )}
+          {imported.length > 0 && (
+            <div style={{ marginTop: "0.6rem", display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+              {imported.map((u) => (
+                <p key={u.name} style={{ ...muted, fontSize: "0.8rem", margin: 0 }}>
+                  user {u.name}: temp password <code style={{ fontFamily: mono, color: c.textDim }}>{u.tempPassword}</code> (reset after first login)
+                </p>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </section>
   );
 }
 

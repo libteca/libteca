@@ -38,6 +38,7 @@ func (a *API) Mount(r *neutron.Router) {
 	r.HandleFunc("PATCH /me/progress/{itemId}", a.postProgress)
 	r.HandleFunc("DELETE /me/progress/{itemId}", a.deleteProgress)
 	r.HandleFunc("GET /me/listening-sessions", a.listeningSessions)
+	a.MountPodcasts(r)
 	r.HandleFunc("POST /items/{itemId}/play", a.play)
 	r.HandleFunc("GET /items/{itemId}/file/{fileId}", a.itemFile)
 	r.HandleFunc("POST /session/{id}/sync", a.sessionSync)
@@ -142,9 +143,13 @@ func (a *API) libraries(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]map[string]any, 0, len(libs))
 	for i, l := range libs {
+		mediaType, icon := "book", "audiobook" // corpus: 'podcast' mediaType per ABS enum, icon unverified
+		if l.Type == "podcasts" {
+			mediaType, icon = "podcast", "podcast"
+		}
 		out = append(out, map[string]any{
 			"id": strconv.FormatInt(l.ID, 10), "name": l.Name,
-			"displayOrder": i + 1, "icon": "audiobook", "mediaType": "book",
+			"displayOrder": i + 1, "icon": icon, "mediaType": mediaType,
 		})
 	}
 	def := ""

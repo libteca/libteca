@@ -193,6 +193,15 @@ export function IconComic(p: IconProps) {
   );
 }
 
+export function IconPodcast(p: IconProps) {
+  return (
+    <svg {...svgProps(p.size ?? 16)}>
+      <rect x="9" y="3.5" width="6" height="10" rx="3" />
+      <path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3M8.5 21h7" />
+    </svg>
+  );
+}
+
 export function IconClock(p: IconProps) {
   return (
     <svg {...svgProps(p.size ?? 15)}>

@@ -59,6 +59,8 @@ func (a *API) Mount(r *neutron.Router) {
 	a.MountReading(r)
 	a.MountUsers(r)
 	a.MountPlaylists(r)
+	a.MountLinking(r)
+	a.MountImport(r)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -536,6 +538,7 @@ func (a *API) work(w http.ResponseWriter, r *http.Request) {
 			pmap[progress[i].EditionID] = &progress[i]
 		}
 		pageCounts, _ := a.DB.PageCountsByWork(id)
+		rmap, _ := a.DB.ReadingListByUser(auth.UserID(r))
 		eds := make([]map[string]any, 0, len(full.Editions))
 		for _, ev := range full.Editions {
 			chapters := []map[string]any{}
@@ -573,6 +576,14 @@ func (a *API) work(w http.ResponseWriter, r *http.Request) {
 			if p, ok := pmap[ev.ID]; ok {
 				e["position"] = p.EditionPositionSecs
 				e["isFinished"] = p.IsFinished
+			}
+			if rp, ok := rmap[ev.ID]; ok {
+				if rp.Page != nil {
+					e["page"] = *rp.Page
+				}
+				if rp.Percent != nil {
+					e["percent"] = *rp.Percent
+				}
 			}
 			eds = append(eds, e)
 		}

@@ -1,0 +1,40 @@
+# libteca — one media server, every client (Jellyfin + Audiobookshelf + OPDS
+# + Subsonic wire compatibility, so existing client apps connect unchanged).
+#
+# STATUS: target shape for `teploy deploy libteca` (PLAN §3, Slice 1 exit).
+# Two blockers, both deliberate and temporary:
+#
+# 1. No published image. go.mod carries a relative `replace` to the
+#    unpublished neutron-go module, so an image cannot be built from this
+#    repo in isolation. When neutron-go publishes (PLAN §4), the release
+#    pipeline pushes ghcr.io/libteca/libteca and this file deploys as-is.
+# 2. No /dev/dri. The teploy format has no device mapping (same class of
+#    limitation as the teploy-arcade docker-socket note — no escape hatch),
+#    so LIBTECA_HWACCEL=auto degrades to software transcode in the
+#    container. Until teploy grows device passthrough, hardware transcode
+#    means the bare systemd path (deploy/README.md).
+#
+# Template metadata (for teploy/templates index.json registration at exit):
+#   name: libteca
+#   description: One media server, every client - Jellyfin, Audiobookshelf,
+#     OPDS, and Subsonic wire compatibility in one binary
+#   accessories: []
+#   variables: []
+#
+# No domain: raw port on the host, LAN/tailnet only (PLAN §11 — no public
+# exposure by default). For Caddy in front of a LAN box, set a hostname and
+# add tls: {internal: true}, or the ACME challenge can never complete.
+#
+# The image entrypoint must start the binary with `--data /data` so it lives
+# on the teploy-managed volume below (port defaults to 8096 already).
+app: libteca
+ingress: host
+port: 8096
+image: ghcr.io/libteca/libteca:stable
+health:
+  path: /healthcheck
+  timeout_seconds: 60
+env:
+  LIBTECA_HWACCEL: auto
+volumes:
+  data: /data

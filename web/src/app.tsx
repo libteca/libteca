@@ -8,7 +8,8 @@ import { WorkView } from "./views/work";
 import { ReadView } from "./views/read";
 import { SearchBox, SearchPage } from "./views/search";
 import { AdminView } from "./views/admin";
-import { IconHome, IconLibrary } from "./components/svg";
+import { PodcastsView } from "./views/podcasts";
+import { IconHome, IconLibrary, IconPodcast } from "./components/svg";
 
 type View = { name: string; id?: number; q?: string; lib?: number; edition?: number; format?: string };
 
@@ -25,6 +26,7 @@ function parseHash(): View {
   if (name === "work" && id) return { name: "work", id: Number(id) };
   if (name === "admin") return { name: "admin" };
   if (name === "search") return { name: "search", q: q || "" };
+  if (name === "podcasts") return { name: "podcasts" };
   if (name === "home") return { name: "home" };
   if (name === "library") return { name: "library", lib: lib ? Number(lib) : undefined };
   return { name: "home" };
@@ -72,6 +74,7 @@ export function App() {
         <nav style={nav}>
           <a href="#/home" style={navItem(view.name === "home")}><IconHome size={14} /> Home</a>
           <a href="#/library" style={navItem(view.name === "library")}><IconLibrary size={14} /> Library</a>
+          <a href="#/podcasts" style={navItem(view.name === "podcasts")}><IconPodcast size={14} /> Podcasts</a>
           {me.isAdmin && <a href="#/admin" style={navItem(view.name === "admin")}>Admin</a>}
           <button style={linkBtn} onClick={() => { localStorage.removeItem("libteca-token"); setToken(""); location.hash = "#/"; location.reload(); }}>
             {me.name} · sign out
@@ -83,6 +86,7 @@ export function App() {
       {view.name === "work" && view.id != null && <WorkView id={view.id} />}
       {view.name === "read" && view.edition != null && <ReadView edition={view.edition} work={view.id} format={view.format} />}
       {view.name === "search" && <SearchPage q={view.q || ""} />}
+      {view.name === "podcasts" && <PodcastsView />}
       {view.name === "admin" && me.isAdmin && <AdminView />}
     </div>
   );

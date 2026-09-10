@@ -282,73 +282,55 @@ error), no fsnotify, no providers/network metadata, no multi-user UI polish
 beyond create/revoke, no podcasts, no OPDS, no backups tooling (document
 `data/` copy), no Docker image (bare binary + systemd doc).
 
-## 9. Current state (2026-09-09, session 2)
+## 9. Current state (2026-09-09, after waves 1-2)
 
-**Done and smoke-verified** (synthetic libraries over curl, both faces):
+**Done and smoke-verified** (synthetic libraries over curl/tests, all faces):
 
-- Tasks 1-9 complete: scaffold (neutron-go), store + migrations 0001/0002,
+- Tasks 1-9 complete: scaffold (neutron-go), store + migrations 0001-0006,
   argon2id auth, audiobook scanner (m4b chapters, multi-mp3, covers), core API
-  (Range streaming), ABS face (login/me/libraries/items/personalized/progress,
-  play sessions, /s/{sid}/t/{i} tracks), embedded Neutron web UI.
-- Slice 1 core, built ahead of plan (DECISIONS 11): movie/TV/music scanners
-  (SxxExx + season-folder + album/track parsing), Jellyfin face v1 (Views,
-  Items with full type mapping, Seasons/Episodes, PlaybackInfo with
-  direct-play vs HLS decision, /Videos stream + Range, ffmpeg HLS transcode
-  sessions with reaper, /Audio universal, Sessions progress, Images),
-  first-party players in the web UI (video w/ resume + next-episode, TV
-  episode list w/ progress ticks, music track bar, audiobook chapters).
+  (Range streaming), ABS face, embedded Neutron web UI.
+- Slice 1 core: movie/TV/music scanners, Jellyfin face v1 (Views, Items,
+  Seasons/Episodes, PlaybackInfo, /Videos stream, ffmpeg HLS transcode w/
+  reaper + prebuffer, /Audio universal, Sessions, Images, NextUp real,
+  trickplay tiles + manifest, /socket websocket w/ hand-rolled RFC6455,
+  hardware accel: videotoolbox/vaapi/nvenc/qsv auto-detect + software
+  fallback).
+- Discovery layer + web UI overhaul (home resume hub, global search, filters,
+  players + subtitles + Media Session, admin w/ live SSE scan jobs, PWA).
+- Wave 1: books/comics scanning (EPUB/CBZ/PDF, reading progress page/percent/
+  locator) + web readers (epub.js, CBZ three-mode w/ RTL + webtoon, native
+  PDF); podcasts domain (fetch/download/retention/scheduler/OPML) + web UI +
+  ABS/Jellyfin face surfacing; Subsonic face v1 (dual XML/JSON, real
+  everything incl. playlists after 0006); users/tokens management; bench
+  suite (PLAN §10 targets tracked in bench/results/).
+- Wave 2: OPDS 1.2 + OPDS-PSE face (KOReader/Chunky path, Basic auth);
+  warm-scan probe-skip (10k warm re-scan 211.6s → 0.17s, 0 probes — was a
+  bench FAIL); playlists (migration 0006, core + subsonic + owner-only);
+  Jellyfin /socket (remote-control passthrough, ForceKeepAlive, Sessions
+  push); edition linking (move/split/merge — the Work→Editions moat, manual)
+  + ABS and Kavita instance importers (read-only foreign DBs, dryRun plans);
+  packaging (make release → 4-platform artifacts + SHA256SUMS, systemd unit,
+  teploy template); README w/ honest compat matrix.
 
-**Done this session (2026-09-09, session 2, DECISIONS 12):**
+**Owed — human-owned (founder), in order:**
 
-- Corpus capture harness (task 10 tooling): `tools/record/` mitmproxy addon +
-  sanitizer (both faces), replay harness (`corpusutil` + corpus tests per
-  face, `{id}` placeholder convention), `make record` / `make corpus`,
-  sample fixture replays green. `testcorpus/*/raw/` gitignored.
-- Per-library scan locking + scan jobs: migration 0003 `scan_jobs`, job API
-  (`GET .../scan/jobs`, `GET /api/core/scan-jobs/{id}`), SSE progress events
-  at `/api/core/libraries/{id}/scan/events` (250ms throttle, terminal frame,
-  15s heartbeats), concurrent scans of different libraries proceed, same
-  library → 409 with jobId. Crash-restart marks zombie jobs `interrupted`.
-- `/Shows/NextUp` real implementation (store/nextup.go; partial-progress →
-  that episode, else first after last finished S/E; unstarted series only
-  when DisableFirstEpisode; series order by latest progress).
-- Trickplay: `internal/trickplay` lazy singleflight generation (ffmpeg
-  10s-interval 10x10 JPEG sheets, cache data/trickplay/), routes
-  `/Videos/{id}/Trickplay/{width}/{index}.jpg` + manifest.json. Shapes carry
-  `// corpus:` markers (index base, manifest fields, URL shape).
-- HLS cold start fixed: `-hls_init_time 2`, `Prebuffer` before m3u8 serve,
-  `WaitForSegmentFile` in segment handler (no more seek-race 404s), ffmpeg
-  zombies reaped (`cmd.Wait` goroutine). Tests incl. real-ffmpeg integration.
-- Discovery layer for the first-party UI (contract-built in parallel with
-  the web overhaul, DECISIONS 13): `GET /api/core/resume` (cross-type
-  continue hub, latest-per-work), `/search?q=` (title-then-author ILIKE),
-  `/recent`, works endpoint gained `sort/dir/filter` params (defaults
-  byte-compatible with the old order), `GET /subtitles/{fileId}`
-  (sidecar .srt → VTT, lazy stat, DB-resolved paths only).
-- Web UI overhauled to beat incumbent web clients as a standalone client:
-  modularized (api/styles/views/players/components), Home resume hub
-  (Continue Watching/Listening + Recently Added + libraries), global search
-  with grouped dropdown, library sort/filter controls, work page sells
-  Work→Editions (format badges, per-edition state), video player subtitles
-  (CC toggle via `<track>`), Media Session API + keyboard shortcuts both
-  players, admin shows scan jobs + live SSE progress (owed item 4 fully
-  wired), PWA (manifest + hand-rolled SW, static-only caching, 15.7 kB gz
-  bundle). Cover `<img>` 401 bug fixed (`?token=` media URLs).
+1. Corpus capture RUN — phone + mitmproxy against real ABS (`make record`,
+   flows in tools/record/README.md); then JMP/Android TV against the
+   Jellyfin face; then Symfonium/KOReader. Replay-green corpus pins every
+   `// corpus:` marker (~20 across faces).
+2. Slice exit gates G1-G3 (real library, web player on real books, phone).
+3. Version pins for ABS server/app + Jellyfin server in DECISIONS (after
+   capture).
+4. PLAN §14 launch decisions (public repo timing, media-hub archive, license).
 
-**Owed, in order:**
+**Owed — code, next session:** podcast episode progress persistence
+(episodes aren't editions; needs schema + face wiring); fsnotify watch;
+providers (TMDB/Audible/etc. — biggest remaining feature block); CBR;
+playlist web UI consumption; sw.js offline for #/read; neutron-go publish
+(blocker: repo private + relative replace; also blocks CI + container image);
+teploy template registration in teploy's index (device-mapping gap noted —
+/dev/dri not expressible in teploy.yml format today).
 
-1. Corpus capture RUN (task 10 proper) — phone + mitmproxy against real ABS;
-   replay-green corpus; pin server/app versions in DECISIONS.
-2. Jellyfin face verification with real clients (JMP desktop, then Android
-   TV); verify the three `// corpus:` trickplay markers and NextUp shapes.
-3. Jellyfin websocket (`/socket`) for remote control — OPTIONAL/stretch per
-   founder 2026-09-09; do after corpus, not before.
-4. Users/tokens core endpoints + admin UI section (SPEC §5 promised them,
-   never built — only /login and /me exist; discovered during web overhaul).
-5. Slice 0 exit gates G1-G3 (real library, web player, phone) — then the
-   PLAN §14 public/launch decisions.
-
-**Known warts:** episode titles depend on filename quality (no providers yet);
-no fsnotify; `--init-admin` first-run only; trickplay/manifest shapes guessed
-until corpus verifies; no in-app EPUB/CBZ readers (Slice 2); no users/tokens
-management yet.
+**Known warts:** episode titles from filename quality (providers pending);
+`--init-admin` first-run only; OPDS covers unsized (image == thumbnail);
+teploy device passthrough missing; CI absent (replace-path blocker).

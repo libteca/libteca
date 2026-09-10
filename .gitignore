@@ -3,6 +3,7 @@ data/
 /libteca
 web/node_modules/
 web/dist/
+dist/
 internal/server/webdist/
 web/.neutron/
 **/.neutron-*.d.ts

@@ -5,7 +5,7 @@ import { AudioPlayer, type AudioController, type PlayerFile } from "../players/a
 import { VideoPlayer } from "../players/video";
 import { IconCheck, IconPlay, IconBook } from "../components/svg";
 import {
-  badge, backLink, c, chapterList, chapterRow, ghostBtn, muted, primaryBtn,
+  badge, backLink, c, chapterList, chapterRow, ghostBtn, input, muted, primaryBtn,
   progressMini, tabRow, workHead, workMeta, workTitle,
 } from "../styles";
 import { editionState, fmt, formatLabel } from "../util";
@@ -23,8 +23,13 @@ export function WorkView(props: { id: number }) {
   const [w, setW] = useState<WorkDetail | null>(null);
   const [edition, setEdition] = useState<number>(0);
   const [videoEdition, setVideoEdition] = useState<number | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
 
-  useEffect(() => { api(`/works/${props.id}`).then(setW).catch(() => setW(null)); }, [props.id]);
+  const reload = () => api(`/works/${props.id}`).then(setW).catch(() => setW(null));
+  useEffect(() => { reload(); }, [props.id]);
+  useEffect(() => {
+    api("/me").then((u: { isAdmin?: boolean }) => setIsAdmin(!!u.isAdmin)).catch(() => {});
+  }, []);
   useEffect(() => {
     if (!w) return;
     const withPos = w.editions.find((e) => e.position && e.position > 0 && !e.isFinished);
@@ -63,7 +68,7 @@ export function WorkView(props: { id: number }) {
       </div>
     );
   }
-  return <EditionsView w={w} editionId={edition} setEdition={setEdition} />;
+  return <EditionsView w={w} editionId={edition} setEdition={setEdition} isAdmin={isAdmin} reload={reload} />;
 }
 
 function BackButton() {
@@ -170,7 +175,7 @@ function TrackList(props: { w: WorkDetail }) {
   );
 }
 
-function EditionsView(props: { w: WorkDetail; editionId: number; setEdition: (id: number) => void }) {
+function EditionsView(props: { w: WorkDetail; editionId: number; setEdition: (id: number) => void; isAdmin: boolean; reload: () => void }) {
   const w = props.w;
   const ed = w.editions.find((e) => e.id === props.editionId);
   const [playing, setPlaying] = useState(false);
@@ -258,6 +263,7 @@ function EditionsView(props: { w: WorkDetail; editionId: number; setEdition: (id
               );
             })}
           </div>
+          <EditionMenu w={w} edition={ed} isAdmin={props.isAdmin} reload={props.reload} />
           {playable ? (
             <button style={primaryBtn} onClick={resumeOrPlay}>
               <span style={{ display: "inline-flex", gap: "0.45rem", alignItems: "center" }}>
@@ -319,6 +325,191 @@ function EditionsView(props: { w: WorkDetail; editionId: number; setEdition: (id
           onQueueEnded={() => { save(ed.duration, true); setPlaying(false); }}
         />
       )}
+    </div>
+  );
+}
+
+function IconDots(p: { size?: number }) {
+  return (
+    <svg width={p.size ?? 14} height={p.size ?? 14} viewBox="0 0 24 24" fill="currentColor" style={{ display: "block", flexShrink: 0 }}>
+      <circle cx="5" cy="12" r="1.8" />
+      <circle cx="12" cy="12" r="1.8" />
+      <circle cx="19" cy="12" r="1.8" />
+    </svg>
+  );
+}
+
+type WorkLite = { id: number; title: string; author: string | null };
+
+const menuCard: preact.JSX.CSSProperties = {
+  position: "absolute", top: "100%", left: 0, marginTop: "0.45rem", zIndex: 40,
+  minWidth: "17rem", maxWidth: "22rem", background: c.bgRaised,
+  border: `1px solid ${c.line}`, borderRadius: "12px", padding: "0.75rem",
+  display: "flex", flexDirection: "column", gap: "0.45rem",
+};
+
+const menuRow: preact.JSX.CSSProperties = {
+  background: "none", border: "none", cursor: "pointer", fontFamily: "inherit",
+  color: c.textDim, fontSize: "0.88rem", textAlign: "left", padding: "0.35rem 0.45rem",
+  borderRadius: "8px",
+};
+
+function PickerRow(props: { title: string; sub?: string | null; onClick: () => void; danger?: boolean }) {
+  return (
+    <button type="button" style={{ ...menuRow, color: props.danger ? c.danger : c.textDim }} onClick={props.onClick}>
+      <span style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{props.title}</span>
+      {props.sub ? (
+        <span style={{ display: "block", color: c.muted, fontSize: "0.75rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{props.sub}</span>
+      ) : null}
+    </button>
+  );
+}
+
+function WorkPicker(props: {
+  libraryId: number;
+  excludeId?: number;
+  allowNew?: boolean;
+  placeholder: string;
+  onPick: (work: WorkLite | null, newTitle: string) => void;
+  onClose: () => void;
+}) {
+  const [works, setWorks] = useState<WorkLite[]>([]);
+  const [q, setQ] = useState("");
+  useEffect(() => {
+    api(`/libraries/${props.libraryId}/works`)
+      .then((rows: WorkLite[]) => setWorks(Array.isArray(rows) ? rows.filter((r) => r.id !== props.excludeId) : []))
+      .catch(() => setWorks([]));
+  }, [props.libraryId]);
+  const ql = q.trim().toLowerCase();
+  const matches = ql
+    ? works.filter((w) => w.title.toLowerCase().includes(ql) || (w.author || "").toLowerCase().includes(ql)).slice(0, 8)
+    : works.slice(0, 8);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+      <input
+        style={input}
+        placeholder={props.placeholder}
+        value={q}
+        autoFocus
+        onInput={(e) => setQ((e.target as HTMLInputElement).value)}
+      />
+      {matches.map((w) => (
+        <PickerRow key={w.id} title={w.title} sub={w.author} onClick={() => props.onPick(w, "")} />
+      ))}
+      {props.allowNew && ql && (
+        <PickerRow title={`New work: "${q.trim()}"`} onClick={() => props.onPick(null, q.trim())} />
+      )}
+      {matches.length === 0 && !(props.allowNew && ql) && <p style={muted}>No matches.</p>}
+      <button type="button" style={{ ...menuRow, color: c.muted }} onClick={props.onClose}>Cancel</button>
+    </div>
+  );
+}
+
+function EditionMenu(props: { w: WorkDetail; edition: { id: number; title: string }; isAdmin: boolean; reload: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState<"" | "move" | "split" | "merge" | "merge-confirm">("");
+  const [mergeTarget, setMergeTarget] = useState<WorkLite | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const post = async (path: string, body: unknown) => {
+    setBusy(true);
+    setErr("");
+    const res = await api(path, { method: "POST", body: JSON.stringify(body) });
+    setBusy(false);
+    if (res && res.error) { setErr(res.error); return null; }
+    return res as { workId?: number; sourceWorkId?: number; sourceDeleted?: boolean } | null;
+  };
+
+  const close = () => { setOpen(false); setMode(""); setMergeTarget(null); setErr(""); };
+
+  const afterMove = (res: { sourceWorkId?: number; sourceDeleted?: boolean }) => {
+    close();
+    if (res.sourceDeleted && res.sourceWorkId === props.w.id) { location.hash = "#/library"; return; }
+    props.reload();
+  };
+
+  const doMove = async (work: WorkLite | null, newTitle: string) => {
+    const res = await post(`/editions/${props.edition.id}/move`, work ? { workId: work.id } : { newTitle });
+    if (res) afterMove(res);
+  };
+
+  const doSplit = async () => {
+    const res = await post(`/editions/${props.edition.id}/split`, {});
+    if (res) afterMove(res);
+  };
+
+  const doMerge = async () => {
+    if (!mergeTarget) return;
+    const res = await post(`/works/${props.w.id}/merge`, { intoWorkId: mergeTarget.id });
+    if (res) { close(); location.hash = `#/work?id=${mergeTarget.id}`; }
+  };
+
+  if (!open) {
+    return (
+      <button type="button" style={{ ...ghostBtn, display: "inline-flex", alignItems: "center", gap: "0.4rem" }} onClick={() => setOpen(true)}>
+        <IconDots /> Manage
+      </button>
+    );
+  }
+
+  return (
+    <div style={{ position: "relative" }}>
+      <button type="button" style={{ ...ghostBtn, display: "inline-flex", alignItems: "center", gap: "0.4rem", borderColor: c.accent }} onClick={close}>
+        <IconDots /> Manage
+      </button>
+      <div style={menuCard}>
+        {mode === "" && (
+          <>
+            <PickerRow title="Move edition to…" onClick={() => setMode("move")} />
+            <PickerRow title="Split into its own work" onClick={() => setMode("split")} />
+            {props.isAdmin && <PickerRow title="Merge this work into…" onClick={() => setMode("merge")} />}
+            <PickerRow title="Close" onClick={close} />
+          </>
+        )}
+        {mode === "move" && (
+          <WorkPicker
+            libraryId={props.w.libraryId || 0}
+            excludeId={props.w.id}
+            allowNew
+            placeholder="Search works or type a new title"
+            onPick={doMove}
+            onClose={() => setMode("")}
+          />
+        )}
+        {mode === "split" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.45rem" }}>
+            <p style={muted}>Move "{props.edition.title}" into its own work?</p>
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              <button type="button" style={primaryBtn} disabled={busy} onClick={doSplit}>{busy ? "Splitting…" : "Split"}</button>
+              <button type="button" style={ghostBtn} onClick={() => setMode("")}>Cancel</button>
+            </div>
+          </div>
+        )}
+        {mode === "merge" && (
+          <WorkPicker
+            libraryId={props.w.libraryId || 0}
+            excludeId={props.w.id}
+            placeholder="Search works in this library"
+            onPick={(work) => {
+              if (!work) return;
+              setMergeTarget(work);
+              setMode("merge-confirm");
+            }}
+            onClose={() => setMode("")}
+          />
+        )}
+        {mode === "merge-confirm" && mergeTarget && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.45rem" }}>
+            <p style={muted}>Merge all editions of "{props.w.title}" into "{mergeTarget.title}"? This work is deleted.</p>
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              <button type="button" style={{ ...ghostBtn, color: c.danger, borderColor: c.danger }} disabled={busy} onClick={doMerge}>{busy ? "Merging…" : "Merge"}</button>
+              <button type="button" style={ghostBtn} onClick={() => setMode("merge")}>Back</button>
+            </div>
+          </div>
+        )}
+        {err && <p style={{ color: c.danger, margin: 0, fontSize: "0.8rem" }}>{err}</p>}
+      </div>
     </div>
   );
 }

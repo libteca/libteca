@@ -105,6 +105,29 @@ Decisions are append-only. Each entry: date, decision, why, what would reverse i
     Reverse: corpus capture (owed #1-2) arbitrates every `// corpus:`
     marker; websocket timing reverses if a priority client hard-requires it.
 
+14. **Waves 1-2 (2026-09-09, parallel agent orchestration): all four faces
+    exist; codeable scope of Slices 0-4 substantially complete.** Method:
+    strict per-agent file ownership + pre-wired shared collision points
+    (server.go face mounts, pre-assigned migration numbers 0004-0006,
+    one-line Mount additions reported to the orchestrator). Recorded calls:
+    (a) editions format CHECK extended with 'audio' in 0004 — music scan
+    inserts were silently violating 0001 (found by the subsonic agent);
+    (b) OPDS auth = HTTP Basic with 15-min argon2-verify cache (PSE page
+    requests would otherwise cost 64MB hashes per image);
+    (c) playlists owner-only v1 (subsonic 70 on cross-user); (d) warm-scan
+    probe-skip = mtime+size match → skip probe AND hash (group-level for
+    audio; 10k warm re-scan 211.6s → 0.17s); (e) Jellyfin /socket =
+    hand-rolled RFC6455 subset (text frames, no continuation) rather than a
+    websocket dep — controlled use, zero-dep discipline; (f) importers open
+    foreign DBs read-only via modernc, apply only through existing upserts,
+    dryRun-first; (g) release = hand-rolled Make cross-compile (4 platforms,
+    SHA256SUMS), no GoReleaser; (h) teploy template ships as target-shape
+    with two blockers documented: no published image (neutron-go relative
+    replace) and teploy.yml cannot express /dev/dri device passthrough.
+    Reverse: corpus capture arbitrates every `// corpus:` marker (~20);
+    Basic-auth cache reverses if a security review objects; podcast episode
+    progress needs a schema decision when built.
+
 13. **First-party web UI is a headline surface, not a fallback; built
     contract-first.** Founder call 2026-09-09: the web UI must beat
     Jellyfin/Plex/Kavita/ABS standalone (inherited clients are the moat,

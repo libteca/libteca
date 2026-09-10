@@ -15,6 +15,26 @@ type ReadingProgress struct {
 	Locator *string
 }
 
+func (d *DB) ReadingListByUser(userID int64) (map[int64]*ReadingProgress, error) {
+	rows, err := d.Query(`SELECT user_id, edition_id, file_id, file_offset_secs, edition_position_secs, duration_secs, is_finished, device, updated_at, page, percent, locator
+		FROM progress WHERE user_id = ?`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]*ReadingProgress{}
+	for rows.Next() {
+		var p ReadingProgress
+		var fin int
+		if err := rows.Scan(&p.UserID, &p.EditionID, &p.FileID, &p.FileOffsetSecs, &p.EditionPositionSecs, &p.DurationSecs, &fin, &p.Device, &p.UpdatedAt, &p.Page, &p.Percent, &p.Locator); err != nil {
+			return nil, err
+		}
+		p.IsFinished = fin != 0
+		out[p.EditionID] = &p
+	}
+	return out, rows.Err()
+}
+
 func (d *DB) GetReadingProgress(userID, editionID int64) (*ReadingProgress, error) {
 	var p ReadingProgress
 	var fin int

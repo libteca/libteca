@@ -19,6 +19,8 @@ import (
 	"github.com/libteca/libteca/internal/store"
 )
 
+var version = "dev"
+
 func main() {
 	data := flag.String("data", "./data", "data directory")
 	port := flag.Int("port", 8096, "listen port")
@@ -83,7 +85,7 @@ func main() {
 		<-ctx.Done()
 		h.Shutdown(context.Background())
 	}()
-	fmt.Printf("libteca listening on :%d (data: %s)\n", *port, abs)
+	fmt.Printf("libteca %s listening on :%d (data: %s)\n", version, *port, abs)
 	if err := h.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		fatal(err)
 	}

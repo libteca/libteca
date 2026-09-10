@@ -48,3 +48,33 @@ bench-transcode:
 
 seed:
 	go run ./tools/seed --kind $(SEED_KIND) --count $(SEED_COUNT) --out $(BENCH_SEED_DIR)/$(SEED_KIND)
+
+# Release (PLAN §10): cross-compile CGo-free, tar.gz (linux) / zip (darwin),
+# SHA256SUMS over all archives. Archives carry binary + systemd unit + README.
+# Version stamps main.version once that var exists in cmd/libteca/main.go
+# (until then -X is a harmless no-op).
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS := -s -w -X main.version=$(VERSION)
+DIST := dist/release
+PLATFORMS := linux-amd64 linux-arm64 darwin-amd64 darwin-arm64
+
+.PHONY: release checksums
+
+release: web $(PLATFORMS:%=release-%) checksums
+
+checksums: $(PLATFORMS:%=release-%)
+	mkdir -p $(DIST) && cd $(DIST) && shasum -a 256 libteca_$(VERSION)_*.tar.gz libteca_$(VERSION)_*.zip > SHA256SUMS
+
+release-%:
+	@set -e; os=$(word 1,$(subst -, ,$*)); arch=$(word 2,$(subst -, ,$*)); \
+	name=libteca_$(VERSION)_$${os}_$${arch}; \
+	rm -rf $(DIST)/$$name; mkdir -p $(DIST)/$$name; \
+	CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -trimpath -ldflags '$(LDFLAGS)' -o $(DIST)/$$name/$(BIN) ./cmd/libteca; \
+	cp deploy/systemd/libteca.service $(DIST)/$$name/; cp README.md $(DIST)/$$name/; \
+	if [ $${os} = linux ]; then \
+		(cd $(DIST) && COPYFILE_DISABLE=1 tar -czf $${name}.tar.gz $${name}); \
+	else \
+		(cd $(DIST) && zip -qr $${name}.zip $${name}); \
+	fi; \
+	rm -rf $(DIST)/$$name
+

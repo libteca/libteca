@@ -5,12 +5,13 @@ out-featuring Jellyfin, Audiobookshelf, or Kavita individually — it is **imple
 wire protocols so their existing clients connect to us unchanged**. One spine, four faces.
 
 Status: **BUILDING** (repo `Tyler/libteca`, private until the corpus gates pass).
-Slice 0 complete and smoke-verified; Slice 1 core (video/music scan, Jellyfin face
-v1 with HLS transcode, first-party web players) built in the same session —
-DECISIONS 11 records exactly what's still owed. Session 2 (DECISIONS 12) closed
-two more owed items: per-library scan locks + job/SSE API, and NextUp real +
-trickplay tiles (lazy) + HLS cold-start fix; corpus capture harness is built,
-the capture run itself is the next owed item. Task ledger: SPEC.md §9.
+All four faces implemented (Jellyfin incl. websocket/trickplay/hwaccel, ABS,
+OPDS+PSE, Subsonic incl. playlists); web UI is a headline surface (home hub,
+readers, PWA); podcasts, users/tokens, edition linking + ABS/Kavita importers,
+benches, packaging landed in waves 1-2 (2026-09-09, DECISIONS 12-14).
+Remaining codeable: providers, fsnotify, podcast episode progress, playlist
+UI. Remaining gates (founder-owned): corpus capture runs, G1-G3, version
+pins, launch decisions. Task ledger: SPEC.md §9.
 
 ---
 

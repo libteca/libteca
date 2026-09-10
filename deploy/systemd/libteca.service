@@ -1,0 +1,39 @@
+[Unit]
+Description=libteca media server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/libteca --data /var/lib/libteca --port 8096
+Environment=LIBTECA_HWACCEL=auto
+Restart=on-failure
+RestartSec=5
+
+# DynamicUser allocates a transient UID/GID per start; StateDirectory keeps
+# /var/lib/libteca created, owned, and writable across restarts even though
+# the UID changes. ReadWritePaths makes that grant explicit under
+# ProtectSystem=strict (the whole filesystem is otherwise read-only, which is
+# all media serving needs).
+DynamicUser=yes
+StateDirectory=libteca
+ReadWritePaths=/var/lib/libteca
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+NoNewPrivileges=yes
+# Port 8096 is unprivileged, so no ambient capabilities are needed; the empty
+# assignment clears anything inherited.
+AmbientCapabilities=
+CapabilityBoundingSet=
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+# No PrivateDevices here on purpose: video hwaccel (VAAPI/QSV via LIBTECA_HWACCEL=auto)
+# needs /dev/dri passthrough to the ffmpeg subprocesses.
+
+[Install]
+WantedBy=multi-user.target

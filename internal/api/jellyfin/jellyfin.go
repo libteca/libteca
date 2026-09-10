@@ -68,6 +68,7 @@ func (a *API) Mount(r *neutron.Router) {
 	g.HandleFunc("GET /Items/{id}/Ancestors", a.ancestors)
 	g.HandleFunc("GET /Videos/{id}/Trickplay/{width}/manifest.json", a.trickplayManifest)
 	g.HandleFunc("GET /Videos/{id}/Trickplay/{width}/{file}", a.trickplayTile)
+	a.MountPodcasts(g)
 }
 
 func jfAuth(db *store.DB) func(http.Handler) http.Handler {
