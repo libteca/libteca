@@ -282,7 +282,7 @@ error), no fsnotify, no providers/network metadata, no multi-user UI polish
 beyond create/revoke, no podcasts, no OPDS, no backups tooling (document
 `data/` copy), no Docker image (bare binary + systemd doc).
 
-## 9. Current state (2026-09-09, end of session)
+## 9. Current state (2026-09-09, session 2)
 
 **Done and smoke-verified** (synthetic libraries over curl, both faces):
 
@@ -298,19 +298,41 @@ beyond create/revoke, no podcasts, no OPDS, no backups tooling (document
   first-party players in the web UI (video w/ resume + next-episode, TV
   episode list w/ progress ticks, music track bar, audiobook chapters).
 
+**Done this session (2026-09-09, session 2, DECISIONS 12):**
+
+- Corpus capture harness (task 10 tooling): `tools/record/` mitmproxy addon +
+  sanitizer (both faces), replay harness (`corpusutil` + corpus tests per
+  face, `{id}` placeholder convention), `make record` / `make corpus`,
+  sample fixture replays green. `testcorpus/*/raw/` gitignored.
+- Per-library scan locking + scan jobs: migration 0003 `scan_jobs`, job API
+  (`GET .../scan/jobs`, `GET /api/core/scan-jobs/{id}`), SSE progress events
+  at `/api/core/libraries/{id}/scan/events` (250ms throttle, terminal frame,
+  15s heartbeats), concurrent scans of different libraries proceed, same
+  library → 409 with jobId. Crash-restart marks zombie jobs `interrupted`.
+- `/Shows/NextUp` real implementation (store/nextup.go; partial-progress →
+  that episode, else first after last finished S/E; unstarted series only
+  when DisableFirstEpisode; series order by latest progress).
+- Trickplay: `internal/trickplay` lazy singleflight generation (ffmpeg
+  10s-interval 10x10 JPEG sheets, cache data/trickplay/), routes
+  `/Videos/{id}/Trickplay/{width}/{index}.jpg` + manifest.json. Shapes carry
+  `// corpus:` markers (index base, manifest fields, URL shape).
+- HLS cold start fixed: `-hls_init_time 2`, `Prebuffer` before m3u8 serve,
+  `WaitForSegmentFile` in segment handler (no more seek-race 404s), ffmpeg
+  zombies reaped (`cmd.Wait` goroutine). Tests incl. real-ffmpeg integration.
+
 **Owed, in order:**
 
-1. Corpus capture (task 10) — mitmproxy against a real ABS server + official
-   apps; verify every shape this build guessed from client source.
-2. Same treatment for the Jellyfin face: point a real Jellyfin client
-   (JMP desktop, then Android TV) at the server; record and fix.
-3. Jellyfin websocket (`/socket`) for remote control; /Shows/NextUp real;
-   trickplay tiles.
-4. Per-library scan locking (currently one global scan at a time) and a scan
-   job API with progress events.
+1. Corpus capture RUN (task 10 proper) — phone + mitmproxy against real ABS;
+   replay-green corpus; pin server/app versions in DECISIONS.
+2. Jellyfin face verification with real clients (JMP desktop, then Android
+   TV); verify the three `// corpus:` trickplay markers and NextUp shapes.
+3. Jellyfin websocket (`/socket`) for remote control — OPTIONAL/stretch per
+   founder 2026-09-09; do after corpus, not before.
+4. Admin UI wiring for scan jobs + SSE (server-side done; web UI still
+   shows the old 202 flow).
 5. Slice 0 exit gates G1-G3 (real library, web player, phone) — then the
    PLAN §14 public/launch decisions.
 
 **Known warts:** episode titles depend on filename quality (no providers yet);
-single global scan slot; no fsnotify; `--init-admin` first-run only; transcoded
-HLS starts cold (no segment prebuffer tuning).
+no fsnotify; `--init-admin` first-run only; trickplay/manifest shapes guessed
+until corpus verifies; SSE events consumed by nothing yet.

@@ -1,0 +1,22 @@
+{
+ "face": "abs",
+ "flow": "ping",
+ "seq": 1,
+ "request": {
+  "body": null,
+  "body_b64": "",
+  "headers": {},
+  "method": "GET",
+  "path": "/ping",
+  "query": {}
+ },
+ "response": {
+  "body": {
+   "success": true
+  },
+  "body_b64": "",
+  "content_type": "application/json",
+  "status": 200,
+  "truncated": false
+ }
+}

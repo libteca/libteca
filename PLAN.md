@@ -7,7 +7,10 @@ wire protocols so their existing clients connect to us unchanged**. One spine, f
 Status: **BUILDING** (repo `Tyler/libteca`, private until the corpus gates pass).
 Slice 0 complete and smoke-verified; Slice 1 core (video/music scan, Jellyfin face
 v1 with HLS transcode, first-party web players) built in the same session —
-DECISIONS 11 records exactly what's still owed. Task ledger: SPEC.md.
+DECISIONS 11 records exactly what's still owed. Session 2 (DECISIONS 12) closed
+two more owed items: per-library scan locks + job/SSE API, and NextUp real +
+trickplay tiles (lazy) + HLS cold-start fix; corpus capture harness is built,
+the capture run itself is the next owed item. Task ledger: SPEC.md §9.
 
 ---
 

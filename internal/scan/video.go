@@ -55,7 +55,7 @@ func (v *vidFile) probe() error {
 	return nil
 }
 
-func scanVideoLibrary(db *store.DB, lib *store.Library, coversDir string, tv bool) (int, error) {
+func scanVideoLibrary(db *store.DB, lib *store.Library, coversDir string, tv bool, tr *tracker) (int, error) {
 	abs, _ := filepath.Abs(lib.Path)
 	var files []vidFile
 	var series = map[string][]vidFile{}
@@ -86,6 +86,7 @@ func scanVideoLibrary(db *store.DB, lib *store.Library, coversDir string, tv boo
 		}
 		files = append(files, v)
 		series[top] = append(series[top], v)
+		tr.seen(path)
 		return nil
 	})
 
@@ -111,12 +112,16 @@ func scanVideoLibrary(db *store.DB, lib *store.Library, coversDir string, tv boo
 		if err != nil {
 			return count, err
 		}
+		if w.Created {
+			tr.work()
+		}
 		for i := range group {
 			f := &group[i]
 			if err := f.probe(); err != nil {
 				fmt.Fprintf(os.Stderr, "libteca: probe fail %s: %v\n", f.path, err)
 				continue
 			}
+			tr.probed()
 			edTitle := title
 			if tv {
 				if f.epTitle != "" {
@@ -146,6 +151,7 @@ func scanVideoLibrary(db *store.DB, lib *store.Library, coversDir string, tv boo
 			if err := db.UpsertFile(fr); err != nil {
 				return count, err
 			}
+			tr.file(fr.Inserted)
 			count++
 		}
 		if err := ensureCoverVideo(db, workID, top, coversDir); err != nil {
@@ -213,7 +219,7 @@ func titleYear(base string) (string, string) {
 	return title, year
 }
 
-func scanMusicLibrary(db *store.DB, lib *store.Library, coversDir string) (int, error) {
+func scanMusicLibrary(db *store.DB, lib *store.Library, coversDir string, tr *tracker) (int, error) {
 	abs, _ := filepath.Abs(lib.Path)
 	type track struct {
 		path  string
@@ -250,6 +256,7 @@ func scanMusicLibrary(db *store.DB, lib *store.Library, coversDir string) (int, 
 			num = n
 		}
 		albums[top] = append(albums[top], track{path: path, num: num, name: base, size: fi.Size(), mtime: fi.ModTime().Unix()})
+		tr.seen(path)
 		return nil
 	})
 
@@ -274,11 +281,15 @@ func scanMusicLibrary(db *store.DB, lib *store.Library, coversDir string) (int, 
 		if err != nil {
 			return count, err
 		}
+		if w.Created {
+			tr.work()
+		}
 		for i, t := range group {
 			info, err := audio.Probe(t.path)
 			if err != nil {
 				continue
 			}
+			tr.probed()
 			trackTitle := t.name
 			if v := info.Meta["title"]; v != "" {
 				trackTitle = v
@@ -299,6 +310,7 @@ func scanMusicLibrary(db *store.DB, lib *store.Library, coversDir string) (int, 
 			if err := db.UpsertFile(fr); err != nil {
 				return count, err
 			}
+			tr.file(fr.Inserted)
 			count++
 		}
 		if err := ensureCoverVideo(db, workID, top, coversDir); err != nil {

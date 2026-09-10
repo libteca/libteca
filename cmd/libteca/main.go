@@ -49,11 +49,13 @@ func main() {
 	}
 
 	if *scanOnly {
-		n, err := scan.All(db, filepath.Join(abs, "covers"))
+		n, err := scan.All(db, filepath.Join(abs, "covers"), func(p scan.Progress) {
+			fmt.Printf("\rscan: %d seen, %d probed, %d added, %d updated   ", p.FilesSeen, p.FilesProbed, p.FilesAdded, p.FilesUpdated)
+		})
 		if err != nil {
 			fatal(err)
 		}
-		fmt.Printf("scan complete: %d editions current\n", n)
+		fmt.Printf("\nscan complete: %d editions current\n", n)
 		return
 	}
 

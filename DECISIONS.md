@@ -85,3 +85,22 @@ Decisions are append-only. Each entry: date, decision, why, what would reverse i
     trickplay, /Shows/NextUp real implementation, per-library scan locking
     (currently one global scan at a time), corpus capture for both faces.
     ABS face shape-verification against real app traffic remains the gate.
+
+## 2026-09-09 (session 2)
+
+12. **Owed items 3+4 built in parallel; websocket demoted to optional.**
+    Founder call: the Jellyfin `/socket` is optional (nice-to-have remote
+    control), not a gate — build it only after corpus traffic exists.
+    Recorded this session: (a) per-library scan locks replace the global
+    atomic — scan_jobs table (migration 0003), concurrent different-library
+    scans, 409 same-library, SSE progress events, crash-restart marks
+    zombie jobs `interrupted`; (b) NextUp real, ordering key
+    (season_num, episode_num) on editions; (c) trickplay generated LAZILY
+    on first request (singleflight, data/trickplay cache), not at scan time
+    as PLAN §6 sketched — scan-time generation would block scans on ffmpeg
+    and double scan-session complexity; guessed shapes carry `// corpus:`
+    markers for capture verification; (d) HLS cold start fixed in
+    transcode (hls_init_time 2 + Prebuffer + WaitForSegmentFile; cmd.Wait
+    goroutine fixes ffmpeg zombies).
+    Reverse: corpus capture (owed #1-2) arbitrates every `// corpus:`
+    marker; websocket timing reverses if a priority client hard-requires it.

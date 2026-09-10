@@ -80,6 +80,7 @@ func (d *DB) User(id int64) (*User, error) {
 	return &u, err
 }
 
+// UpsertWork upserts a work; w.Created reports whether a new row was inserted.
 func (d *DB) UpsertWork(w *Work) (int64, error) {
 	var id int64
 	err := d.QueryRow(`SELECT id FROM works WHERE library_id = ? AND lower(title) = lower(?) AND lower(coalesce(author,'')) = lower(coalesce(?,''))`,
@@ -91,6 +92,7 @@ func (d *DB) UpsertWork(w *Work) (int64, error) {
 		if ierr != nil {
 			return 0, ierr
 		}
+		w.Created = true
 		return res.LastInsertId()
 	}
 	if err != nil {
@@ -127,6 +129,7 @@ func (d *DB) UpsertEdition(e *Edition) (int64, error) {
 	return id, err
 }
 
+// UpsertFile upserts a file; f.Inserted reports whether a new row was inserted.
 func (d *DB) UpsertFile(f *FileRec) error {
 	var id int64
 	err := d.QueryRow(`SELECT id FROM files WHERE path = ?`, f.Path).Scan(&id)
@@ -139,6 +142,7 @@ func (d *DB) UpsertFile(f *FileRec) error {
 		}
 		fid, _ := res.LastInsertId()
 		f.ID = fid
+		f.Inserted = true
 		return nil
 	}
 	if err != nil {

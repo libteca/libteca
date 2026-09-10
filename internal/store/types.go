@@ -29,6 +29,7 @@ type Work struct {
 	CoverPath   *string
 	CreatedAt   int64
 	UpdatedAt   int64
+	Created     bool
 }
 
 type Edition struct {
@@ -64,6 +65,7 @@ type FileRec struct {
 	DurationSecs float64
 	Chapters     string
 	Missing      bool
+	Inserted     bool
 }
 
 type Progress struct {

@@ -3,6 +3,7 @@ package jellyfin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -11,11 +12,13 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/libteca/libteca/internal/auth"
 	"github.com/libteca/libteca/internal/store"
 	"github.com/libteca/libteca/internal/transcode"
+	"github.com/libteca/libteca/internal/trickplay"
 	"github.com/neutron-dev/neutron-go/neutron"
 )
 
@@ -23,10 +26,18 @@ type API struct {
 	DB  *store.DB
 	Dir string
 	TC  *transcode.Manager
+
+	tpOnce sync.Once
+	tp     *trickplay.Generator
 }
 
 func New(db *store.DB, dataDir string, tc *transcode.Manager) *API {
 	return &API{DB: db, Dir: dataDir, TC: tc}
+}
+
+func (a *API) trickplayer() *trickplay.Generator {
+	a.tpOnce.Do(func() { a.tp = trickplay.New(a.Dir) })
+	return a.tp
 }
 
 func (a *API) Mount(r *neutron.Router) {
@@ -54,6 +65,8 @@ func (a *API) Mount(r *neutron.Router) {
 	g.HandleFunc("GET /Shows/{seriesId}/Seasons", a.seasons)
 	g.HandleFunc("GET /Shows/{seriesId}/Episodes", a.episodes)
 	g.HandleFunc("GET /Items/{id}/Ancestors", a.ancestors)
+	g.HandleFunc("GET /Videos/{id}/Trickplay/{width}/manifest.json", a.trickplayManifest)
+	g.HandleFunc("GET /Videos/{id}/Trickplay/{width}/{file}", a.trickplayTile)
 }
 
 func jfAuth(db *store.DB) func(http.Handler) http.Handler {
@@ -551,7 +564,40 @@ func (a *API) resume(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) nextUp(w http.ResponseWriter, r *http.Request) {
-	write(w, 200, map[string]any{"Items": []any{}, "TotalRecordCount": 0})
+	userID := uid(r)
+	q := r.URL.Query()
+	var seriesID int64
+	if s := q.Get("SeriesId"); s != "" {
+		seriesID = auth.Atoi64(strings.TrimPrefix(s, "w"))
+	}
+	limit := 20
+	if v, err := strconv.Atoi(q.Get("Limit")); err == nil && v > 0 {
+		limit = v
+	}
+	start := 0
+	if v, err := strconv.Atoi(q.Get("StartIndex")); err == nil && v > 0 {
+		start = v
+	}
+	rows, err := a.DB.NextUp(userID, seriesID, q.Get("DisableFirstEpisode") == "true")
+	items := []map[string]any{}
+	if err == nil {
+		for _, row := range rows {
+			if it, ok := a.detailFor(userID, "e"+strconv.FormatInt(row.EditionID, 10)); ok {
+				delete(it, "__sort")
+				delete(it, "__created")
+				items = append(items, it)
+			}
+		}
+	}
+	total := len(items)
+	if start > total {
+		start = total
+	}
+	end := start + limit
+	if end > total {
+		end = total
+	}
+	write(w, 200, map[string]any{"Items": items[start:end], "TotalRecordCount": total, "StartIndex": start})
 }
 
 func (a *API) ancestors(w http.ResponseWriter, r *http.Request) {
@@ -727,6 +773,7 @@ func (a *API) hlsMaster(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "transcode failed", 500)
 		return
 	}
+	s.Prebuffer(r.Context(), 2, 10*time.Second)
 	for i := 0; i < 100; i++ {
 		if fi, err := os.Stat(s.Playlist()); err == nil && fi.Size() > 0 {
 			break
@@ -750,7 +797,10 @@ func (a *API) hlsSegment(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad", 400)
 		return
 	}
-	a.TC.TouchSession(sid)
+	if !a.TC.WaitForSegmentFile(r.Context(), sid, file, 10*time.Second) {
+		http.Error(w, "not found", 404)
+		return
+	}
 	path := filepath.Join(a.Dir, "transcode", sid, file)
 	f, err := os.Open(path)
 	if err != nil {
@@ -850,4 +900,72 @@ func serveFile(w http.ResponseWriter, r *http.Request, path string) {
 	defer f.Close()
 	fi, _ := f.Stat()
 	http.ServeContent(w, r, filepath.Base(path), fi.ModTime(), f)
+}
+
+// corpus: tile URL shape and 0-based {file} index unverified against 10.10 traffic
+func (a *API) trickplayTile(w http.ResponseWriter, r *http.Request) {
+	ed, err := a.resolvePlayable(r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "not found", 404)
+		return
+	}
+	width, err := strconv.Atoi(r.PathValue("width"))
+	if err != nil {
+		http.Error(w, "bad width", 400)
+		return
+	}
+	index, ok := trickplay.ParseTileName(r.PathValue("file"))
+	if !ok {
+		http.Error(w, "bad tile", 400)
+		return
+	}
+	itemID := "e" + strconv.FormatInt(ed.ID, 10)
+	path, err := a.trickplayer().Tile(r.Context(), itemID, ed.Files[0].Path, width, index)
+	if errors.Is(err, trickplay.ErrNotFound) {
+		http.Error(w, "not found", 404)
+		return
+	}
+	if errors.Is(err, trickplay.ErrNoFFmpeg) {
+		w.Header().Set("Retry-After", "120")
+		http.Error(w, "ffmpeg unavailable", 503)
+		return
+	}
+	if err != nil {
+		http.Error(w, "tile generation failed", 500)
+		return
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		http.Error(w, "not found", 404)
+		return
+	}
+	defer f.Close()
+	fi, _ := f.Stat()
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	http.ServeContent(w, r, filepath.Base(path), fi.ModTime(), f)
+}
+
+func (a *API) trickplayManifest(w http.ResponseWriter, r *http.Request) {
+	ed, err := a.resolvePlayable(r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "not found", 404)
+		return
+	}
+	width, err := strconv.Atoi(r.PathValue("width"))
+	if err != nil {
+		http.Error(w, "bad width", 400)
+		return
+	}
+	itemID := "e" + strconv.FormatInt(ed.ID, 10)
+	m, err := a.trickplayer().Manifest(r.Context(), itemID, ed.Files[0].Path, width)
+	if errors.Is(err, trickplay.ErrNoFFmpeg) {
+		w.Header().Set("Retry-After", "120")
+		http.Error(w, "ffmpeg unavailable", 503)
+		return
+	}
+	if err != nil {
+		http.Error(w, "manifest failed", 500)
+		return
+	}
+	write(w, 200, m)
 }

@@ -1,0 +1,171 @@
+package transcode
+
+import (
+	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+func writeFile(t *testing.T, path, contents string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPrebufferSatisfiedImmediately(t *testing.T) {
+	s := &Session{ID: "x", Dir: t.TempDir()}
+	writeFile(t, filepath.Join(s.Dir, "seg00000.ts"), "x")
+	writeFile(t, filepath.Join(s.Dir, "seg00001.ts"), "x")
+	done := make(chan int, 1)
+	go func() { done <- s.Prebuffer(context.Background(), 2, 5*time.Second) }()
+	select {
+	case n := <-done:
+		if n != 2 {
+			t.Fatalf("want 2 ready segments, got %d", n)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Prebuffer did not return immediately when segments ready")
+	}
+}
+
+func TestPrebufferTimeoutReturnsPartial(t *testing.T) {
+	s := &Session{ID: "x", Dir: t.TempDir()}
+	writeFile(t, filepath.Join(s.Dir, "seg00000.ts"), "x")
+	if n := s.Prebuffer(context.Background(), 2, 400*time.Millisecond); n != 1 {
+		t.Fatalf("want 1 ready segment on timeout, got %d", n)
+	}
+}
+
+func TestPrebufferContextCancel(t *testing.T) {
+	s := &Session{ID: "x", Dir: t.TempDir()}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	if n := s.Prebuffer(ctx, 2, 5*time.Second); n != 0 {
+		t.Fatalf("want 0 segments, got %d", n)
+	}
+	if time.Since(start) > time.Second {
+		t.Fatal("canceled context should return promptly")
+	}
+}
+
+func TestPrebufferSessionDead(t *testing.T) {
+	s := &Session{ID: "x", Dir: t.TempDir()}
+	s.done = make(chan struct{})
+	close(s.done)
+	start := time.Now()
+	if n := s.Prebuffer(context.Background(), 2, 5*time.Second); n != 0 {
+		t.Fatalf("want 0 segments, got %d", n)
+	}
+	if time.Since(start) > time.Second {
+		t.Fatal("dead session should return promptly")
+	}
+}
+
+func TestWaitForSegmentPlaylistListing(t *testing.T) {
+	s := &Session{ID: "x", Dir: t.TempDir()}
+	writeFile(t, filepath.Join(s.Dir, "seg00000.ts"), "x")
+	if s.WaitForSegment(context.Background(), 0, 300*time.Millisecond) {
+		t.Fatal("segment must not be ready before playlist lists it")
+	}
+	writeFile(t, filepath.Join(s.Dir, "index.m3u8"), "#EXTM3U\n#EXTINF:4.0,\nseg00000.ts\n")
+	if !s.WaitForSegment(context.Background(), 0, 2*time.Second) {
+		t.Fatal("segment should be ready once playlist lists it")
+	}
+}
+
+func TestWaitForSegmentDeadFallback(t *testing.T) {
+	s := &Session{ID: "x", Dir: t.TempDir()}
+	writeFile(t, filepath.Join(s.Dir, "seg00000.ts"), "x")
+	s.done = make(chan struct{})
+	close(s.done)
+	if !s.WaitForSegment(context.Background(), 0, 2*time.Second) {
+		t.Fatal("unlisted non-empty segment should be servable once ffmpeg exited")
+	}
+	if s.WaitForSegment(context.Background(), 5, 200*time.Millisecond) {
+		t.Fatal("missing segment must stay not-ready")
+	}
+}
+
+func TestWaitForSegmentFileValidation(t *testing.T) {
+	m := New(t.TempDir())
+	ctx := context.Background()
+	if m.WaitForSegmentFile(ctx, "nope", "seg00000.ts", 100*time.Millisecond) {
+		t.Fatal("unknown session must return false")
+	}
+	s := &Session{ID: "s1", Dir: filepath.Join(m.DataDir, "transcode", "s1")}
+	m.mu.Lock()
+	m.sessions["s1"] = s
+	m.mu.Unlock()
+	for _, bad := range []string{"../x.ts", "sub/seg00000.ts", "foo.ts", "seg.ts", "seg-1.ts", "index.m3u8/", ""} {
+		if m.WaitForSegmentFile(ctx, "s1", bad, 100*time.Millisecond) {
+			t.Fatalf("bad name accepted: %q", bad)
+		}
+	}
+	writeFile(t, filepath.Join(s.Dir, "index.m3u8"), "#EXTM3U\n")
+	if !m.WaitForSegmentFile(ctx, "s1", "index.m3u8", 2*time.Second) {
+		t.Fatal("non-empty playlist should be servable")
+	}
+	if m.WaitForSegmentFile(ctx, "s1", "seg00003.ts", 200*time.Millisecond) {
+		t.Fatal("absent segment must not be servable")
+	}
+	m.mu.Lock()
+	m.sessions["s1"].lastHit = time.Now()
+	m.mu.Unlock()
+}
+
+func TestPrebufferIntegrationFFmpeg(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg not installed")
+	}
+	src := filepath.Join(t.TempDir(), "src.mp4")
+	if err := exec.Command("ffmpeg", "-y", "-v", "quiet",
+		"-f", "lavfi", "-i", "testsrc2=duration=12:size=320x240:rate=30",
+		"-c:v", "libx264", "-pix_fmt", "yuv420p", src).Run(); err != nil {
+		t.Skipf("could not generate test source (missing x264?): %v", err)
+	}
+	m := New(t.TempDir())
+	defer m.Close("itest")
+	s, err := m.Get("itest", 1, src, 0)
+	if err != nil {
+		t.Skipf("ffmpeg failed to start: %v", err)
+	}
+	n := s.Prebuffer(context.Background(), 2, 15*time.Second)
+	if n == 0 {
+		select {
+		case <-s.dead():
+			t.Skip("ffmpeg exited without producing segments (missing x264?)")
+		case <-time.After(2 * time.Second):
+			t.Fatal("no segments prebuffered and ffmpeg still running")
+		}
+	}
+	if n < 1 {
+		t.Fatalf("want at least 1 prebuffered segment, got %d", n)
+	}
+	fi, err := os.Stat(filepath.Join(s.Dir, "seg00000.ts"))
+	if err != nil || fi.Size() == 0 {
+		t.Fatalf("first segment missing or empty (err=%v)", err)
+	}
+	if !s.waitForFile(context.Background(), s.Playlist(), 5*time.Second) {
+		t.Fatal("playlist never written")
+	}
+	if !s.playlistLists("seg00000.ts") {
+		t.Fatal("playlist does not list first segment")
+	}
+	if !s.WaitForSegment(context.Background(), 1, 12*time.Second) {
+		t.Fatal("second segment never became servable")
+	}
+	m.mu.Lock()
+	live := m.sessions["itest"] != nil
+	m.mu.Unlock()
+	if !live {
+		t.Fatal("session should survive prebuffer")
+	}
+}

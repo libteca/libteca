@@ -29,14 +29,15 @@ type bookFile struct {
 	mtime int64
 }
 
-func All(db *store.DB, coversDir string) (int, error) {
+func All(db *store.DB, coversDir string, onProgress ProgressFn) (int, error) {
 	libs, err := db.Libraries()
 	if err != nil {
 		return 0, err
 	}
+	tr := newTracker(onProgress)
 	total := 0
 	for _, lib := range libs {
-		n, err := Library(db, &lib, coversDir)
+		n, err := Library(db, &lib, coversDir, tr.fn)
 		if err != nil {
 			return total, fmt.Errorf("library %q: %w", lib.Name, err)
 		}
@@ -45,19 +46,21 @@ func All(db *store.DB, coversDir string) (int, error) {
 	return total, nil
 }
 
-func Library(db *store.DB, lib *store.Library, coversDir string) (int, error) {
+func Library(db *store.DB, lib *store.Library, coversDir string, onProgress ProgressFn) (int, error) {
+	tr := newTracker(onProgress)
+	defer tr.flush()
 	switch lib.Type {
 	case "movies":
-		return scanVideoLibrary(db, lib, coversDir, false)
+		return scanVideoLibrary(db, lib, coversDir, false, tr)
 	case "tv":
-		return scanVideoLibrary(db, lib, coversDir, true)
+		return scanVideoLibrary(db, lib, coversDir, true, tr)
 	case "music":
-		return scanMusicLibrary(db, lib, coversDir)
+		return scanMusicLibrary(db, lib, coversDir, tr)
 	}
-	return scanAudioLibrary(db, lib, coversDir)
+	return scanAudioLibrary(db, lib, coversDir, tr)
 }
 
-func scanAudioLibrary(db *store.DB, lib *store.Library, coversDir string) (int, error) {
+func scanAudioLibrary(db *store.DB, lib *store.Library, coversDir string, tr *tracker) (int, error) {
 	abs, err := filepath.Abs(lib.Path)
 	if err != nil {
 		return 0, err
@@ -95,6 +98,7 @@ func scanAudioLibrary(db *store.DB, lib *store.Library, coversDir string) (int, 
 			size:  fi.Size(),
 			mtime: fi.ModTime().Unix(),
 		})
+		tr.seen(path)
 		return nil
 	})
 	if err != nil {
@@ -115,7 +119,7 @@ func scanAudioLibrary(db *store.DB, lib *store.Library, coversDir string) (int, 
 	for _, top := range topFolders {
 		group := groups[top]
 		sort.Slice(group, func(i, j int) bool { return natLess(group[i].name, group[j].name) })
-		if err := scanBook(db, lib, top, group, coversDir); err != nil {
+		if err := scanBook(db, lib, top, group, coversDir, tr); err != nil {
 			fmt.Fprintf(os.Stderr, "libteca: skip %s: %v\n", top, err)
 			continue
 		}
@@ -124,7 +128,7 @@ func scanAudioLibrary(db *store.DB, lib *store.Library, coversDir string) (int, 
 	return count, nil
 }
 
-func scanBook(db *store.DB, lib *store.Library, top string, group []bookFile, coversDir string) error {
+func scanBook(db *store.DB, lib *store.Library, top string, group []bookFile, coversDir string, tr *tracker) error {
 	format := "mp3"
 	for _, f := range group {
 		if strings.EqualFold(filepath.Ext(f.path), ".m4b") {
@@ -141,6 +145,7 @@ func scanBook(db *store.DB, lib *store.Library, top string, group []bookFile, co
 		}
 		f.info = probe
 		f.hash = hashFile(f.path, f.size)
+		tr.probed()
 	}
 
 	first := group[0]
@@ -165,6 +170,9 @@ func scanBook(db *store.DB, lib *store.Library, top string, group []bookFile, co
 	workID, err := db.UpsertWork(w)
 	if err != nil {
 		return err
+	}
+	if w.Created {
+		tr.work()
 	}
 
 	var total float64
@@ -200,6 +208,7 @@ func scanBook(db *store.DB, lib *store.Library, top string, group []bookFile, co
 		if err := db.UpsertFile(fr); err != nil {
 			return err
 		}
+		tr.file(fr.Inserted)
 	}
 
 	return ensureCover(db, workID, top, group, coversDir)
