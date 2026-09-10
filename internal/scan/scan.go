@@ -131,6 +131,17 @@ func scanAudioLibrary(db *store.DB, lib *store.Library, coversDir string, tr *tr
 }
 
 func scanBook(db *store.DB, lib *store.Library, top string, group []bookFile, coversDir string, tr *tracker) error {
+	unchanged := true
+	for _, f := range group {
+		if !fileUnchanged(db, f.path, f.size, f.mtime) {
+			unchanged = false
+			break
+		}
+	}
+	if unchanged {
+		return nil
+	}
+
 	format := "mp3"
 	for _, f := range group {
 		if strings.EqualFold(filepath.Ext(f.path), ".m4b") {

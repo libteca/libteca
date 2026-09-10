@@ -25,9 +25,10 @@ import (
 
 // ID scheme (stable, documented):
 //
-//	song   so-<edition id>
-//	album  al-<work id>
-//	artist ar-<16 hex, xxhash64 of the lowercased artist name>
+//	song     so-<edition id>
+//	album    al-<work id>
+//	artist   ar-<16 hex, xxhash64 of the lowercased artist name>
+//	playlist pl-<playlist id>
 //
 // Artist ids are name-derived, not row-derived: an artist is a GROUP BY over
 // works.author across all type='music' libraries, so no single work id can
@@ -72,9 +73,10 @@ func (a *API) Mount(r *neutron.Router) {
 		"search3":        a.search3,
 		"scrobble":       a.scrobble,
 		"getPlaylists":   a.getPlaylists,
-		"createPlaylist": a.playlistStub,
-		"updatePlaylist": a.playlistStub,
-		"deletePlaylist": a.playlistStub,
+		"getPlaylist":    a.getPlaylist,
+		"createPlaylist": a.createPlaylist,
+		"updatePlaylist": a.updatePlaylist,
+		"deletePlaylist": a.deletePlaylist,
 	}
 	for name, h := range routes {
 		for _, suffix := range []string{".view", ""} {
@@ -459,22 +461,211 @@ func (a *API) scrobble(w http.ResponseWriter, r *http.Request, uid int64) {
 	a.respond(w, r, ok())
 }
 
-func (a *API) getPlaylists(w http.ResponseWriter, r *http.Request, _ int64) {
+// Playlists are v1 owner-only: getPlaylists lists the caller's playlists,
+// and any other user's playlist id answers 70 (the spec's not-found code).
+// The header stats count every item; entries render only music-library
+// editions (the face's currency).
+func (a *API) getPlaylists(w http.ResponseWriter, r *http.Request, uid int64) {
+	list, err := a.DB.ListPlaylists(uid)
+	if err != nil {
+		a.respond(w, r, errResponse(errGeneric, err.Error()))
+		return
+	}
 	resp := ok()
-	resp.Playlists = &Playlists{Playlist: []Playlist{}}
+	resp.Playlists = &Playlists{Playlist: a.playlistList(list)}
 	a.respond(w, r, resp)
 }
 
-// Playlists need a playlists migration (0006, owned elsewhere); these are
-// honest not-implemented errors, not fake successes.
-func (a *API) playlistStub(w http.ResponseWriter, r *http.Request, _ int64) {
-	a.respond(w, r, errResponse(errNotImplemented, "Playlists are not implemented"))
+func (a *API) getPlaylist(w http.ResponseWriter, r *http.Request, uid int64) {
+	p := a.fetchOwnedPlaylist(w, r, uid, r.Form.Get("id"))
+	if p == nil {
+		return
+	}
+	entries, err := a.playlistChildren(p.ID)
+	if err != nil {
+		a.respond(w, r, errResponse(errGeneric, err.Error()))
+		return
+	}
+	resp := ok()
+	resp.Playlist = &PlaylistWithSongs{Playlist: a.playlistAttrs(p), Entry: entries}
+	a.respond(w, r, resp)
+}
+
+// createPlaylist per spec: name + songId[] creates; playlistId + songId[]
+// replaces the playlist's content (and renames when name is given).
+func (a *API) createPlaylist(w http.ResponseWriter, r *http.Request, uid int64) {
+	editions, okIDs := a.resolveSongIDs(w, r, r.Form["songId"])
+	if !okIDs {
+		return
+	}
+	var pid int64
+	if v := r.Form.Get("playlistId"); v != "" {
+		p := a.fetchOwnedPlaylist(w, r, uid, v)
+		if p == nil {
+			return
+		}
+		pid = p.ID
+		if name := r.Form.Get("name"); name != "" {
+			if err := a.DB.RenamePlaylist(pid, name); err != nil {
+				a.respond(w, r, errResponse(errGeneric, err.Error()))
+				return
+			}
+		}
+		if err := a.DB.ClearPlaylistItems(pid); err != nil {
+			a.respond(w, r, errResponse(errGeneric, err.Error()))
+			return
+		}
+	} else {
+		name := r.Form.Get("name")
+		if name == "" {
+			a.respond(w, r, errResponse(errMissingParam, "Required parameter 'name' missing"))
+			return
+		}
+		id, err := a.DB.CreatePlaylist(uid, name)
+		if err != nil {
+			a.respond(w, r, errResponse(errGeneric, err.Error()))
+			return
+		}
+		pid = id
+	}
+	for _, eid := range editions {
+		if err := a.DB.AddPlaylistItem(pid, eid); err != nil {
+			a.respond(w, r, errResponse(errGeneric, err.Error()))
+			return
+		}
+	}
+	p, err := a.DB.Playlist(pid)
+	if err != nil {
+		a.respond(w, r, errResponse(errGeneric, err.Error()))
+		return
+	}
+	entries, err := a.playlistChildren(pid)
+	if err != nil {
+		a.respond(w, r, errResponse(errGeneric, err.Error()))
+		return
+	}
+	resp := ok()
+	resp.Playlist = &PlaylistWithSongs{Playlist: a.playlistAttrs(p), Entry: entries}
+	a.respond(w, r, resp)
+}
+
+// updatePlaylist per spec's awkward shape: songId[] APPENDS, while
+// songIndexToRemove[] holds indexes into the playlist's current order
+// (resolved against the pre-request snapshot, then removed by edition).
+func (a *API) updatePlaylist(w http.ResponseWriter, r *http.Request, uid int64) {
+	p := a.fetchOwnedPlaylist(w, r, uid, r.Form.Get("playlistId"))
+	if p == nil {
+		return
+	}
+	if idxs := r.Form["songIndexToRemove"]; len(idxs) > 0 {
+		items, err := a.DB.PlaylistItems(p.ID)
+		if err != nil {
+			a.respond(w, r, errResponse(errGeneric, err.Error()))
+			return
+		}
+		for _, s := range idxs {
+			n, err := strconv.Atoi(s)
+			if err != nil || n < 0 || n >= len(items) {
+				continue // corpus: out-of-range indexes skipped, not errors
+			}
+			if err := a.DB.RemovePlaylistItem(p.ID, items[n].EditionID); err != nil {
+				a.respond(w, r, errResponse(errGeneric, err.Error()))
+				return
+			}
+		}
+	}
+	if ids := r.Form["songId"]; len(ids) > 0 {
+		editions, okIDs := a.resolveSongIDs(w, r, ids)
+		if !okIDs {
+			return
+		}
+		for _, eid := range editions {
+			if err := a.DB.AddPlaylistItem(p.ID, eid); err != nil {
+				a.respond(w, r, errResponse(errGeneric, err.Error()))
+				return
+			}
+		}
+	}
+	if name := r.Form.Get("name"); name != "" {
+		if err := a.DB.RenamePlaylist(p.ID, name); err != nil {
+			a.respond(w, r, errResponse(errGeneric, err.Error()))
+			return
+		}
+	}
+	a.respond(w, r, ok())
+}
+
+func (a *API) deletePlaylist(w http.ResponseWriter, r *http.Request, uid int64) {
+	p := a.fetchOwnedPlaylist(w, r, uid, r.Form.Get("id"))
+	if p == nil {
+		return
+	}
+	if err := a.DB.DeletePlaylist(p.ID); err != nil {
+		a.respond(w, r, errResponse(errGeneric, err.Error()))
+		return
+	}
+	a.respond(w, r, ok())
+}
+
+// fetchOwnedPlaylist loads the playlist and enforces v1 owner-only scoping;
+// unknown, malformed, and foreign ids are all a 70. nil means it responded.
+func (a *API) fetchOwnedPlaylist(w http.ResponseWriter, r *http.Request, uid int64, id string) *store.Playlist {
+	pid, okID := parseID(rePlaylistID, id)
+	if !okID {
+		a.respond(w, r, errResponse(errNotFound, "Playlist not found"))
+		return nil
+	}
+	p, err := a.DB.Playlist(pid)
+	if err != nil || p.UserID != uid {
+		a.respond(w, r, errResponse(errNotFound, "Playlist not found"))
+		return nil
+	}
+	return p
+}
+
+// resolveSongIDs validates so-<id> song references; false means it responded.
+func (a *API) resolveSongIDs(w http.ResponseWriter, r *http.Request, ids []string) ([]int64, bool) {
+	out := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		song, err := a.resolveSong(id)
+		if err != nil {
+			a.respond(w, r, errResponse(errNotFound, "Song not found: "+id))
+			return nil, false
+		}
+		out = append(out, song.Edition.ID)
+	}
+	return out, true
+}
+
+func (a *API) playlistChildren(playlistID int64) ([]Child, error) {
+	songs, err := a.DB.PlaylistMusicSongs(playlistID)
+	if err != nil {
+		return nil, err
+	}
+	return a.songList(songs), nil
+}
+
+func (a *API) playlistAttrs(p *store.Playlist) Playlist {
+	return Playlist{
+		ID: playlistID(p.ID), Name: p.Name,
+		SongCount: p.SongCount, Duration: int(p.DurationSecs + 0.5),
+		Owner: p.Owner, Created: isoTime(p.CreatedAt), Changed: isoTime(p.UpdatedAt),
+	}
+}
+
+func (a *API) playlistList(list []store.Playlist) []Playlist {
+	out := make([]Playlist, 0, len(list))
+	for i := range list {
+		out = append(out, a.playlistAttrs(&list[i]))
+	}
+	return out
 }
 
 var (
-	reSongID   = regexp.MustCompile(`^so-(\d+)$`)
-	reAlbumID  = regexp.MustCompile(`^al-(\d+)$`)
-	reArtistID = regexp.MustCompile(`^ar-([0-9a-f]{16})$`)
+	reSongID     = regexp.MustCompile(`^so-(\d+)$`)
+	reAlbumID    = regexp.MustCompile(`^al-(\d+)$`)
+	reArtistID   = regexp.MustCompile(`^ar-([0-9a-f]{16})$`)
+	rePlaylistID = regexp.MustCompile(`^pl-(\d+)$`)
 )
 
 func parseID(re *regexp.Regexp, s string) (int64, bool) {
@@ -503,6 +694,7 @@ func artistID(key string) string {
 
 func albumID(workID int64) string   { return "al-" + strconv.FormatInt(workID, 10) }
 func songID(editionID int64) string { return "so-" + strconv.FormatInt(editionID, 10) }
+func playlistID(id int64) string    { return "pl-" + strconv.FormatInt(id, 10) }
 
 func (a *API) artistList(artists []store.MusicArtist) []ArtistID3 {
 	out := make([]ArtistID3, 0, len(artists))

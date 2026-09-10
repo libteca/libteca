@@ -58,6 +58,7 @@ func (a *API) Mount(r *neutron.Router) {
 	r.HandleFunc("GET /covers/{cover}", a.cover)
 	a.MountReading(r)
 	a.MountUsers(r)
+	a.MountPlaylists(r)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

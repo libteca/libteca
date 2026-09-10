@@ -20,14 +20,15 @@ type Response struct {
 
 	Error *Error `xml:"error,omitempty" json:"error,omitempty"`
 
-	Artists       *ArtistsID3       `xml:"artists,omitempty" json:"artists,omitempty"`
-	Indexes       *Indexes          `xml:"indexes,omitempty" json:"indexes,omitempty"`
-	Artist        *ArtistWithAlbums `xml:"artist,omitempty" json:"artist,omitempty"`
-	Album         *AlbumWithSongs   `xml:"album,omitempty" json:"album,omitempty"`
-	Song          *Child            `xml:"song,omitempty" json:"song,omitempty"`
-	AlbumList2    *AlbumList2       `xml:"albumList2,omitempty" json:"albumList2,omitempty"`
-	SearchResult3 *SearchResult3    `xml:"searchResult3,omitempty" json:"searchResult3,omitempty"`
-	Playlists     *Playlists        `xml:"playlists,omitempty" json:"playlists,omitempty"`
+	Artists       *ArtistsID3        `xml:"artists,omitempty" json:"artists,omitempty"`
+	Indexes       *Indexes           `xml:"indexes,omitempty" json:"indexes,omitempty"`
+	Artist        *ArtistWithAlbums  `xml:"artist,omitempty" json:"artist,omitempty"`
+	Album         *AlbumWithSongs    `xml:"album,omitempty" json:"album,omitempty"`
+	Song          *Child             `xml:"song,omitempty" json:"song,omitempty"`
+	AlbumList2    *AlbumList2        `xml:"albumList2,omitempty" json:"albumList2,omitempty"`
+	SearchResult3 *SearchResult3     `xml:"searchResult3,omitempty" json:"searchResult3,omitempty"`
+	Playlists     *Playlists         `xml:"playlists,omitempty" json:"playlists,omitempty"`
+	Playlist      *PlaylistWithSongs `xml:"playlist,omitempty" json:"playlist,omitempty"`
 }
 
 type Error struct {
@@ -130,8 +131,19 @@ type Playlists struct {
 	Playlist []Playlist `xml:"playlist" json:"playlist"`
 }
 
+// corpus: playlist field set from the 1.16.1 docs, not captured traffic;
+// public/allowedUsers omitted (v1 owner-only), coverArt not modeled.
 type Playlist struct {
 	ID        string `xml:"id,attr" json:"id"`
 	Name      string `xml:"name,attr" json:"name"`
 	SongCount int    `xml:"songCount,attr" json:"songCount"`
+	Duration  int    `xml:"duration,attr" json:"duration"`
+	Owner     string `xml:"owner,attr,omitempty" json:"owner,omitempty"`
+	Created   string `xml:"created,attr" json:"created"`
+	Changed   string `xml:"changed,attr" json:"changed"`
+}
+
+type PlaylistWithSongs struct {
+	Playlist
+	Entry []Child `xml:"entry" json:"entry"`
 }

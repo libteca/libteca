@@ -105,6 +105,17 @@ func scanVideoLibrary(db *store.DB, lib *store.Library, coversDir string, tv boo
 			}
 			return group[i].episode < group[j].episode
 		})
+		skip := make([]bool, len(group))
+		anyChanged := false
+		for i := range group {
+			skip[i] = fileUnchanged(db, group[i].path, group[i].size, group[i].mtime)
+			if !skip[i] {
+				anyChanged = true
+			}
+		}
+		if !anyChanged {
+			continue
+		}
 		title, year := titleYear(filepath.Base(top))
 		authorPtr := nullable(year)
 		w := &store.Work{LibraryID: lib.ID, Title: title, Author: &authorPtr}
@@ -117,6 +128,9 @@ func scanVideoLibrary(db *store.DB, lib *store.Library, coversDir string, tv boo
 		}
 		for i := range group {
 			f := &group[i]
+			if skip[i] {
+				continue
+			}
 			if err := f.probe(); err != nil {
 				fmt.Fprintf(os.Stderr, "libteca: probe fail %s: %v\n", f.path, err)
 				continue
@@ -270,6 +284,17 @@ func scanMusicLibrary(db *store.DB, lib *store.Library, coversDir string, tr *tr
 	for _, top := range tops {
 		group := albums[top]
 		sort.Slice(group, func(i, j int) bool { return group[i].num < group[j].num })
+		skip := make([]bool, len(group))
+		anyChanged := false
+		for i := range group {
+			skip[i] = fileUnchanged(db, group[i].path, group[i].size, group[i].mtime)
+			if !skip[i] {
+				anyChanged = true
+			}
+		}
+		if !anyChanged {
+			continue
+		}
 		base := filepath.Base(top)
 		title, artist := base, ""
 		if i := strings.Index(base, " - "); i > 0 {
@@ -285,6 +310,9 @@ func scanMusicLibrary(db *store.DB, lib *store.Library, coversDir string, tr *tr
 			tr.work()
 		}
 		for i, t := range group {
+			if skip[i] {
+				continue
+			}
 			info, err := audio.Probe(t.path)
 			if err != nil {
 				continue

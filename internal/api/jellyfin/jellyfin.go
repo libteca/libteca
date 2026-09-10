@@ -42,6 +42,7 @@ func (a *API) trickplayer() *trickplay.Generator {
 
 func (a *API) Mount(r *neutron.Router) {
 	r.HandleFunc("GET /System/Info/Public", a.systemInfoPublic)
+	r.HandleFunc("GET /socket", a.handleSocket)
 	r.HandleFunc("POST /Users/AuthenticateByName", a.authenticate)
 	g := r.Group("", jfAuth(a.DB))
 	g.HandleFunc("GET /System/Configuration", a.configStub)
@@ -888,6 +889,7 @@ func (a *API) saveFromSession(w http.ResponseWriter, r *http.Request) {
 		IsFinished: dur > 0 && pos >= dur-5,
 	}
 	a.DB.SetProgress(p)
+	a.ReportPlayback(r, body.ItemId, body.PlaySessionId, body.PositionTicks, body.IsPaused)
 	write(w, 200, map[string]any{})
 }
 

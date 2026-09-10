@@ -677,9 +677,9 @@ func TestDualFormatEnvelope(t *testing.T) {
 	}
 }
 
-func TestPlaylistStubsReturn50(t *testing.T) {
+func TestPlaylistMissingIDReturns70(t *testing.T) {
 	e := newEnv(t)
-	for _, ep := range []string{"createPlaylist", "updatePlaylist", "deletePlaylist"} {
+	for _, ep := range []string{"updatePlaylist", "deletePlaylist"} {
 		rec := e.rest(t, ep, "name=x&f=json")
 		if rec.Code != 200 {
 			t.Fatalf("%s: HTTP %d", ep, rec.Code)
@@ -688,8 +688,8 @@ func TestPlaylistStubsReturn50(t *testing.T) {
 		if sr["status"] != "failed" {
 			t.Fatalf("%s: status %v", ep, sr["status"])
 		}
-		if code := subMap(t, sr, "error")["code"].(float64); code != 50 {
-			t.Fatalf("%s: code %v, want 50", ep, code)
+		if code := subMap(t, sr, "error")["code"].(float64); code != 70 {
+			t.Fatalf("%s: code %v, want 70 (missing id)", ep, code)
 		}
 	}
 }
