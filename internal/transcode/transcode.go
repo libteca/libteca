@@ -3,6 +3,7 @@ package transcode
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,27 +22,79 @@ const (
 	pollInterval             = 150 * time.Millisecond
 )
 
+// A hardware-accelerated ffmpeg dying within fallbackWindow of start is
+// retried once on software (probe said available, runtime disagreed).
+var fallbackWindow = 5 * time.Second
+
 var reSessionFile = regexp.MustCompile(`^(seg\d+\.ts|index\.m3u8)$`)
+
+type process interface {
+	start() error
+	wait() error
+	kill()
+}
+
+type realProcess struct{ cmd *exec.Cmd }
+
+func (p *realProcess) start() error {
+	p.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	return p.cmd.Start()
+}
+
+func (p *realProcess) wait() error { return p.cmd.Wait() }
+
+func (p *realProcess) kill() {
+	if p.cmd.Process == nil {
+		return
+	}
+	pgid, _ := syscall.Getpgid(p.cmd.Process.Pid)
+	if pgid > 0 {
+		syscall.Kill(-pgid, syscall.SIGKILL)
+		return
+	}
+	p.cmd.Process.Kill()
+}
 
 type Session struct {
 	ID      string
 	Edition int64
 	Dir     string
 	Source  string
-	cmd     *exec.Cmd
-	done    chan struct{}
-	lastHit time.Time
-	mu      sync.Mutex
+
+	accel           string
+	spawn           func(argv []string) process
+	proc            process
+	done            chan struct{}
+	fallbackPending bool
+	downgraded      bool
+	killed          bool
+	lastHit         time.Time
+	mu              sync.Mutex
 }
 
 type Manager struct {
-	DataDir  string
+	DataDir string
+
 	mu       sync.Mutex
 	sessions map[string]*Session
+
+	hwMu   sync.Mutex
+	hwSet  string
+	hwMode string
+
+	spawn    func(argv []string) process
+	probeRun func(argv []string) (string, error)
 }
 
 func New(dataDir string) *Manager {
 	m := &Manager{DataDir: dataDir, sessions: map[string]*Session{}}
+	m.spawn = func(argv []string) process {
+		return &realProcess{cmd: exec.Command("ffmpeg", argv...)}
+	}
+	m.probeRun = func(argv []string) (string, error) {
+		out, err := exec.Command("ffmpeg", argv...).Output()
+		return string(out), err
+	}
 	go m.reaper()
 	return m
 }
@@ -58,51 +111,104 @@ func (m *Manager) Get(sessionID string, edition int64, source string, startSecs 
 	}
 	dir := filepath.Join(m.DataDir, "transcode", sessionID)
 	os.MkdirAll(dir, 0o700)
-	s := &Session{ID: sessionID, Edition: edition, Dir: dir, Source: source, lastHit: time.Now()}
+	s := &Session{
+		ID:      sessionID,
+		Edition: edition,
+		Dir:     dir,
+		Source:  source,
+		accel:   m.accelMode(),
+		spawn:   m.spawn,
+		lastHit: time.Now(),
+	}
 	m.sessions[sessionID] = s
 	return s, s.start(startSecs)
 }
 
 func (s *Session) start(startSecs float64) error {
-	args := []string{"-y", "-v", "quiet"}
-	if startSecs > 1 {
-		args = append(args, "-ss", fmt.Sprintf("%.2f", startSecs))
+	if s.accel == "" {
+		s.accel = AccelNone
 	}
-	args = append(args,
-		"-i", s.Source,
-		"-map", "0:v:0", "-map", "0:a:0?",
-		"-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
-		"-c:a", "aac", "-b:a", "192k", "-ac", "2",
-		"-muxdelay", "0",
-		"-f", "hls",
-		"-hls_time", "4",
-		"-hls_init_time", "2",
-		"-hls_list_size", "0",
-		"-hls_flags", "independent_segments",
-		"-hls_segment_filename", filepath.Join(s.Dir, "seg%05d.ts"),
-		filepath.Join(s.Dir, "index.m3u8"),
-	)
-	s.cmd = exec.Command("ffmpeg", args...)
-	s.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if err := s.cmd.Start(); err != nil {
+	if s.accel != AccelNone {
+		s.mu.Lock()
+		s.fallbackPending = true
+		s.mu.Unlock()
+	}
+	if err := s.launch(startSecs, s.accel); err != nil {
+		s.mu.Lock()
+		s.fallbackPending = false
+		s.mu.Unlock()
 		return err
 	}
-	s.done = make(chan struct{})
+	if s.accel != AccelNone {
+		go s.watchFallback(startSecs)
+	}
+	return nil
+}
+
+func (s *Session) launch(startSecs float64, accel string) error {
+	args := buildArgs(accel, s.Source, s.Dir, startSecs, DefaultVideoBitrate)
+	p := s.spawn(args)
+	if err := p.start(); err != nil {
+		return err
+	}
+	done := make(chan struct{})
+	s.mu.Lock()
+	if s.killed {
+		s.mu.Unlock()
+		p.kill()
+		return nil
+	}
+	s.proc = p
+	s.done = done
+	s.mu.Unlock()
 	go func() {
-		s.cmd.Wait()
-		close(s.done)
+		p.wait()
+		close(done)
 	}()
 	return nil
 }
 
+// watchFallback retries a hardware session on software if its ffmpeg dies
+// within fallbackWindow of starting. Death by kill() is never retried.
+func (s *Session) watchFallback(startSecs float64) {
+	defer func() {
+		s.mu.Lock()
+		s.fallbackPending = false
+		s.mu.Unlock()
+	}()
+	s.mu.Lock()
+	first := s.done
+	accel := s.accel
+	s.mu.Unlock()
+	timer := time.NewTimer(fallbackWindow)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return
+	case <-first:
+	}
+	s.mu.Lock()
+	killed := s.killed
+	s.mu.Unlock()
+	if killed {
+		return
+	}
+	s.mu.Lock()
+	s.downgraded = true
+	s.mu.Unlock()
+	slog.Warn("transcode: hwaccel session died at startup, retrying with software", "session", s.ID, "accel", accel)
+	if err := s.launch(startSecs, AccelNone); err != nil {
+		slog.Warn("transcode: software fallback failed", "session", s.ID, "err", err)
+	}
+}
+
 func (s *Session) kill() {
-	if s.cmd != nil && s.cmd.Process != nil {
-		pgid, _ := syscall.Getpgid(s.cmd.Process.Pid)
-		if pgid > 0 {
-			syscall.Kill(-pgid, syscall.SIGKILL)
-		} else {
-			s.cmd.Process.Kill()
-		}
+	s.mu.Lock()
+	s.killed = true
+	p := s.proc
+	s.mu.Unlock()
+	if p != nil {
+		p.kill()
 	}
 	os.RemoveAll(s.Dir)
 }
@@ -142,14 +248,25 @@ func (m *Manager) TouchSession(id string) {
 	m.mu.Unlock()
 }
 
-// dead returns a channel closed when ffmpeg exits (nil if never started).
-// cmd/done are immutable per Session object after start returns.
-func (s *Session) dead() <-chan struct{} { return s.done }
+// dead returns a channel closed when the current ffmpeg process exits (nil
+// if never started). Swapped once by the software fallback.
+func (s *Session) dead() <-chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.done
+}
 
+// isDead reports whether the session's ffmpeg has exited for good: the
+// current process is gone and no software fallback is pending.
 func (s *Session) isDead() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.done == nil {
+		return false
+	}
 	select {
-	case <-s.dead():
-		return true
+	case <-s.done:
+		return !s.fallbackPending
 	default:
 		return false
 	}
@@ -173,8 +290,8 @@ func (s *Session) playlistLists(name string) bool {
 }
 
 // Prebuffer blocks until the first k segment files exist and are non-empty,
-// ffmpeg exits, ctx is done, or timeout passes. Returns how many of the first
-// k segments are on disk; never hangs.
+// ffmpeg exits for good, ctx is done, or timeout passes. Returns how many of
+// the first k segments are on disk; never hangs.
 func (s *Session) Prebuffer(ctx context.Context, k int, timeout time.Duration) int {
 	if k <= 0 {
 		k = DefaultPrebufferSegments
@@ -194,10 +311,11 @@ func (s *Session) Prebuffer(ctx context.Context, k int, timeout time.Duration) i
 		if ready >= k {
 			return ready
 		}
+		if s.isDead() {
+			return ready
+		}
 		select {
 		case <-ctx.Done():
-			return ready
-		case <-s.dead():
 			return ready
 		case <-timer.C:
 			return ready
@@ -227,7 +345,6 @@ func (s *Session) WaitForSegment(ctx context.Context, index int, timeout time.Du
 		select {
 		case <-ctx.Done():
 			return false
-		case <-s.dead():
 		case <-timer.C:
 			return false
 		case <-time.After(pollInterval):
@@ -247,8 +364,6 @@ func (s *Session) waitForFile(ctx context.Context, path string, timeout time.Dur
 		}
 		select {
 		case <-ctx.Done():
-			return false
-		case <-s.dead():
 			return false
 		case <-timer.C:
 			return false

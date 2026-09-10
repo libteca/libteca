@@ -4,12 +4,19 @@ import { useScan } from "../scan";
 import { IconScan } from "../components/svg";
 import { fmtRel } from "../util";
 import {
-  backLink, c, ghostBtn, input, loginCard, muted, primaryBtn, sectionTitle, td, th, table,
+  backLink, badge, c, ghostBtn, input, loginCard, mono, muted, primaryBtn, sectionTitle, td, th, table,
 } from "../styles";
 
 const TYPES = ["audiobooks", "movies", "tv", "music", "books", "comics"];
 
 type JobRow = ScanEvent & { id: number; libraryId: number; startedAt: number; createdAt?: number; error?: string };
+
+type AdminUser = { id: number; name: string; isAdmin: boolean; createdAtMs: number };
+
+type TokenRow = {
+  id: number; userId: number; label: string;
+  createdAtMs: number; lastSeenAtMs: number | null; revokedAtMs: number | null;
+};
 
 export function AdminView() {
   const [libs, setLibs] = useState<Library[]>([]);
@@ -17,9 +24,11 @@ export function AdminView() {
   const [type, setType] = useState("audiobooks");
   const [path, setPath] = useState("");
   const [msg, setMsg] = useState("");
+  const [users, setUsers] = useState<AdminUser[]>([]);
 
   const refresh = () => api("/libraries").then(setLibs).catch(() => setLibs([]));
-  useEffect(() => { refresh(); }, []);
+  const refreshUsers = () => api("/users").then((r: AdminUser[]) => setUsers(Array.isArray(r) ? r : [])).catch(() => setUsers([]));
+  useEffect(() => { refresh(); refreshUsers(); }, []);
 
   const add = async (e: Event) => {
     e.preventDefault();
@@ -55,6 +64,9 @@ export function AdminView() {
         <button style={primaryBtn} type="submit">Add & scan</button>
         {msg && <p style={muted}>{msg}</p>}
       </form>
+
+      <UsersSection users={users} onChanged={refreshUsers} />
+      <TokensSection users={users} />
 
       <ScanJobs libs={libs} />
     </div>
@@ -136,6 +148,192 @@ function ScanJobs(props: { libs: Library[] }) {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function UsersSection(props: { users: AdminUser[]; onChanged: () => void }) {
+  const [name, setName] = useState("");
+  const [password, setPassword] = useState("");
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  const create = async (e: Event) => {
+    e.preventDefault();
+    const res: { error?: string } = await api("/users", { method: "POST", body: JSON.stringify({ name, password, isAdmin }) });
+    if (res.error) { setMsg(res.error); return; }
+    setMsg("user created"); setName(""); setPassword(""); setIsAdmin(false);
+    props.onChanged();
+  };
+
+  return (
+    <section style={{ marginTop: "2.4rem", marginBottom: "2.4rem" }}>
+      <h3 style={{ ...sectionTitle, fontSize: "1rem" }}>Users</h3>
+      {props.users.length === 0 ? (
+        <p style={muted}>No users.</p>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table style={table}>
+            <thead>
+              <tr>
+                <th style={th}>Name</th>
+                <th style={th}>Role</th>
+                <th style={th}>Created</th>
+                <th style={th}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {props.users.map((u) => <UserRow key={u.id} u={u} onChanged={props.onChanged} />)}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <form style={{ ...loginCard, marginTop: "1.6rem" }} onSubmit={create}>
+        <h3 style={{ ...sectionTitle, fontSize: "1rem" }}>Add user</h3>
+        <input style={input} placeholder="name" value={name} onInput={(e) => setName((e.target as HTMLInputElement).value)} />
+        <input style={input} type="password" placeholder="password (min 8 chars)" value={password} onInput={(e) => setPassword((e.target as HTMLInputElement).value)} />
+        <label style={{ display: "flex", gap: "0.45rem", alignItems: "center", fontSize: "0.88rem", color: c.textDim, cursor: "pointer" }}>
+          <input type="checkbox" checked={isAdmin} onChange={(e) => setIsAdmin((e.target as HTMLInputElement).checked)} style={{ accentColor: c.accent }} />
+          admin
+        </label>
+        <button style={primaryBtn} type="submit">Create user</button>
+        {msg && <p style={muted}>{msg}</p>}
+      </form>
+    </section>
+  );
+}
+
+function UserRow(props: { u: AdminUser; onChanged: () => void }) {
+  const [confirmDel, setConfirmDel] = useState(false);
+  const [resetOpen, setResetOpen] = useState(false);
+  const [pass, setPass] = useState("");
+  const [msg, setMsg] = useState("");
+
+  const reset = async () => {
+    const res: { error?: string } = await api(`/users/${props.u.id}/password`, { method: "POST", body: JSON.stringify({ password: pass }) });
+    if (res.error) { setMsg(res.error); return; }
+    setMsg("password updated"); setResetOpen(false); setPass("");
+  };
+
+  const del = async () => {
+    const res: { error?: string } = await api(`/users/${props.u.id}`, { method: "DELETE" });
+    if (res.error) { setMsg(res.error); setConfirmDel(false); return; }
+    props.onChanged();
+  };
+
+  return (
+    <tr>
+      <td style={{ ...td, color: c.text, fontWeight: 600 }}>{props.u.name}</td>
+      <td style={td}>{props.u.isAdmin ? <span style={badge}>admin</span> : "—"}</td>
+      <td style={td}>{fmtRel(props.u.createdAtMs) || "—"}</td>
+      <td style={td}>
+        {msg ? (
+          <span style={{ ...muted, fontSize: "0.8rem" }}>{msg}</span>
+        ) : resetOpen ? (
+          <span style={{ display: "inline-flex", gap: "0.45rem", alignItems: "center", flexWrap: "wrap" }}>
+            <input style={{ ...input, padding: "0.35rem 0.6rem", fontSize: "0.85rem", width: "11rem" }} type="password" placeholder="new password" value={pass} onInput={(e) => setPass((e.target as HTMLInputElement).value)} />
+            <button style={ghostBtn} type="button" onClick={reset}>Save</button>
+            <button style={ghostBtn} type="button" onClick={() => { setResetOpen(false); setPass(""); }}>Cancel</button>
+          </span>
+        ) : confirmDel ? (
+          <span style={{ display: "inline-flex", gap: "0.45rem", alignItems: "center" }}>
+            <button style={{ ...ghostBtn, color: c.danger, borderColor: c.danger }} type="button" onClick={del}>Confirm delete</button>
+            <button style={ghostBtn} type="button" onClick={() => setConfirmDel(false)}>Cancel</button>
+          </span>
+        ) : (
+          <span style={{ display: "inline-flex", gap: "0.45rem", alignItems: "center" }}>
+            <button style={ghostBtn} type="button" onClick={() => setResetOpen(true)}>Reset password</button>
+            <button style={ghostBtn} type="button" onClick={() => setConfirmDel(true)}>Delete</button>
+          </span>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+function TokensSection(props: { users: AdminUser[] }) {
+  const [rows, setRows] = useState<TokenRow[]>([]);
+  const [label, setLabel] = useState("");
+  const [issued, setIssued] = useState("");
+  const [msg, setMsg] = useState("");
+
+  const load = () => api("/tokens").then((r: TokenRow[]) => setRows(Array.isArray(r) ? r : [])).catch(() => setRows([]));
+  useEffect(() => { load(); }, []);
+
+  const create = async (e: Event) => {
+    e.preventDefault();
+    const res: { token?: string; error?: string } = await api("/tokens", { method: "POST", body: JSON.stringify({ label }) });
+    if (res.error) { setMsg(res.error); return; }
+    setIssued(res.token || ""); setMsg(""); setLabel("");
+    load();
+  };
+
+  const revoke = async (id: number) => {
+    const res: { error?: string } = await api(`/tokens/${id}`, { method: "DELETE" });
+    if (res.error) { setMsg(res.error); return; }
+    load();
+  };
+
+  const nameOf = (id: number) => props.users.find((u) => u.id === id)?.name || `#${id}`;
+
+  return (
+    <section style={{ marginBottom: "2.4rem" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.9rem" }}>
+        <h3 style={{ ...sectionTitle, fontSize: "1rem", margin: 0 }}>Tokens</h3>
+        <button style={ghostBtn} onClick={load}>Refresh</button>
+      </div>
+      {rows.length === 0 ? (
+        <p style={muted}>No tokens yet.</p>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table style={table}>
+            <thead>
+              <tr>
+                <th style={th}>Label</th>
+                <th style={th}>User</th>
+                <th style={th}>Created</th>
+                <th style={th}>Last seen</th>
+                <th style={th}>Status</th>
+                <th style={th}>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((t) => (
+                <tr key={t.id}>
+                  <td style={{ ...td, color: c.text }}>{t.label}</td>
+                  <td style={td}>{nameOf(t.userId)}</td>
+                  <td style={td}>{fmtRel(t.createdAtMs) || "—"}</td>
+                  <td style={td}>{fmtRel(t.lastSeenAtMs) || "—"}</td>
+                  <td style={{ ...td, color: t.revokedAtMs ? c.danger : c.ok }}>{t.revokedAtMs ? "revoked" : "active"}</td>
+                  <td style={td}>
+                    {t.revokedAtMs ? "—" : (
+                      <button style={ghostBtn} type="button" onClick={() => revoke(t.id)}>Revoke</button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <form style={{ ...loginCard, marginTop: "1.6rem" }} onSubmit={create}>
+        <h3 style={{ ...sectionTitle, fontSize: "1rem" }}>Issue token</h3>
+        <input style={input} placeholder="label (e.g. phone)" value={label} onInput={(e) => setLabel((e.target as HTMLInputElement).value)} />
+        <button style={primaryBtn} type="submit">Issue</button>
+        {msg && <p style={muted}>{msg}</p>}
+      </form>
+
+      {issued && (
+        <div style={{ marginTop: "1rem", background: c.bgRaised, border: `1px solid ${c.line}`, borderRadius: "9px", padding: "0.9rem" }}>
+          <p style={muted}>Copy this token now — it will not be shown again.</p>
+          <code style={{ fontFamily: mono, fontSize: "0.82rem", wordBreak: "break-all", color: c.textDim }}>{issued}</code>
+          <div style={{ marginTop: "0.6rem" }}>
+            <button style={ghostBtn} type="button" onClick={() => setIssued("")}>Dismiss</button>
+          </div>
         </div>
       )}
     </section>

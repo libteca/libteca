@@ -1,0 +1,628 @@
+package subsonic
+
+import (
+	"crypto/md5"
+	"crypto/subtle"
+	"encoding/hex"
+	"encoding/json"
+	"encoding/xml"
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+	"unicode"
+
+	"github.com/cespare/xxhash/v2"
+	"github.com/libteca/libteca/internal/audio"
+	"github.com/libteca/libteca/internal/auth"
+	"github.com/libteca/libteca/internal/store"
+	"github.com/neutron-dev/neutron-go/neutron"
+)
+
+// ID scheme (stable, documented):
+//
+//	song   so-<edition id>
+//	album  al-<work id>
+//	artist ar-<16 hex, xxhash64 of the lowercased artist name>
+//
+// Artist ids are name-derived, not row-derived: an artist is a GROUP BY over
+// works.author across all type='music' libraries, so no single work id can
+// identify it. Same artist string always hashes to the same id.
+
+const (
+	apiVersion    = "1.16.1"
+	serverVersion = "0.1.0" // corpus: keep in sync with the release version
+)
+
+const (
+	errGeneric          = 0
+	errMissingParam     = 10
+	errWrongCredentials = 40
+	errNotImplemented   = 50
+	errNotFound         = 70
+)
+
+const ignoredArticles = "The El La Los Las Le Les" // corpus: value unverified against real servers
+
+type API struct {
+	DB  *store.DB
+	Dir string
+}
+
+func New(db *store.DB, dir string) *API {
+	return &API{DB: db, Dir: dir}
+}
+
+func (a *API) Mount(r *neutron.Router) {
+	routes := map[string]func(http.ResponseWriter, *http.Request, int64){
+		"ping":           a.ping,
+		"getArtists":     a.getArtists,
+		"getIndexes":     a.getIndexes,
+		"getArtist":      a.getArtist,
+		"getAlbum":       a.getAlbum,
+		"getSong":        a.getSong,
+		"getAlbumList2":  a.getAlbumList2,
+		"stream":         a.stream,
+		"download":       a.stream,
+		"getCoverArt":    a.getCoverArt,
+		"search3":        a.search3,
+		"scrobble":       a.scrobble,
+		"getPlaylists":   a.getPlaylists,
+		"createPlaylist": a.playlistStub,
+		"updatePlaylist": a.playlistStub,
+		"deletePlaylist": a.playlistStub,
+	}
+	for name, h := range routes {
+		for _, suffix := range []string{".view", ""} {
+			for _, method := range []string{"GET", "POST"} {
+				r.HandleFunc(method+" /rest/"+name+suffix, a.wrap(h))
+			}
+		}
+	}
+}
+
+func (a *API) wrap(h func(http.ResponseWriter, *http.Request, int64)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm()
+		uid, ok := a.authenticate(r)
+		if !ok {
+			a.respond(w, r, errResponse(errWrongCredentials, "Wrong username or password"))
+			return
+		}
+		h(w, r, uid)
+	}
+}
+
+// Token auth (t + s = md5(password+salt)) requires the plaintext password;
+// libteca stores argon2 hashes. The plaintext is captured in settings on the
+// first successful plain/hex login and reused for token verification after.
+// corpus: Navidrome stores reversible passwords for the same reason.
+func (a *API) authenticate(r *http.Request) (int64, bool) {
+	name := r.Form.Get("u")
+	if name == "" {
+		return 0, false
+	}
+	u, err := a.DB.UserByName(name)
+	if err != nil {
+		return 0, false
+	}
+	if token := r.Form.Get("t"); token != "" {
+		salt := r.Form.Get("s")
+		if salt == "" {
+			return 0, false
+		}
+		secret, has := a.DB.GetSetting(subsonicSecretKey(u.ID))
+		if !has {
+			return 0, false
+		}
+		sum := md5.Sum([]byte(secret + salt))
+		if subtle.ConstantTimeCompare([]byte(hex.EncodeToString(sum[:])), []byte(strings.ToLower(token))) != 1 {
+			return 0, false
+		}
+		return u.ID, true
+	}
+	pass := r.Form.Get("p")
+	if pass == "" {
+		return 0, false
+	}
+	if enc, found := strings.CutPrefix(pass, "enc:"); found {
+		raw, err := hex.DecodeString(enc)
+		if err != nil {
+			return 0, false
+		}
+		pass = string(raw)
+	}
+	if !auth.Verify(pass, u.PasswordHash) {
+		return 0, false
+	}
+	if cached, has := a.DB.GetSetting(subsonicSecretKey(u.ID)); !has || cached != pass {
+		a.DB.SetSetting(subsonicSecretKey(u.ID), pass)
+	}
+	return u.ID, true
+}
+
+func subsonicSecretKey(userID int64) string {
+	return "subsonic.pw." + strconv.FormatInt(userID, 10)
+}
+
+func ok() *Response {
+	return &Response{
+		XMLNS: "http://subsonic.org/restapi", Status: "ok", Version: apiVersion,
+		Type: "libteca", ServerVersion: serverVersion, OpenSubsonic: true,
+	}
+}
+
+func errResponse(code int, msg string) *Response {
+	resp := ok()
+	resp.Status = "failed"
+	resp.Error = &Error{Code: code, Message: msg}
+	return resp
+}
+
+// Subsonic errors travel in the envelope; HTTP status is 200 even on failure.
+func (a *API) respond(w http.ResponseWriter, r *http.Request, resp *Response) {
+	if strings.EqualFold(r.Form.Get("f"), "json") {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(struct {
+			SubsonicResponse *Response `json:"subsonic-response"`
+		}{resp})
+		return
+	}
+	w.Header().Set("Content-Type", "text/xml; charset=utf-8") // corpus: exact header value unverified
+	w.Write([]byte(xml.Header))
+	xml.NewEncoder(w).Encode(resp)
+}
+
+func (a *API) ping(w http.ResponseWriter, r *http.Request, _ int64) {
+	a.respond(w, r, ok())
+}
+
+func (a *API) getArtists(w http.ResponseWriter, r *http.Request, _ int64) {
+	artists, err := a.DB.MusicArtists()
+	if err != nil {
+		a.respond(w, r, errResponse(errGeneric, err.Error()))
+		return
+	}
+	resp := ok()
+	resp.Artists = &ArtistsID3{IgnoredArticles: ignoredArticles, Index: buildIndexesID3(artists)}
+	a.respond(w, r, resp)
+}
+
+func (a *API) getIndexes(w http.ResponseWriter, r *http.Request, _ int64) {
+	artists, err := a.DB.MusicArtists()
+	if err != nil {
+		a.respond(w, r, errResponse(errGeneric, err.Error()))
+		return
+	}
+	indexes := make([]Index, 0)
+	for _, ar := range artists {
+		letter := indexLetter(ar.Name)
+		if len(indexes) == 0 || indexes[len(indexes)-1].Name != letter {
+			indexes = append(indexes, Index{Name: letter})
+		}
+		last := &indexes[len(indexes)-1]
+		last.Artist = append(last.Artist, IndexArtist{ID: artistID(ar.Key), Name: ar.Name})
+	}
+	resp := ok()
+	resp.Indexes = &Indexes{IgnoredArticles: ignoredArticles, Index: indexes}
+	a.respond(w, r, resp)
+}
+
+func buildIndexesID3(artists []store.MusicArtist) []ArtistIndexID3 {
+	indexes := make([]ArtistIndexID3, 0)
+	for _, ar := range artists {
+		letter := indexLetter(ar.Name)
+		if len(indexes) == 0 || indexes[len(indexes)-1].Name != letter {
+			indexes = append(indexes, ArtistIndexID3{Name: letter})
+		}
+		last := &indexes[len(indexes)-1]
+		last.Artist = append(last.Artist, ArtistID3{ID: artistID(ar.Key), Name: ar.Name, AlbumCount: ar.AlbumCount})
+	}
+	return indexes
+}
+
+func indexLetter(name string) string {
+	runes := []rune(strings.ToUpper(name))
+	if len(runes) == 0 || !unicode.IsLetter(runes[0]) {
+		return "#"
+	}
+	return string(runes[0])
+}
+
+func (a *API) getArtist(w http.ResponseWriter, r *http.Request, _ int64) {
+	id := r.Form.Get("id")
+	if reArtistID.FindStringSubmatch(id) == nil {
+		a.respond(w, r, errResponse(errNotFound, "Artist not found"))
+		return
+	}
+	artists, err := a.DB.MusicArtists()
+	if err != nil {
+		a.respond(w, r, errResponse(errGeneric, err.Error()))
+		return
+	}
+	var found *store.MusicArtist
+	for i := range artists {
+		if artistID(artists[i].Key) == id {
+			found = &artists[i]
+			break
+		}
+	}
+	if found == nil {
+		a.respond(w, r, errResponse(errNotFound, "Artist not found"))
+		return
+	}
+	albums, err := a.DB.MusicAlbumsByArtistKey(found.Key)
+	if err != nil {
+		a.respond(w, r, errResponse(errGeneric, err.Error()))
+		return
+	}
+	resp := ok()
+	resp.Artist = &ArtistWithAlbums{
+		ArtistID3: ArtistID3{ID: id, Name: found.Name, AlbumCount: len(albums)},
+		Album:     a.albumList(albums),
+	}
+	a.respond(w, r, resp)
+}
+
+func (a *API) getAlbum(w http.ResponseWriter, r *http.Request, _ int64) {
+	workID, okID := parseID(reAlbumID, r.Form.Get("id"))
+	if !okID {
+		a.respond(w, r, errResponse(errNotFound, "Album not found"))
+		return
+	}
+	album, err := a.DB.MusicAlbumByID(workID)
+	if err != nil {
+		a.respond(w, r, errResponse(errNotFound, "Album not found"))
+		return
+	}
+	songs, err := a.DB.MusicSongsForWork(workID)
+	if err != nil {
+		a.respond(w, r, errResponse(errGeneric, err.Error()))
+		return
+	}
+	resp := ok()
+	resp.Album = &AlbumWithSongs{AlbumID3: a.albumID3(album), Song: a.songList(songs)}
+	a.respond(w, r, resp)
+}
+
+func (a *API) getSong(w http.ResponseWriter, r *http.Request, _ int64) {
+	song, err := a.resolveSong(r.Form.Get("id"))
+	if err != nil {
+		a.respond(w, r, errResponse(errNotFound, "Song not found"))
+		return
+	}
+	resp := ok()
+	child := a.songChild(song)
+	resp.Song = &child
+	a.respond(w, r, resp)
+}
+
+func (a *API) getAlbumList2(w http.ResponseWriter, r *http.Request, uid int64) {
+	size := intParam(r, "size", 10, 500)
+	offset := intParam(r, "offset", 0, 0)
+	var albums []store.MusicAlbum
+	var err error
+	switch r.Form.Get("type") {
+	case "newest":
+		albums, err = a.DB.MusicAlbumsNewest(size, offset)
+	case "recent":
+		albums, err = a.DB.MusicAlbumsRecent(uid, size, offset)
+	case "frequent":
+		albums, err = a.DB.MusicAlbumsFrequent(uid, size, offset)
+	case "random":
+		albums, err = a.DB.MusicAlbumsRandom(size, offset)
+	case "alphabeticalByName":
+		albums, err = a.DB.MusicAlbumsByName(size, offset)
+	case "alphabeticalByArtist":
+		albums, err = a.DB.MusicAlbumsByArtistOrder(size, offset)
+	case "starred", "highest", "byYear", "byGenre":
+		// no ratings/genres/year in the model yet: honest empty list
+	default:
+		a.respond(w, r, errResponse(errMissingParam, "Missing or invalid list type"))
+		return
+	}
+	if err != nil {
+		a.respond(w, r, errResponse(errGeneric, err.Error()))
+		return
+	}
+	resp := ok()
+	resp.AlbumList2 = &AlbumList2{Album: a.albumList(albums)}
+	a.respond(w, r, resp)
+}
+
+func (a *API) stream(w http.ResponseWriter, r *http.Request, _ int64) {
+	song, err := a.resolveSong(r.Form.Get("id"))
+	if err != nil {
+		http.Error(w, "not found", 404)
+		return
+	}
+	f, err := os.Open(song.File.Path)
+	if err != nil {
+		http.Error(w, "gone", 404)
+		return
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		http.Error(w, "gone", 404)
+		return
+	}
+	suffix, mime := songFormat(&song.File)
+	name := "song"
+	if suffix != "" {
+		name = "song." + suffix
+	}
+	// corpus: maxBitRate accepted and ignored (direct stream only this slice)
+	w.Header().Set("Content-Type", mime)
+	http.ServeContent(w, r, name, fi.ModTime(), f)
+}
+
+func (a *API) getCoverArt(w http.ResponseWriter, r *http.Request, _ int64) {
+	var workID int64
+	if id, okID := parseID(reAlbumID, r.Form.Get("id")); okID {
+		workID = id
+	} else if song, err := a.resolveSong(r.Form.Get("id")); err == nil {
+		workID = song.Work.ID
+	} else {
+		http.Error(w, "not found", 404)
+		return
+	}
+	album, err := a.DB.MusicAlbumByID(workID)
+	if err != nil || album.CoverPath == nil || *album.CoverPath == "" {
+		http.Error(w, "not found", 404)
+		return
+	}
+	f, err := os.Open(filepath.Join(a.Dir, "covers", *album.CoverPath))
+	if err != nil {
+		http.Error(w, "not found", 404)
+		return
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		http.Error(w, "not found", 404)
+		return
+	}
+	// corpus: size param ignored (no thumbnailer)
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	http.ServeContent(w, r, "cover.jpg", fi.ModTime(), f)
+}
+
+func (a *API) search3(w http.ResponseWriter, r *http.Request, _ int64) {
+	query := r.Form.Get("query")
+	if query == "" {
+		a.respond(w, r, errResponse(errMissingParam, "Required parameter 'query' missing"))
+		return
+	}
+	artistCount := intParam(r, "artistCount", 20, 500)
+	albumCount := intParam(r, "albumCount", 20, 500)
+	songCount := intParam(r, "songCount", 20, 500)
+	artists, err := a.DB.MusicArtistsSearch(query, artistCount, intParam(r, "artistOffset", 0, 0))
+	if err != nil {
+		a.respond(w, r, errResponse(errGeneric, err.Error()))
+		return
+	}
+	albums, err := a.DB.MusicAlbumsSearch(query, albumCount, intParam(r, "albumOffset", 0, 0))
+	if err != nil {
+		a.respond(w, r, errResponse(errGeneric, err.Error()))
+		return
+	}
+	songs, err := a.DB.MusicSongsSearch(query, songCount, intParam(r, "songOffset", 0, 0))
+	if err != nil {
+		a.respond(w, r, errResponse(errGeneric, err.Error()))
+		return
+	}
+	resp := ok()
+	resp.SearchResult3 = &SearchResult3{Artist: a.artistList(artists), Album: a.albumList(albums), Song: a.songList(songs)}
+	a.respond(w, r, resp)
+}
+
+// Scrobble maps onto the same progress rows the ABS and Jellyfin faces write:
+// submission=true marks the track finished at full duration, submission=false
+// resets to position 0 (now playing). corpus: time param ignored.
+func (a *API) scrobble(w http.ResponseWriter, r *http.Request, uid int64) {
+	ids := r.Form["id"]
+	if len(ids) == 0 {
+		a.respond(w, r, errResponse(errMissingParam, "Required parameter 'id' missing"))
+		return
+	}
+	submission := r.Form.Get("submission") != "false"
+	songs := make([]store.MusicSong, 0, len(ids))
+	for _, id := range ids {
+		song, err := a.resolveSong(id)
+		if err != nil {
+			a.respond(w, r, errResponse(errNotFound, "Song not found: "+id))
+			return
+		}
+		songs = append(songs, *song)
+	}
+	device := "subsonic"
+	for i := range songs {
+		s := &songs[i]
+		dur := songDuration(s)
+		pos := dur
+		if !submission {
+			pos = 0
+		}
+		fileID := s.File.ID
+		a.DB.SetProgress(&store.Progress{
+			UserID: uid, EditionID: s.Edition.ID, FileID: &fileID,
+			EditionPositionSecs: pos, DurationSecs: &dur,
+			IsFinished: submission, Device: &device,
+		})
+	}
+	a.respond(w, r, ok())
+}
+
+func (a *API) getPlaylists(w http.ResponseWriter, r *http.Request, _ int64) {
+	resp := ok()
+	resp.Playlists = &Playlists{Playlist: []Playlist{}}
+	a.respond(w, r, resp)
+}
+
+// Playlists need a playlists migration (0006, owned elsewhere); these are
+// honest not-implemented errors, not fake successes.
+func (a *API) playlistStub(w http.ResponseWriter, r *http.Request, _ int64) {
+	a.respond(w, r, errResponse(errNotImplemented, "Playlists are not implemented"))
+}
+
+var (
+	reSongID   = regexp.MustCompile(`^so-(\d+)$`)
+	reAlbumID  = regexp.MustCompile(`^al-(\d+)$`)
+	reArtistID = regexp.MustCompile(`^ar-([0-9a-f]{16})$`)
+)
+
+func parseID(re *regexp.Regexp, s string) (int64, bool) {
+	m := re.FindStringSubmatch(s)
+	if m == nil {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(m[1], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return id, true
+}
+
+func (a *API) resolveSong(id string) (*store.MusicSong, error) {
+	eid, okID := parseID(reSongID, id)
+	if !okID {
+		return nil, store.ErrNotFound
+	}
+	return a.DB.MusicSongByID(eid)
+}
+
+func artistID(key string) string {
+	return fmt.Sprintf("ar-%016x", xxhash.Sum64([]byte(key)))
+}
+
+func albumID(workID int64) string   { return "al-" + strconv.FormatInt(workID, 10) }
+func songID(editionID int64) string { return "so-" + strconv.FormatInt(editionID, 10) }
+
+func (a *API) artistList(artists []store.MusicArtist) []ArtistID3 {
+	out := make([]ArtistID3, 0, len(artists))
+	for i := range artists {
+		out = append(out, ArtistID3{ID: artistID(artists[i].Key), Name: artists[i].Name, AlbumCount: artists[i].AlbumCount})
+	}
+	return out
+}
+
+func (a *API) albumList(albums []store.MusicAlbum) []AlbumID3 {
+	out := make([]AlbumID3, 0, len(albums))
+	for i := range albums {
+		out = append(out, a.albumID3(&albums[i]))
+	}
+	return out
+}
+
+func (a *API) songList(songs []store.MusicSong) []Child {
+	out := make([]Child, 0, len(songs))
+	for i := range songs {
+		out = append(out, a.songChild(&songs[i]))
+	}
+	return out
+}
+
+func (a *API) albumID3(m *store.MusicAlbum) AlbumID3 {
+	artist := authorName(m.Author)
+	album := AlbumID3{
+		ID: albumID(m.ID), Name: m.Title,
+		Artist: artist, ArtistID: artistID(strings.ToLower(artist)),
+		SongCount: m.SongCount, Duration: int(m.Duration + 0.5),
+		Created: isoTime(m.CreatedAt), // corpus: timestamp format unverified
+	}
+	if m.CoverPath != nil && *m.CoverPath != "" {
+		album.CoverArt = album.ID
+	}
+	return album
+}
+
+func (a *API) songChild(s *store.MusicSong) Child {
+	artist := authorName(s.Work.Author)
+	suffix, mime := songFormat(&s.File)
+	bitRate := 0
+	if s.File.Bitrate != nil {
+		bitRate = int(*s.File.Bitrate / 1000)
+	}
+	child := Child{
+		ID: songID(s.Edition.ID), Parent: albumID(s.Work.ID),
+		IsDir: false, Title: s.Edition.Title,
+		Album: s.Work.Title, Artist: artist,
+		Track:       int(s.Edition.Position),
+		Size:        s.File.SizeBytes,
+		ContentType: mime, Suffix: suffix,
+		Duration: int(songDuration(s) + 0.5), BitRate: bitRate,
+		IsVideo:  false,
+		Created:  isoTime(s.Edition.CreatedAt),
+		AlbumID:  albumID(s.Work.ID),
+		ArtistID: artistID(strings.ToLower(artist)),
+		Type:     "music",
+	}
+	if s.Work.CoverPath != nil && *s.Work.CoverPath != "" {
+		child.CoverArt = child.Parent
+	}
+	return child
+}
+
+func authorName(author *string) string {
+	if author == nil || strings.TrimSpace(*author) == "" {
+		return "Unknown Artist"
+	}
+	return *author
+}
+
+func songDuration(s *store.MusicSong) float64 {
+	if s.File.DurationSecs > 0 {
+		return s.File.DurationSecs
+	}
+	if s.Edition.DurationSecs != nil {
+		return *s.Edition.DurationSecs
+	}
+	return 0
+}
+
+var containerSuffixes = []string{"mp3", "flac", "ogg", "opus", "wav", "aac", "m4a", "mp4", "mov", "webm", "wma"}
+
+func songFormat(f *store.FileRec) (suffix, contentType string) {
+	container, codec := "", ""
+	if f.Container != nil {
+		container = *f.Container
+	}
+	if f.Codec != nil {
+		codec = *f.Codec
+	}
+	for _, want := range containerSuffixes {
+		if strings.Contains(","+container+",", ","+want+",") {
+			suffix = want
+			break
+		}
+	}
+	if suffix == "" && codec != "" {
+		suffix = codec
+	}
+	return suffix, audio.MimeType(codec, container)
+}
+
+func isoTime(unixMilli int64) string {
+	return time.UnixMilli(unixMilli).UTC().Format("2006-01-02T15:04:05.000Z")
+}
+
+func intParam(r *http.Request, key string, def, max int) int {
+	v := r.Form.Get(key)
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return def
+	}
+	if max > 0 && n > max {
+		n = max
+	}
+	return n
+}

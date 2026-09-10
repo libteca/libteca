@@ -56,6 +56,8 @@ func (a *API) Mount(r *neutron.Router) {
 	r.HandleFunc("POST /progress/{editionId}", a.setProgress)
 	r.HandleFunc("GET /stream/{fileId}", a.stream)
 	r.HandleFunc("GET /covers/{cover}", a.cover)
+	a.MountReading(r)
+	a.MountUsers(r)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -532,6 +534,7 @@ func (a *API) work(w http.ResponseWriter, r *http.Request) {
 		for i := range progress {
 			pmap[progress[i].EditionID] = &progress[i]
 		}
+		pageCounts, _ := a.DB.PageCountsByWork(id)
 		eds := make([]map[string]any, 0, len(full.Editions))
 		for _, ev := range full.Editions {
 			chapters := []map[string]any{}
@@ -563,6 +566,9 @@ func (a *API) work(w http.ResponseWriter, r *http.Request) {
 			if ev.EpisodeNum != nil {
 				e["episodeNum"] = *ev.EpisodeNum
 			}
+			if pc := pageCounts[ev.ID]; pc != nil {
+				e["pageCount"] = *pc
+			}
 			if p, ok := pmap[ev.ID]; ok {
 				e["position"] = p.EditionPositionSecs
 				e["isFinished"] = p.IsFinished
@@ -589,16 +595,26 @@ type audioChapter struct {
 
 func (a *API) getProgress(w http.ResponseWriter, r *http.Request) {
 	eid := auth.Atoi64(r.PathValue("editionId"))
-	p, err := a.DB.GetProgress(auth.UserID(r), eid)
+	p, err := a.DB.GetReadingProgress(auth.UserID(r), eid)
 	if err != nil {
 		writeJSON(w, 200, map[string]any{"editionId": eid, "position": 0, "isFinished": false})
 		return
 	}
-	writeJSON(w, 200, map[string]any{
+	m := map[string]any{
 		"editionId": p.EditionID, "fileId": p.FileID, "offset": p.FileOffsetSecs,
 		"position": p.EditionPositionSecs, "duration": p.DurationSecs, "isFinished": p.IsFinished,
 		"updatedAt": p.UpdatedAt,
-	})
+	}
+	if p.Page != nil {
+		m["page"] = *p.Page
+	}
+	if p.Percent != nil {
+		m["percent"] = *p.Percent
+	}
+	if p.Locator != nil {
+		m["locator"] = *p.Locator
+	}
+	writeJSON(w, 200, m)
 }
 
 func (a *API) setProgress(w http.ResponseWriter, r *http.Request) {
@@ -608,13 +624,20 @@ func (a *API) setProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Position float64 `json:"position"`
-		Duration float64 `json:"duration"`
-		Finished bool    `json:"finished"`
-		Device   string  `json:"device"`
+		Position float64  `json:"position"`
+		Duration float64  `json:"duration"`
+		Finished bool     `json:"finished"`
+		Device   string   `json:"device"`
+		Page     *int64   `json:"page"`
+		Percent  *float64 `json:"percent"`
+		Locator  *string  `json:"locator"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, 400, map[string]string{"error": "bad request"})
+		return
+	}
+	if body.Percent != nil && (*body.Percent < 0 || *body.Percent > 1) {
+		writeJSON(w, 400, map[string]string{"error": "percent must be between 0 and 1"})
 		return
 	}
 	ed, _ := a.DB.EditionByID(eid)
@@ -623,11 +646,14 @@ func (a *API) setProgress(w http.ResponseWriter, r *http.Request) {
 	if body.Duration > 0 {
 		dur = &body.Duration
 	}
-	p := &store.Progress{
-		UserID: auth.UserID(r), EditionID: eid, FileID: &fileID, FileOffsetSecs: offset,
-		EditionPositionSecs: body.Position, DurationSecs: dur, IsFinished: body.Finished,
+	p := &store.ReadingProgress{
+		Progress: store.Progress{
+			UserID: auth.UserID(r), EditionID: eid, FileID: &fileID, FileOffsetSecs: offset,
+			EditionPositionSecs: body.Position, DurationSecs: dur, IsFinished: body.Finished,
+		},
+		Page: body.Page, Percent: body.Percent, Locator: body.Locator,
 	}
-	if err := a.DB.SetProgress(p); err != nil {
+	if err := a.DB.SetReadingProgress(p); err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
 	}

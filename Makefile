@@ -1,7 +1,10 @@
 BIN := libteca
 WEBDIST := internal/server/webdist
+BENCH_SEED_DIR ?= data/bench-seed
+SEED_KIND ?= audio
+SEED_COUNT ?= 10000
 
-.PHONY: build web test clean run smoke record corpus
+.PHONY: build web test clean run smoke record corpus bench bench-idle bench-scan bench-transcode seed
 
 build: web
 	go build -o $(BIN) ./cmd/libteca
@@ -29,3 +32,19 @@ record:
 
 corpus:
 	python3 tools/record/sanitize.py
+
+# PLAN §10 benchmarks (tools/bench is standalone; cmd/libteca untouched).
+# Results land in bench/results/<date>-<kind>.json (gitignored).
+bench: bench-idle bench-scan bench-transcode
+
+bench-idle:
+	go run ./tools/bench idle
+
+bench-scan:
+	go run ./tools/bench scan
+
+bench-transcode:
+	go run ./tools/bench transcode
+
+seed:
+	go run ./tools/seed --kind $(SEED_KIND) --count $(SEED_COUNT) --out $(BENCH_SEED_DIR)/$(SEED_KIND)

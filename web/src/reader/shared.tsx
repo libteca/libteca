@@ -1,0 +1,368 @@
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
+import type { ComponentChildren, CSSProperties } from "preact";
+import { api, media } from "../api";
+import { c, font, iconBtn } from "../styles";
+
+export type ReaderMode = "single" | "double" | "webtoon";
+export type FitMode = "width" | "height";
+
+export type ReadingProgress = {
+  position?: number; duration?: number; isFinished?: boolean;
+  page?: number; percent?: number; locator?: string;
+};
+
+export type ProgressPost = { page?: number; percent?: number; locator?: string; finished?: boolean };
+
+export type SaveState = "idle" | "saving" | "saved" | "error";
+
+const SAVE_INTERVAL_MS = 5000;
+
+export function clamp01(n: number): number {
+  return n < 0 ? 0 : n > 1 ? 1 : n;
+}
+
+const PAGE_IMAGE_RE = /\.(jpe?g|png|gif|webp|avif|bmp|jxl)$/i;
+
+export function pageImageNames(names: readonly string[]): string[] {
+  const keep = names.filter((n) => {
+    const slash = n.lastIndexOf("/");
+    const base = slash >= 0 ? n.slice(slash + 1) : n;
+    if (!PAGE_IMAGE_RE.test(base)) return false;
+    if (base.startsWith(".") || base.startsWith("._")) return false;
+    return !n.toUpperCase().includes("__MACOSX");
+  });
+  const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+  return keep.sort(collator.compare);
+}
+
+export function pagePercent(page: number, count: number): number {
+  if (count <= 0) return 0;
+  return clamp01(page / count);
+}
+
+export function pairStart(index: number): number {
+  return index - (index % 2);
+}
+
+export function stepPage(i: number, dir: 1 | -1, mode: ReaderMode, count: number): number | null {
+  if (count <= 0 || i < 0 || i >= count) return null;
+  const base = mode === "double" ? pairStart(i) : i;
+  const stride = mode === "double" ? 2 : 1;
+  const next = base + dir * stride;
+  if (next < 0 || next >= count) return null;
+  return next;
+}
+
+export function loadPref<T extends string>(key: string, fallback: T, valid: readonly T[]): T {
+  try {
+    const v = localStorage.getItem(key);
+    return valid.includes(v as T) ? (v as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+export function savePref(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch { /* storage unavailable */ }
+}
+
+export function useProgressSaver(editionId: number) {
+  const [state, setState] = useState<SaveState>("idle");
+  const queued = useRef<ProgressPost | null>(null);
+  const timer = useRef<number | undefined>(undefined);
+  const lastSent = useRef(0);
+
+  const post = useCallback(async (body: ProgressPost, beacon: boolean) => {
+    if (beacon) {
+      const url = media(`/progress/${editionId}`);
+      const payload = JSON.stringify(body);
+      let sent = false;
+      if (navigator.sendBeacon) {
+        try { sent = navigator.sendBeacon(url, new Blob([payload], { type: "application/json" })); } catch { sent = false; }
+      }
+      if (!sent) {
+        try { await fetch(url, { method: "POST", body: payload, headers: { "Content-Type": "application/json" }, keepalive: true }); } catch { /* best effort */ }
+      }
+      return;
+    }
+    setState("saving");
+    try {
+      await api(`/progress/${editionId}`, { method: "POST", body: JSON.stringify(body) });
+      setState("saved");
+      window.setTimeout(() => setState((s) => (s === "saved" ? "idle" : s)), 1600);
+    } catch {
+      setState("error");
+    }
+  }, [editionId]);
+
+  const deliver = useCallback(() => {
+    if (timer.current !== undefined) { clearTimeout(timer.current); timer.current = undefined; }
+    const body = queued.current;
+    queued.current = null;
+    if (!body) return;
+    lastSent.current = Date.now();
+    void post(body, false);
+  }, [post]);
+
+  const save = useCallback((body: ProgressPost) => {
+    queued.current = body;
+    const wait = SAVE_INTERVAL_MS - (Date.now() - lastSent.current);
+    if (wait <= 0) { deliver(); return; }
+    if (timer.current === undefined) {
+      timer.current = window.setTimeout(() => { timer.current = undefined; deliver(); }, wait);
+    }
+  }, [deliver]);
+
+  const flush = useCallback(() => {
+    if (timer.current !== undefined) { clearTimeout(timer.current); timer.current = undefined; }
+    const body = queued.current;
+    queued.current = null;
+    if (!body) return;
+    void post(body, true);
+  }, [post]);
+
+  useEffect(() => {
+    const onVis = () => { if (document.visibilityState === "hidden") flush(); };
+    const onLeave = () => flush();
+    document.addEventListener("visibilitychange", onVis);
+    addEventListener("pagehide", onLeave);
+    addEventListener("beforeunload", onLeave);
+    return () => {
+      document.removeEventListener("visibilitychange", onVis);
+      removeEventListener("pagehide", onLeave);
+      removeEventListener("beforeunload", onLeave);
+      flush();
+    };
+  }, [flush]);
+
+  return { save, flush, state };
+}
+
+export function isTypingTarget(e: KeyboardEvent): boolean {
+  const t = e.target as HTMLElement | null;
+  return !!t && (t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+}
+
+/* ---- UI below ---- */
+
+type IconProps = { size?: number };
+
+function svgProps(size: number) {
+  return {
+    width: size, height: size, viewBox: "0 0 24 24",
+    fill: "none", stroke: "currentColor", strokeWidth: 1.8,
+    strokeLinecap: "round" as const, strokeLinejoin: "round" as const,
+    style: { display: "block", flexShrink: 0 },
+  };
+}
+
+export function IconArrowLeft(p: IconProps) {
+  return (
+    <svg {...svgProps(p.size ?? 18)}>
+      <path d="M19 12H5M11 5.5L4.5 12l6.5 6.5" />
+    </svg>
+  );
+}
+
+export function IconContents(p: IconProps) {
+  return (
+    <svg {...svgProps(p.size ?? 16)}>
+      <path d="M8.5 6H20M8.5 12H20M8.5 18H20" />
+      <path d="M4.5 6h0.01M4.5 12h0.01M4.5 18h0.01" strokeWidth={2.4} />
+    </svg>
+  );
+}
+
+export function IconPlus(p: IconProps) {
+  return (
+    <svg {...svgProps(p.size ?? 16)}>
+      <path d="M12 5.5v13M5.5 12h13" />
+    </svg>
+  );
+}
+
+export function IconMinus(p: IconProps) {
+  return (
+    <svg {...svgProps(p.size ?? 16)}>
+      <path d="M5.5 12h13" />
+    </svg>
+  );
+}
+
+export function IconPageSingle(p: IconProps) {
+  return (
+    <svg {...svgProps(p.size ?? 16)}>
+      <rect x="7" y="4.5" width="10" height="15" rx="1.5" />
+    </svg>
+  );
+}
+
+export function IconPageDouble(p: IconProps) {
+  return (
+    <svg {...svgProps(p.size ?? 16)}>
+      <rect x="3.5" y="4.5" width="7.5" height="15" rx="1.5" />
+      <rect x="13" y="4.5" width="7.5" height="15" rx="1.5" />
+    </svg>
+  );
+}
+
+export function IconWebtoon(p: IconProps) {
+  return (
+    <svg {...svgProps(p.size ?? 16)}>
+      <path d="M12 4.5v15" />
+      <path d="M8.5 8L12 4.5 15.5 8" />
+      <path d="M8.5 16l3.5 3.5 3.5-3.5" />
+    </svg>
+  );
+}
+
+export function IconFitWidth(p: IconProps) {
+  return (
+    <svg {...svgProps(p.size ?? 16)}>
+      <path d="M4 12h16M8 8l-4 4 4 4M16 8l4 4-4 4" />
+    </svg>
+  );
+}
+
+export function IconFitHeight(p: IconProps) {
+  return (
+    <svg {...svgProps(p.size ?? 16)}>
+      <path d="M12 4v16M8 8l4-4 4 4M8 16l4 4 4-4" />
+    </svg>
+  );
+}
+
+export function IconRtl(p: IconProps) {
+  return (
+    <svg {...svgProps(p.size ?? 16)}>
+      <path d="M17.5 8.5H6.5L9.5 5.5" />
+      <path d="M6.5 15.5h11M14.5 18.5l3-3-3-3" />
+    </svg>
+  );
+}
+
+export function IconClose(p: IconProps) {
+  return (
+    <svg {...svgProps(p.size ?? 16)}>
+      <path d="M6.5 6.5l11 11M17.5 6.5l-11 11" />
+    </svg>
+  );
+}
+
+export function IconDownload(p: IconProps) {
+  return (
+    <svg {...svgProps(p.size ?? 15)}>
+      <path d="M12 4v11M7.5 10.5L12 15l4.5-4.5" />
+      <path d="M5 19.5h14" />
+    </svg>
+  );
+}
+
+export function IconChevLeft(p: IconProps) {
+  return (
+    <svg {...svgProps(p.size ?? 18)}>
+      <path d="M14.5 5.5L8 12l6.5 6.5" />
+    </svg>
+  );
+}
+
+export function IconChevRight(p: IconProps) {
+  return (
+    <svg {...svgProps(p.size ?? 18)}>
+      <path d="M9.5 5.5L16 12l-6.5 6.5" />
+    </svg>
+  );
+}
+
+export function IconCheckSmall(p: IconProps) {
+  return (
+    <svg {...svgProps(p.size ?? 14)}>
+      <path d="M5 12.5l4.5 4.5L19 7.5" />
+    </svg>
+  );
+}
+
+export const readerOverlay: CSSProperties = {
+  position: "fixed", inset: 0, zIndex: 60,
+  background: c.bg, display: "flex", flexDirection: "column", fontFamily: font,
+};
+
+export const readerBar: CSSProperties = {
+  display: "flex", alignItems: "center", gap: "0.7rem", flexWrap: "wrap", rowGap: "0.3rem",
+  padding: "0.4rem 0.9rem", borderBottom: `1px solid ${c.lineSoft}`,
+  background: "rgba(18, 19, 22, 0.92)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)",
+};
+
+export const readerControls: CSSProperties = {
+  display: "flex", alignItems: "center", gap: "0.25rem", flexWrap: "wrap", rowGap: "0.4rem",
+  padding: "0.35rem 0.9rem", borderBottom: `1px solid ${c.lineSoft}`,
+};
+
+export const readerStage: CSSProperties = {
+  position: "relative", flex: 1, minHeight: 0, display: "flex", overflow: "hidden",
+  userSelect: "none", WebkitUserSelect: "none",
+};
+
+export const toolBtn: CSSProperties = {
+  ...iconBtn, width: "2.1rem", height: "2.1rem", borderRadius: "8px",
+};
+
+export function toolBtnActive(active: boolean): CSSProperties {
+  return active ? { ...toolBtn, color: c.accent, background: c.accentSoft } : toolBtn;
+}
+
+export const drawerPanel: CSSProperties = {
+  position: "absolute", top: 0, right: 0, bottom: 0, width: "min(20rem, 85vw)",
+  background: c.bgRaised, borderLeft: `1px solid ${c.line}`, zIndex: 20,
+  display: "flex", flexDirection: "column", boxShadow: "0 0 34px rgba(0,0,0,0.5)",
+};
+
+export const drawerItem: CSSProperties = {
+  display: "block", width: "100%", textAlign: "left", background: "none", border: "none",
+  borderBottom: `1px solid ${c.lineSoft}`, color: c.textDim, fontFamily: font, fontSize: "0.88rem",
+  padding: "0.65rem 1rem", cursor: "pointer",
+};
+
+export function ReaderMessage(props: { text: string; onBack?: () => void }) {
+  return (
+    <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", gap: "0.8rem", alignItems: "center", justifyContent: "center", color: c.muted, fontSize: "0.9rem", padding: "1rem", textAlign: "center" }}>
+      <span>{props.text}</span>
+      {props.onBack && <button style={{ ...toolBtn, border: `1px solid ${c.line}`, width: "auto", padding: "0.35rem 1rem", fontSize: "0.82rem", gap: "0.35rem", color: c.textDim }} onClick={props.onBack}><IconArrowLeft size={15} /> Back</button>}
+    </div>
+  );
+}
+
+export function TopBar(props: { title: string; meta?: string; saveState: SaveState | null; onBack: () => void; children?: ComponentChildren }) {
+  return (
+    <div style={readerBar}>
+      <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", minWidth: 0, flex: 1 }}>
+        <button style={toolBtn} aria-label="Back" title="Back (Esc)" onClick={props.onBack}><IconArrowLeft size={17} /></button>
+        <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 600, fontSize: "0.92rem", lineHeight: 1.3 }}>{props.title}</span>
+          {props.meta && <span style={{ color: c.muted, fontSize: "0.72rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", lineHeight: 1.3 }}>{props.meta}</span>}
+        </div>
+      </div>
+      {props.saveState && props.saveState !== "idle" && (
+        <span style={{ color: props.saveState === "error" ? c.danger : c.muted, fontSize: "0.72rem", flexShrink: 0 }}>
+          {props.saveState === "saving" ? "saving…" : props.saveState === "saved" ? "saved" : "save failed"}
+        </span>
+      )}
+      {props.children != null && <div style={{ display: "flex", alignItems: "center", gap: "0.15rem", flexShrink: 0 }}>{props.children}</div>}
+    </div>
+  );
+}
+
+export function TapZones(props: { onLeft: () => void; onRight: () => void }) {
+  const zone: CSSProperties = {
+    position: "absolute", top: 0, bottom: 0, width: "33.333%", zIndex: 5,
+    background: "transparent", border: "none", padding: 0, cursor: "pointer", outline: "none",
+  };
+  return (
+    <div style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
+      <button aria-label="Previous page" style={{ ...zone, left: 0, pointerEvents: "auto" }} onClick={props.onLeft} />
+      <button aria-label="Next page" style={{ ...zone, right: 0, pointerEvents: "auto" }} onClick={props.onRight} />
+    </div>
+  );
+}

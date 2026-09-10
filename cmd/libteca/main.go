@@ -1,14 +1,19 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/libteca/libteca/internal/auth"
+	"github.com/libteca/libteca/internal/podcast"
 	"github.com/libteca/libteca/internal/scan"
 	"github.com/libteca/libteca/internal/server"
 	"github.com/libteca/libteca/internal/store"
@@ -19,6 +24,7 @@ func main() {
 	port := flag.Int("port", 8096, "listen port")
 	initAdmin := flag.String("init-admin", "", "create admin as name:password")
 	scanOnly := flag.Bool("scan", false, "scan all libraries then exit")
+	hwaccel := flag.String("hwaccel", "", "video hwaccel: auto|none|videotoolbox|vaapi|nvenc|qsv (default: $LIBTECA_HWACCEL)")
 	flag.Parse()
 
 	abs, err := filepath.Abs(*data)
@@ -60,14 +66,27 @@ func main() {
 	}
 
 	srv := server.New(db, abs)
+	srv.HWAccel = *hwaccel
+
+	podcasts := podcast.New(db, abs)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go podcasts.Run(ctx)
+
 	h := &http.Server{
 		Addr:              fmt.Sprintf(":%d", *port),
 		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
+	go func() {
+		<-ctx.Done()
+		h.Shutdown(context.Background())
+	}()
 	fmt.Printf("libteca listening on :%d (data: %s)\n", *port, abs)
-	fatal(h.ListenAndServe())
+	if err := h.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		fatal(err)
+	}
 }
 
 func fatal(err error) {

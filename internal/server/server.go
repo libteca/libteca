@@ -7,6 +7,8 @@ import (
 	"github.com/libteca/libteca/internal/api/abs"
 	"github.com/libteca/libteca/internal/api/core"
 	"github.com/libteca/libteca/internal/api/jellyfin"
+	"github.com/libteca/libteca/internal/api/opds"
+	"github.com/libteca/libteca/internal/api/subsonic"
 	"github.com/libteca/libteca/internal/auth"
 	"github.com/libteca/libteca/internal/store"
 	"github.com/libteca/libteca/internal/transcode"
@@ -14,8 +16,9 @@ import (
 )
 
 type Server struct {
-	DB  *store.DB
-	Dir string
+	DB      *store.DB
+	Dir     string
+	HWAccel string
 }
 
 func New(db *store.DB, dataDir string) *Server {
@@ -36,7 +39,11 @@ func (s *Server) Handler() http.Handler {
 	c.MountPublic(r.Group("/api/core"))
 	c.Mount(r.Group("/api/core", authMW))
 
-	jf := jellyfin.New(s.DB, s.Dir, transcode.New(s.Dir))
+	tm := transcode.New(s.Dir)
+	if s.HWAccel != "" {
+		tm.SetHwAccel(s.HWAccel)
+	}
+	jf := jellyfin.New(s.DB, s.Dir, tm)
 	jf.Mount(r)
 
 	a := abs.New(s.DB, s.Dir)
@@ -46,6 +53,12 @@ func (s *Server) Handler() http.Handler {
 	r.HandleFunc("GET /healthcheck", a.Healthcheck)
 	ag := r.Group("/api", authMW)
 	a.Mount(ag)
+
+	sub := subsonic.New(s.DB, s.Dir)
+	sub.Mount(r)
+
+	od := opds.New(s.DB, s.Dir)
+	od.Mount(r)
 
 	r.StaticFS("/", webFS())
 

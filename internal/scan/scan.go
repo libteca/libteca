@@ -56,6 +56,8 @@ func Library(db *store.DB, lib *store.Library, coversDir string, onProgress Prog
 		return scanVideoLibrary(db, lib, coversDir, true, tr)
 	case "music":
 		return scanMusicLibrary(db, lib, coversDir, tr)
+	case "books", "comics":
+		return scanBooksLibrary(db, lib, coversDir, tr)
 	}
 	return scanAudioLibrary(db, lib, coversDir, tr)
 }

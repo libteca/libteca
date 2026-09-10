@@ -8,8 +8,10 @@
     "build": "neutron-ts build --preset static"
   },
   "dependencies": {
-    "@neutron-build/core": "^0.2.2",
     "@neutron-build/cli": "^0.2.3",
+    "@neutron-build/core": "^0.2.2",
+    "epubjs": "^0.3.93",
+    "jszip": "^3.10.2",
     "preact": "^10.25.4",
     "preact-render-to-string": "^6.5.0"
   },

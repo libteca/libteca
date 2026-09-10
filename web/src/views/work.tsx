@@ -3,12 +3,21 @@ import { api, media, type EditionDetail, type WorkDetail } from "../api";
 import { Cover } from "../components/cover";
 import { AudioPlayer, type AudioController, type PlayerFile } from "../players/audio";
 import { VideoPlayer } from "../players/video";
-import { IconCheck, IconPlay } from "../components/svg";
+import { IconCheck, IconPlay, IconBook } from "../components/svg";
 import {
   badge, backLink, c, chapterList, chapterRow, ghostBtn, muted, primaryBtn,
   progressMini, tabRow, workHead, workMeta, workTitle,
 } from "../styles";
 import { editionState, fmt, formatLabel } from "../util";
+
+const READER_FORMATS: ReadonlySet<string> = new Set(["epub", "cbz", "pdf"]);
+
+function readerProgress(e: { isFinished?: boolean; percent?: number; page?: number; pageCount?: number }) {
+  if (e.isFinished) return { label: "Finished", pct: 1 };
+  if (e.percent && e.percent > 0 && e.percent < 1) return { label: `${Math.round(e.percent * 100)}% read`, pct: e.percent };
+  if (e.page && e.page > 0 && e.pageCount) return { label: `Page ${e.page} / ${e.pageCount}`, pct: e.page / e.pageCount };
+  return null;
+}
 
 export function WorkView(props: { id: number }) {
   const [w, setW] = useState<WorkDetail | null>(null);
@@ -201,6 +210,8 @@ function EditionsView(props: { w: WorkDetail; editionId: number; setEdition: (id
 
   const multi = w.editions.length > 1;
   const inProgress = ed.position && ed.position > 0 && !ed.isFinished;
+  const readable = READER_FORMATS.has(ed.format.toLowerCase());
+  const rp = readerProgress(ed);
   const currentChapter = (() => {
     if (!ed.chapters.length) return undefined;
     const c = ed.chapters;
@@ -212,7 +223,7 @@ function EditionsView(props: { w: WorkDetail; editionId: number; setEdition: (id
     <div>
       <BackButton />
       <div style={workHead}>
-        <div style={{ width: "9.5rem", flexShrink: 0 }}><Cover has={w.hasCover} id={w.id} title={w.title} progress={ed.position && ed.duration ? ed.position / ed.duration : undefined} /></div>
+        <div style={{ width: "9.5rem", flexShrink: 0 }}><Cover has={w.hasCover} id={w.id} title={w.title} progress={ed.position && ed.duration ? ed.position / ed.duration : rp?.pct} /></div>
         <div style={workMeta}>
           <h2 style={workTitle}>{w.title}</h2>
           <p style={muted}>{w.author}</p>
@@ -224,7 +235,7 @@ function EditionsView(props: { w: WorkDetail; editionId: number; setEdition: (id
           )}
           <div style={tabRow}>
             {w.editions.map((e) => {
-              const st = editionState(e);
+              const st = readerProgress(e) || editionState(e);
               const sel = e.id === ed.id;
               return (
                 <button key={e.id} onClick={() => { props.setEdition(e.id); setPlaying(false); setPos(0); }}
@@ -254,6 +265,18 @@ function EditionsView(props: { w: WorkDetail; editionId: number; setEdition: (id
                 {inProgress ? `Resume · ${fmt(ed.duration - (ed.position || 0))} left` : ed.isFinished ? "Listen again" : "Listen"}
               </span>
             </button>
+          ) : readable ? (
+            <div style={{ display: "flex", gap: "0.6rem", alignItems: "center", flexWrap: "wrap" }}>
+              <button style={primaryBtn} onClick={() => { location.hash = `#/read?edition=${ed.id}&id=${w.id}`; }}>
+                <span style={{ display: "inline-flex", gap: "0.45rem", alignItems: "center" }}>
+                  <IconBook size={14} />
+                  {ed.isFinished ? "Read again" : rp && rp.pct > 0 ? `Resume · ${rp.label}` : "Read"}
+                </span>
+              </button>
+              {ed.format.toLowerCase() === "pdf" && (
+                <a style={{ ...ghostBtn, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: "0.4rem" }} href={media(`/editions/${ed.id}/download`)} download>Download</a>
+              )}
+            </div>
           ) : (
             <p style={muted}>{formatLabel(ed.format)} edition · in-app reading not available yet</p>
           )}

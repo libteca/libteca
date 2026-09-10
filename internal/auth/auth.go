@@ -86,6 +86,14 @@ func UserForToken(db *store.DB, value string) (*store.User, bool) {
 	return &u, true
 }
 
+// InvalidateToken drops a token from the lookup cache so a revoked or
+// deleted token stops authenticating immediately.
+func InvalidateToken(value string) {
+	if value != "" {
+		cache.Delete(value)
+	}
+}
+
 func Middleware(db *store.DB) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

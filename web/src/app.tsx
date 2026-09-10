@@ -5,11 +5,12 @@ import { Login } from "./views/login";
 import { Home } from "./views/home";
 import { LibraryView } from "./views/library";
 import { WorkView } from "./views/work";
+import { ReadView } from "./views/read";
 import { SearchBox, SearchPage } from "./views/search";
 import { AdminView } from "./views/admin";
 import { IconHome, IconLibrary } from "./components/svg";
 
-type View = { name: string; id?: number; q?: string; lib?: number };
+type View = { name: string; id?: number; q?: string; lib?: number; edition?: number; format?: string };
 
 function parseHash(): View {
   const h = (typeof location === "undefined" ? "" : location.hash).replace(/^#\//, "");
@@ -18,6 +19,9 @@ function parseHash(): View {
   const id = params.get("id");
   const q = params.get("q");
   const lib = params.get("lib");
+  const edition = params.get("edition");
+  const format = params.get("format");
+  if (name === "read" && edition) return { name: "read", edition: Number(edition), id: id ? Number(id) : undefined, format: format || undefined };
   if (name === "work" && id) return { name: "work", id: Number(id) };
   if (name === "admin") return { name: "admin" };
   if (name === "search") return { name: "search", q: q || "" };
@@ -77,6 +81,7 @@ export function App() {
       {view.name === "home" && <Home />}
       {view.name === "library" && <LibraryView lib={view.lib} />}
       {view.name === "work" && view.id != null && <WorkView id={view.id} />}
+      {view.name === "read" && view.edition != null && <ReadView edition={view.edition} work={view.id} format={view.format} />}
       {view.name === "search" && <SearchPage q={view.q || ""} />}
       {view.name === "admin" && me.isAdmin && <AdminView />}
     </div>
