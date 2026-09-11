@@ -70,3 +70,17 @@ func TestAuthenticateByNameSuccessWithinLimit(t *testing.T) {
 		t.Fatalf("valid auth within limit = %d, want 200", rec.Code)
 	}
 }
+
+func TestAuthenticateByNameTokenIssueFailure(t *testing.T) {
+	e, authPost := newAuthEnv(t)
+	if _, err := e.db.Exec(`DROP TABLE tokens`); err != nil {
+		t.Fatal(err)
+	}
+	rec := authPost("bob", "password123")
+	if rec.Code != 500 {
+		t.Fatalf("auth with token-store failure = %d, want 500", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "AccessToken") {
+		t.Fatal("response should not contain an AccessToken on failure")
+	}
+}

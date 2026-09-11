@@ -223,7 +223,11 @@ func (a *API) authenticate(w http.ResponseWriter, r *http.Request) {
 	if a.LoginLimiter != nil {
 		a.LoginLimiter.Success(ip)
 	}
-	token, _ := auth.IssueToken(a.DB, u.ID, "jellyfin-client")
+	token, err := auth.IssueToken(a.DB, u.ID, "jellyfin-client")
+	if err != nil {
+		write(w, 500, map[string]any{"error": "internal error"})
+		return
+	}
 	write(w, 200, map[string]any{
 		"User": map[string]any{
 			"Id": strconv.FormatInt(u.ID, 10), "Name": u.Name, "HasPassword": true,
