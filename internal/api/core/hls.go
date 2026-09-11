@@ -186,7 +186,7 @@ func rewriteHLSPlaylist(playlist []byte, sid, token string) []byte {
 func (a *API) hlsStop(w http.ResponseWriter, r *http.Request) {
 	sid := r.PathValue("sid")
 	if !reHLSSID.MatchString(sid) || !strings.HasPrefix(sid, "web-") {
-		http.Error(w, "bad", 400)
+		writeJSON(w, 400, map[string]string{"error": "bad session id"})
 		return
 	}
 	if a.TC != nil {
@@ -199,11 +199,11 @@ func (a *API) hlsFile(w http.ResponseWriter, r *http.Request) {
 	sid := r.PathValue("sid")
 	file := r.PathValue("file")
 	if !reHLSSID.MatchString(sid) || !strings.HasPrefix(sid, "web-") {
-		http.Error(w, "bad", 400)
+		writeJSON(w, 400, map[string]string{"error": "bad session id"})
 		return
 	}
 	if !reHLSFile.MatchString(file) {
-		http.Error(w, "bad", 400)
+		writeJSON(w, 400, map[string]string{"error": "bad file"})
 		return
 	}
 	if a.TC == nil {
@@ -212,12 +212,12 @@ func (a *API) hlsFile(w http.ResponseWriter, r *http.Request) {
 	}
 	eid := auth.Atoi64(strings.TrimPrefix(sid, "web-"))
 	if eid <= 0 {
-		http.Error(w, "bad", 400)
+		writeJSON(w, 400, map[string]string{"error": "bad session id"})
 		return
 	}
 	ed, err := a.DB.EditionByID(eid)
 	if err != nil {
-		http.Error(w, "not found", 404)
+		writeJSON(w, 404, map[string]string{"error": "edition not found"})
 		return
 	}
 	start := 0.0
@@ -228,7 +228,7 @@ func (a *API) hlsFile(w http.ResponseWriter, r *http.Request) {
 	}
 	s, err := a.TC.Get(sid, ed.ID, ed.Files[0].Path, start)
 	if err != nil {
-		http.Error(w, "transcode failed", 500)
+		writeJSON(w, 500, map[string]string{"error": "transcode failed"})
 		return
 	}
 	if strings.HasSuffix(file, ".m3u8") {
@@ -241,7 +241,7 @@ func (a *API) hlsFile(w http.ResponseWriter, r *http.Request) {
 		}
 		data, err := os.ReadFile(s.Playlist())
 		if err != nil {
-			http.Error(w, "no playlist", 500)
+			writeJSON(w, 500, map[string]string{"error": "no playlist"})
 			return
 		}
 		s.Touch()
@@ -250,13 +250,13 @@ func (a *API) hlsFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !a.TC.WaitForSegmentFile(r.Context(), sid, file, 10*time.Second) {
-		http.Error(w, "not found", 404)
+		writeJSON(w, 404, map[string]string{"error": "segment not found"})
 		return
 	}
 	path := filepath.Join(a.DataDir, "transcode", sid, file)
 	f, err := os.Open(path)
 	if err != nil {
-		http.Error(w, "not found", 404)
+		writeJSON(w, 404, map[string]string{"error": "segment not found"})
 		return
 	}
 	defer f.Close()

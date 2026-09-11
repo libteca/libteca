@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -86,6 +87,10 @@ func (a *API) editionMove(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := a.DB.MoveEditionToWork(eid, targetID)
 	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeJSON(w, 404, map[string]string{"error": "edition not found"})
+			return
+		}
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
 	}
@@ -118,6 +123,10 @@ func (a *API) editionSplit(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := a.DB.SplitEditionToNewWork(eid, strings.TrimSpace(body.Title), body.Author)
 	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeJSON(w, 404, map[string]string{"error": "edition not found"})
+			return
+		}
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
 	}
@@ -147,6 +156,14 @@ func (a *API) workMerge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.DB.MergeWorks(id, body.IntoWorkID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeJSON(w, 404, map[string]string{"error": "work not found"})
+			return
+		}
+		if errors.Is(err, store.ErrSameWork) {
+			writeJSON(w, 400, map[string]string{"error": "cannot merge a work into itself"})
+			return
+		}
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
 	}

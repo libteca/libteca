@@ -529,7 +529,7 @@ func (a *API) createPlaylist(w http.ResponseWriter, r *http.Request, uid int64) 
 		pid = id
 	}
 	for _, eid := range editions {
-		if err := a.DB.AddPlaylistItem(pid, eid); err != nil {
+		if _, err := a.DB.AddPlaylistItem(pid, eid); err != nil {
 			a.respond(w, r, errResponse(errGeneric, err.Error()))
 			return
 		}
@@ -580,7 +580,7 @@ func (a *API) updatePlaylist(w http.ResponseWriter, r *http.Request, uid int64) 
 			return
 		}
 		for _, eid := range editions {
-			if err := a.DB.AddPlaylistItem(p.ID, eid); err != nil {
+			if _, err := a.DB.AddPlaylistItem(p.ID, eid); err != nil {
 				a.respond(w, r, errResponse(errGeneric, err.Error()))
 				return
 			}

@@ -67,10 +67,10 @@ func TestDeleteLibraryRemovesDependentsKeepsDisk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AddPlaylistItem(plID, dropEdID); err != nil {
+	if _, err := db.AddPlaylistItem(plID, dropEdID); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AddPlaylistItem(plID, keepEdID); err != nil {
+	if _, err := db.AddPlaylistItem(plID, keepEdID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.CreateScanJob(drop); err != nil {

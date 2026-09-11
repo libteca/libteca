@@ -581,7 +581,7 @@ func ABS(dataDir string, db *store.DB, dryRun bool) (*Plan, error) {
 		}
 		for _, it := range p.items {
 			if ref := bookEds[it]; ref != nil {
-				if err := db.AddPlaylistItem(plID, ref.id); err != nil {
+				if _, err := db.AddPlaylistItem(plID, ref.id); err != nil {
 					return nil, err
 				}
 			}

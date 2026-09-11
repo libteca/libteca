@@ -4,7 +4,10 @@ BENCH_SEED_DIR ?= data/bench-seed
 SEED_KIND ?= audio
 SEED_COUNT ?= 10000
 
-.PHONY: build web test clean run smoke record corpus bench bench-idle bench-scan bench-transcode seed
+.PHONY: build web test clean run smoke record corpus bench bench-idle bench-scan bench-transcode seed docker
+
+docker:
+	docker build -t libteca:dev .
 
 build: web
 	go build -o $(BIN) ./cmd/libteca
@@ -51,8 +54,7 @@ seed:
 
 # Release (PLAN §10): cross-compile CGo-free, tar.gz (linux) / zip (darwin),
 # SHA256SUMS over all archives. Archives carry binary + systemd unit + README.
-# Version stamps main.version once that var exists in cmd/libteca/main.go
-# (until then -X is a harmless no-op).
+# Version stamps main.version; `libteca --version` prints it.
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 DIST := dist/release

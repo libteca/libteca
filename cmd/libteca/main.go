@@ -33,9 +33,15 @@ func main() {
 	port := flag.Int("port", 8096, "listen port")
 	initAdmin := flag.String("init-admin", "", "create admin as name:password")
 	scanOnly := flag.Bool("scan", false, "scan all libraries then exit")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	watchEnabled := flag.Bool("watch", true, "watch libraries for changes and rescan (env LIBTECA_WATCH=false disables; LIBTECA_SWEEP=<seconds> sets the sweep interval, 0 disables)")
 	hwaccel := flag.String("hwaccel", "", "video hwaccel: auto|none|videotoolbox|vaapi|nvenc|qsv (default: $LIBTECA_HWACCEL)")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version)
+		return
+	}
 
 	abs, err := filepath.Abs(*data)
 	if err != nil {

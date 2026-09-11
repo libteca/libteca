@@ -328,7 +328,7 @@ function PlaylistDetail(props: { id: number }) {
       ) : (
         <div style={{ borderTop: `1px solid ${c.lineSoft}` }}>
           {p.items.map((it, i) => (
-            <div key={it.editionId} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", padding: "0.7rem 0.2rem", borderBottom: `1px solid ${c.lineSoft}` }}>
+            <div key={it.editionId} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", padding: "0.7rem 0.2rem", borderBottom: `1px solid ${c.lineSoft}`, flexWrap: "wrap" }}>
               <span style={{ display: "flex", gap: "0.7rem", alignItems: "baseline", minWidth: 0 }}>
                 <span style={{ color: c.faint, fontVariantNumeric: "tabular-nums" }}>{i + 1}.</span>
                 {it.workId ? (

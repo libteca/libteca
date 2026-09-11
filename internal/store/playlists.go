@@ -137,27 +137,29 @@ func (d *DB) DeletePlaylist(id int64) error {
 	return nil
 }
 
-// AddPlaylistItem appends the edition at max(position)+1. Adding an edition
-// already present is a no-op (UNIQUE(playlist_id, edition_id)).
-func (d *DB) AddPlaylistItem(playlistID, editionID int64) error {
+// AddPlaylistItem appends the edition at max(position)+1 and reports whether
+// a row was inserted. Adding an edition already present is a no-op that
+// returns added=false (UNIQUE(playlist_id, edition_id)).
+func (d *DB) AddPlaylistItem(playlistID, editionID int64) (bool, error) {
 	var one int
 	if err := d.QueryRow(`SELECT 1 FROM editions WHERE id = ?`, editionID).Scan(&one); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return ErrNotFound
+			return false, ErrNotFound
 		}
-		return err
+		return false, err
 	}
 	res, err := d.Exec(`INSERT INTO playlist_items (playlist_id, edition_id, position, added_at)
 		VALUES (?,?,coalesce((SELECT max(position) + 1 FROM playlist_items WHERE playlist_id = ?), 1), ?)
 		ON CONFLICT(playlist_id, edition_id) DO NOTHING`,
 		playlistID, editionID, playlistID, nowMilli())
 	if err != nil {
-		return err
+		return false, err
 	}
-	if n, _ := res.RowsAffected(); n > 0 {
+	n, _ := res.RowsAffected()
+	if n > 0 {
 		_, err = d.Exec(`UPDATE playlists SET updated_at = ? WHERE id = ?`, nowMilli(), playlistID)
 	}
-	return err
+	return n > 0, err
 }
 
 func (d *DB) RemovePlaylistItem(playlistID, editionID int64) error {

@@ -133,12 +133,19 @@ func TestCorePlaylistLifecycle(t *testing.T) {
 	}
 
 	// items add/remove/reorder with compaction
-	code, _ = callJSON(t, "POST", fmt.Sprintf("%s/playlists/%d/items", e.base, plID), e.adminToken, map[string]any{"editionId": e1})
+	code, body = callJSON(t, "POST", fmt.Sprintf("%s/playlists/%d/items", e.base, plID), e.adminToken, map[string]any{"editionId": e1})
 	if code != 201 {
 		t.Fatalf("add e1 = %d", code)
 	}
+	if m, ok := body.(map[string]any); !ok || m["added"] != true {
+		t.Fatalf("add e1 body = %v, want added=true", body)
+	}
 	callJSON(t, "POST", fmt.Sprintf("%s/playlists/%d/items", e.base, plID), e.adminToken, map[string]any{"editionId": e2})
 	callJSON(t, "POST", fmt.Sprintf("%s/playlists/%d/items", e.base, plID), e.adminToken, map[string]any{"editionId": e3})
+	code, body = callJSON(t, "POST", fmt.Sprintf("%s/playlists/%d/items", e.base, plID), e.adminToken, map[string]any{"editionId": e2})
+	if code != 201 || body.(map[string]any)["added"] != false {
+		t.Fatalf("duplicate add = %d %v, want 201 added=false", code, body)
+	}
 	code, _ = callJSON(t, "POST", fmt.Sprintf("%s/playlists/%d/items", e.base, plID), e.adminToken, map[string]any{"editionId": 999999})
 	if code != 404 {
 		t.Fatalf("unknown edition add = %d, want 404", code)

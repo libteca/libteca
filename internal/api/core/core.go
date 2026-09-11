@@ -81,7 +81,24 @@ func (a *API) Mount(r *neutron.Router) {
 	a.MountHLS(r)
 }
 
+// writeJSON emits application/json. For 404s it emits neutron's RFC 7807
+// problem+json instead: the router's errInterceptor replaces any non-problem
+// 404 body with a generic "No route matches" document, which would swallow
+// the handler's specific message; problem+json passes through untouched.
 func writeJSON(w http.ResponseWriter, status int, v any) {
+	if status == http.StatusNotFound {
+		detail := "Not Found"
+		if m, ok := v.(map[string]string); ok && m["error"] != "" {
+			detail = m["error"]
+		}
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(status)
+		json.NewEncoder(w).Encode(map[string]any{
+			"type": "https://neutron.dev/errors/not-found", "title": "Not Found",
+			"status": status, "detail": detail,
+		})
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)

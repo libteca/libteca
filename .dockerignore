@@ -1,0 +1,6 @@
+data/
+dist/
+web/dist/
+web/node_modules/
+internal/server/webdist/
+.git/

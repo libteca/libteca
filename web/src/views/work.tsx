@@ -455,7 +455,7 @@ function IconDots(p: { size?: number }) {
 type WorkLite = { id: number; title: string; author: string | null };
 
 const menuCard: preact.JSX.CSSProperties = {
-  position: "absolute", top: "100%", left: 0, marginTop: "0.45rem", zIndex: 40,
+  position: "absolute", top: "100%", left: 0, marginTop: "0.45rem", zIndex: 50,
   minWidth: "17rem", maxWidth: "22rem", background: c.bgRaised,
   border: `1px solid ${c.line}`, borderRadius: "12px", padding: "0.75rem",
   display: "flex", flexDirection: "column", gap: "0.45rem",
@@ -536,8 +536,9 @@ function AddToPlaylist(props: { editionId: number; compact?: boolean }) {
   const addTo = async (pl: PlaylistLite) => {
     const res = await api(`/playlists/${pl.id}/items`, { method: "POST", body: JSON.stringify({ editionId: props.editionId }) });
     if (res.error) { setErr(res.error); toast(res.error, "error"); return; }
-    toast(`Added to ${pl.name}`, "success");
-    setAdded(pl.name);
+    const msg = res.added === false ? `Already in ${pl.name}` : `Added to ${pl.name}`;
+    toast(msg);
+    setAdded(msg);
     setTimeout(() => setOpen(false), 700);
   };
 
@@ -564,7 +565,7 @@ function AddToPlaylist(props: { editionId: number; compact?: boolean }) {
       <button type="button" style={{ ...btnStyle, borderColor: c.accent }} onClick={() => setOpen(false)}>+ Playlist</button>
       <div style={{ ...menuCard, left: "auto", right: 0 }}>
         {added ? (
-          <p style={{ ...muted, margin: 0 }}>Added to {added}</p>
+          <p style={{ ...muted, margin: 0 }}>{added}</p>
         ) : (
           <>
             {lists.map((pl) => (

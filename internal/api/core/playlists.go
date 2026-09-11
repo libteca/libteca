@@ -101,7 +101,7 @@ func (a *API) playlistCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, eid := range body.EditionIDs {
-		if err := a.DB.AddPlaylistItem(id, eid); err != nil {
+		if _, err := a.DB.AddPlaylistItem(id, eid); err != nil {
 			if errors.Is(err, store.ErrNotFound) {
 				writeJSON(w, 404, map[string]string{"error": "edition not found"})
 				return
@@ -175,7 +175,8 @@ func (a *API) playlistItemAdd(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "editionId required"})
 		return
 	}
-	if err := a.DB.AddPlaylistItem(p.ID, body.EditionID); err != nil {
+	added, err := a.DB.AddPlaylistItem(p.ID, body.EditionID)
+	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeJSON(w, 404, map[string]string{"error": "edition not found"})
 			return
@@ -183,7 +184,7 @@ func (a *API) playlistItemAdd(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, 201, map[string]any{"ok": true})
+	writeJSON(w, 201, map[string]any{"ok": true, "added": added})
 }
 
 func (a *API) playlistItemRemove(w http.ResponseWriter, r *http.Request) {

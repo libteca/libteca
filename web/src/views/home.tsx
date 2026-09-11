@@ -211,7 +211,7 @@ export function Home() {
             </EmptyState>
           )
         ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: "0.9rem" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(13rem, 1fr))", gap: "0.9rem" }}>
             {libs.map((l) => (
               <a key={l.id} href={`#/library?lib=${l.id}`} className="press" style={libTile}>
                 <span style={libTileIcon}>{libIcon(l.type)}</span>

@@ -305,3 +305,16 @@ backup = `libteca backup` (15g); neutron-go published (17).
     green incl. new unicode-search, pagination, prune, rollback,
     retention-disk, OPML-status, dedup tests.
     Reverse: none.
+
+25. **Final sweep to ~95% (2026-09-11).** Three agents + live Gate W
+    simulation. Notable finds: neutron's error interceptor swallowed
+    all non-RFC7807 404 bodies (every handler's real "not found"
+    detail died at the router — fixed by emitting problem+json);
+    linking 500s on missing ids; Dockerfile (multi-stage, embed-aware,
+    ffmpeg in final image); playlist added-flag; per-view titles; PWA
+    head wiring. Live simulation verified: audio resume mid-book,
+    movie resume + seek + auto-hide controls + Escape close, PDF and
+    EPUB readers, search, Next Up, category nav. Remaining to 100%:
+    Gate W (founder week) and Gate F (corpus + live clients) — both
+    human-owned by design.
+    Reverse: none.

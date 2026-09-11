@@ -21,11 +21,23 @@ function group(items: SearchItem[]) {
   });
 }
 
+let focusTrigger: (() => void) | null = null;
+
+export function focusSearch() {
+  focusTrigger?.();
+}
+
 export function SearchBox() {
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<SearchItem[]>([]);
   const boxRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    focusTrigger = () => inputRef.current?.focus();
+    return () => { focusTrigger = null; };
+  }, []);
 
   const run = useRef(debounce((query: string) => {
     if (!query.trim()) { setItems([]); setOpen(false); return; }
@@ -54,6 +66,7 @@ export function SearchBox() {
       <div className="search-wrap">
         <span style={{ color: c.muted, display: "inline-flex" }}><IconSearch size={14} /></span>
         <input
+          ref={inputRef}
           value={q}
           placeholder="Search"
           onInput={(e) => { const v = (e.target as HTMLInputElement).value; setQ(v); run(v); }}

@@ -76,8 +76,12 @@ func TestPlaylistStoreCRUD(t *testing.T) {
 		t.Fatalf("CreatePlaylist: %v", err)
 	}
 	for _, eid := range ids(e1, e2, e3) {
-		if err := db.AddPlaylistItem(plID, eid); err != nil {
+		added, err := db.AddPlaylistItem(plID, eid)
+		if err != nil {
 			t.Fatalf("AddPlaylistItem(%d): %v", eid, err)
+		}
+		if !added {
+			t.Fatalf("AddPlaylistItem(%d) must report added=true on insert", eid)
 		}
 	}
 
@@ -103,9 +107,13 @@ func TestPlaylistStoreCRUD(t *testing.T) {
 		t.Fatalf("nil duration must be 0, got %v", items[2].DurationSecs)
 	}
 
-	// duplicate add is a no-op
-	if err := db.AddPlaylistItem(plID, e2); err != nil {
+	// duplicate add is a no-op reporting added=false
+	added, err := db.AddPlaylistItem(plID, e2)
+	if err != nil {
 		t.Fatalf("duplicate AddPlaylistItem must not error: %v", err)
+	}
+	if added {
+		t.Fatal("duplicate AddPlaylistItem must report added=false")
 	}
 	if got := plPositions(t, db, plID); len(got) != 3 {
 		t.Fatalf("duplicate add changed items: %v", got)
@@ -195,7 +203,7 @@ func TestPlaylistStoreCascades(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AddPlaylistItem(plID, e); err != nil {
+	if _, err := db.AddPlaylistItem(plID, e); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.DeleteUser(u); err != nil {
@@ -217,7 +225,7 @@ func TestPlaylistStoreErrors(t *testing.T) {
 	e := plEdition(t, db, "Kept", 5)
 	plID, _ := db.CreatePlaylist(u, "X")
 
-	if err := db.AddPlaylistItem(plID, 999999); err != store.ErrNotFound {
+	if _, err := db.AddPlaylistItem(plID, 999999); err != store.ErrNotFound {
 		t.Fatalf("unknown edition must be ErrNotFound, got %v", err)
 	}
 	if err := db.RemovePlaylistItem(plID, e); err != store.ErrNotFound {
@@ -237,7 +245,7 @@ func TestPlaylistStoreErrors(t *testing.T) {
 	}
 
 	// clear keeps the row
-	if err := db.AddPlaylistItem(plID, e); err != nil {
+	if _, err := db.AddPlaylistItem(plID, e); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.ClearPlaylistItems(plID); err != nil {

@@ -147,14 +147,6 @@ export function IconScan(p: IconProps) {
   );
 }
 
-export function IconHome(p: IconProps) {
-  return (
-    <svg {...svgProps(p.size ?? 16)}>
-      <path d="M4.5 10.5L12 4l7.5 6.5V19a1.5 1.5 0 0 1-1.5 1.5h-4v-6h-4v6H6A1.5 1.5 0 0 1 4.5 19z" />
-    </svg>
-  );
-}
-
 export function IconLibrary(p: IconProps) {
   return (
     <svg {...svgProps(p.size ?? 16)}>
@@ -222,15 +214,6 @@ export function IconPodcast(p: IconProps) {
     <svg {...svgProps(p.size ?? 16)}>
       <rect x="9" y="3.5" width="6" height="10" rx="3" />
       <path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3M8.5 21h7" />
-    </svg>
-  );
-}
-
-export function IconClock(p: IconProps) {
-  return (
-    <svg {...svgProps(p.size ?? 15)}>
-      <circle cx="12" cy="12" r="8" />
-      <path d="M12 7.5V12l3 2" />
     </svg>
   );
 }

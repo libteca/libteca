@@ -320,13 +320,13 @@ README matrix.
 
 | Area | % of v1 | What's left |
 |---|---|---|
-| Spine/server | 95 | — |
-| Web UI | 90 | Gate W founder week + what it surfaces |
-| Viewers | 90 | real-device tuning |
+| Spine/server | 98 | — |
+| Web UI | 95 | Gate W founder week + what it surfaces |
+| Viewers | 95 | real-device tuning |
 | Podcasts | 90 | cleanup UX affordances if wanted |
 | Faces | 65 built / 0 verified | corpus capture + live clients (Gate F, founder-owned) |
-| Ops | 90 | container image; teploy /dev/dri upstream (CI shipped) |
-| **Overall (v1 = Gate W)** | **~90** | founder week; container image |
+| Ops | 95 | teploy /dev/dri upstream (CI + Dockerfile shipped) |
+| **Overall (v1 = Gate W)** | **~95** | founder week (Gate W); Gate F corpus |
 
 Not started by design: native apps, Kavita protocol, Plex, acquisition,
 Live TV, plugin SDK (PLAN §2).
@@ -344,8 +344,15 @@ toasts + skeleton loaders; seek thumbnails (core trickplay endpoints
 + scrubber hover preview) and PiP in the video player; CI workflow
 (.github/workflows/ci.yml).
 
-Still open: `people/series/collections` model (by design, not needed);
-"already in playlist" toast needs an `added` flag from the API.
+Final sweep 2026-09-11 (DECISIONS 25): playlist added-flag + toasts;
+per-view document titles; favicon/manifest/PWA head wiring; picker
+z-index over player bar; mobile tile/row wraps; `/` search shortcut;
+Dockerfile + make docker + deploy docs; neutron 404-body interceptor
+fix (real details now reach clients); linking 500→404s; HLS JSON
+errors; `--version`. Live Gate W simulation (browser): resume-both-
+kinds, seek, chapter list, auto-hiding controls, PDF/EPUB readers,
+search, Next Up, category nav — all pass. Still open: `people/series/
+collections` model (by design).
 
 ### Owed — founder
 

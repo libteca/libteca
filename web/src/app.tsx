@@ -4,7 +4,10 @@ import { HEADER_H, brand, c, center, content, headerBar, headerInner, linkBtn, m
 import { Login } from "./views/login";
 import { Home } from "./views/home";
 import { LibraryView } from "./views/library";
-import { IconBook, IconComic, IconFilm, IconHeadphones, IconMusic, IconTv } from "./components/svg";
+import { IconBook, IconComic, IconFilm, IconHeadphones, IconMusic, IconSpinner, IconTv } from "./components/svg";
+import { ToastHost } from "./toast";
+import { isTypingTarget } from "./reader/shared";
+import { focusSearch } from "./views/search";
 import { typeLabel } from "./util";
 import { WorkView } from "./views/work";
 import { ReadView } from "./views/read";
@@ -13,8 +16,6 @@ import { AdminView } from "./views/admin";
 import { MatchingView } from "./views/matching";
 import { PodcastsView } from "./views/podcasts";
 import { PlaylistsView } from "./views/playlists";
-import { IconSpinner } from "./components/svg";
-import { ToastHost } from "./toast";
 
 type View = { name: string; id?: number; q?: string; lib?: number; type?: string; edition?: number; format?: string };
 
@@ -202,6 +203,20 @@ nav a svg { flex-shrink: 0; }
 }
 `;
 
+function pageTitle(v: View): string {
+  switch (v.name) {
+    case "library": return v.type ? typeLabel(v.type) : "Library";
+    case "work": return "Work";
+    case "read": return "Reading";
+    case "search": return v.q ? `Search: ${v.q}` : "Search";
+    case "podcasts": return "Podcasts";
+    case "playlists": return "Playlists";
+    case "admin": return "Admin";
+    case "matching": return "Matching";
+    default: return "Home";
+  }
+}
+
 export function App() {
   const [ready, setReady] = useState(false);
   const [view, setView] = useState<View>(() => parseHash());
@@ -233,6 +248,20 @@ export function App() {
       removeEventListener("hashchange", onHash);
       document.removeEventListener("mousedown", onDoc);
     };
+  }, []);
+
+  useEffect(() => {
+    document.title = getToken() ? `libteca — ${pageTitle(view)}` : "libteca";
+  }, [view]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey || isTypingTarget(e)) return;
+      e.preventDefault();
+      focusSearch();
+    };
+    addEventListener("keydown", onKey);
+    return () => removeEventListener("keydown", onKey);
   }, []);
 
   if (!ready) return <div style={center} role="status" aria-label="Loading"><IconSpinner size={22} /></div>;

@@ -133,11 +133,11 @@ export function PodcastsView() {
           {pods.map((p) => (
             <button key={p.id} type="button" onClick={() => setSelected(p.id)} className="cover-card" style={{ background: "none", border: "none", padding: 0, textAlign: "left", cursor: "pointer", display: "block", color: "inherit", fontFamily: "inherit" }}>
               <PodcastCover pod={p} />
-              <p style={{ margin: "0.5rem 0 0", fontWeight: 600, fontSize: "0.88rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.title}</p>
-              <p style={{ margin: 0, color: c.muted, fontSize: "0.78rem" }}>
+              <span style={{ display: "block", margin: "0.5rem 0 0", fontWeight: 600, fontSize: "0.88rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.title}</span>
+              <span style={{ display: "block", margin: 0, color: c.muted, fontSize: "0.78rem" }}>
                 {p.episodeCount} episodes · {p.downloadedCount} downloaded
-              </p>
-              {p.autoDownload && <p style={{ margin: 0 }}><span style={badge}>auto</span></p>}
+              </span>
+              {p.autoDownload && <span style={{ display: "block", margin: 0 }}><span style={badge}>auto</span></span>}
             </button>
           ))}
         </div>

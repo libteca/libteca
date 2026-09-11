@@ -58,6 +58,32 @@ with `ls /dev/dri` and that the render node is readable (`video`/`render`
 group membership matters only for the static-user variant; `DynamicUser`
 units get device access via the device cgroup defaults).
 
+## Docker
+
+`make docker` (or `docker build -t libteca:dev .`) builds a multi-stage
+image: node:22-alpine builds web/, the dist is copied into
+internal/server/webdist so the Go embed picks it up at compile time, and the
+final alpine stage carries the static binary plus ffmpeg/ffprobe
+(`apk add --no-cache ffmpeg`, which ships both).
+
+```sh
+docker run -d --name libteca -p 8096:8096 -v libteca-data:/data libteca:dev
+```
+
+All state lives under `/data` (named volume above; a bind mount works too).
+First run creates the admin by appending the flag to the entrypoint:
+
+```sh
+docker run -d --name libteca -p 8096:8096 -v libteca-data:/data \
+  libteca:dev --init-admin admin:changeme
+```
+
+ffmpeg note: transcoding in-container is software-only by default — the
+teploy format has no device mapping yet, so `/dev/dri` passthrough is
+pending there. Plain `docker run --device /dev/dri ...` works; with
+`LIBTECA_HWACCEL=auto` the server picks up VAAPI/QSV when the driver
+stack is present in the image and falls back to software otherwise.
+
 ## Teploy
 
 `deploy/teploy/teploy.yml` is the app template for `teploy deploy libteca`
@@ -65,7 +91,7 @@ units get device access via the device cgroup defaults).
 header before using: it is the target shape — the container image is not
 published yet (neutron-go is a published module; remaining work is the ghcr
 image), and the teploy format has no device mapping, so in-container
-hwaccel degrades to software. Until then, deploy bare as above.
+hwaccel degrades to software. Until then, deploy bare or Docker as above.
 
 ## Network posture
 
