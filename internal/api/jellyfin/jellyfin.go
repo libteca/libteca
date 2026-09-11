@@ -1111,7 +1111,10 @@ func (a *API) saveFromSession(w http.ResponseWriter, r *http.Request) string {
 		EditionPositionSecs: pos, DurationSecs: &dur, Device: &device,
 		IsFinished: dur > 0 && pos >= dur-5,
 	}
-	a.DB.SetProgress(p)
+	if err := a.DB.SetProgress(p); err != nil {
+		write(w, 500, map[string]any{"error": "internal error"})
+		return body.PlaySessionId
+	}
 	a.ReportPlayback(r, body.ItemId, body.PlaySessionId, body.PositionTicks, body.IsPaused)
 	write(w, 200, map[string]any{})
 	return body.PlaySessionId

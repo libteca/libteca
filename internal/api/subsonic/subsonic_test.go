@@ -663,6 +663,23 @@ func TestScrobbleWritesProgress(t *testing.T) {
 	}
 }
 
+func TestScrobbleProgressFailureIsError(t *testing.T) {
+	e := newEnv(t)
+	wywh, _, _, _ := seedMusic(t, e)
+	shine := e.editionID(t, wywh, 1)
+	if _, err := e.db.Exec(`DROP TABLE progress`); err != nil {
+		t.Fatal(err)
+	}
+	rec := e.rest(t, "scrobble", "id=so-"+fmt.Sprint(shine)+"&submission=true&f=json")
+	if rec.Code != 200 {
+		t.Fatalf("scrobble HTTP = %d, subsonic errors travel in the envelope", rec.Code)
+	}
+	errObj := subMap(t, decode(t, rec), "error")
+	if code := errObj["code"].(float64); code != 0 {
+		t.Fatalf("progress failure code = %v, want 0", code)
+	}
+}
+
 func TestDualFormatEnvelope(t *testing.T) {
 	e := newEnv(t)
 	recJSON := e.rest(t, "getPlaylists", "f=json")

@@ -565,7 +565,10 @@ func (a *API) sessionSync(w http.ResponseWriter, r *http.Request) {
 		fail(w, 404, "Session not found")
 		return
 	}
-	a.DB.UpdateSession(s.ID, body.CurrentTime, body.TimeListened)
+	if err := a.DB.UpdateSession(s.ID, body.CurrentTime, body.TimeListened); err != nil {
+		fail(w, 500, "Internal server error")
+		return
+	}
 	ed, err := a.DB.EditionByID(s.EditionID)
 	if err == nil {
 		fileID, offset := ed.Locate(body.CurrentTime)
@@ -579,7 +582,10 @@ func (a *API) sessionSync(w http.ResponseWriter, r *http.Request) {
 			EditionPositionSecs: body.CurrentTime, DurationSecs: &dur, Device: &device,
 			IsFinished: dur > 0 && body.CurrentTime >= dur-5,
 		}
-		a.DB.SetProgress(p)
+		if err := a.DB.SetProgress(p); err != nil {
+			fail(w, 500, "Internal server error")
+			return
+		}
 	}
 	write(w, 200, map[string]any{"success": true})
 }
@@ -597,7 +603,10 @@ func (a *API) sessionClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.ClosedAt == nil {
-		a.DB.CloseSession(s.ID, body.CurrentTime, body.TimeListened)
+		if err := a.DB.CloseSession(s.ID, body.CurrentTime, body.TimeListened); err != nil {
+			fail(w, 500, "Internal server error")
+			return
+		}
 		if ed, err := a.DB.EditionByID(s.EditionID); err == nil && body.CurrentTime > 0 {
 			fileID, offset := ed.Locate(body.CurrentTime)
 			dur := body.Duration
@@ -610,7 +619,10 @@ func (a *API) sessionClose(w http.ResponseWriter, r *http.Request) {
 				EditionPositionSecs: body.CurrentTime, DurationSecs: &dur, Device: &device,
 				IsFinished: dur > 0 && body.CurrentTime >= dur-5,
 			}
-			a.DB.SetProgress(p)
+			if err := a.DB.SetProgress(p); err != nil {
+				fail(w, 500, "Internal server error")
+				return
+			}
 		}
 	}
 	write(w, 200, map[string]any{"success": true})

@@ -517,11 +517,14 @@ func (a *API) scrobble(w http.ResponseWriter, r *http.Request, uid int64) {
 			pos = 0
 		}
 		fileID := s.File.ID
-		a.DB.SetProgress(&store.Progress{
+		if err := a.DB.SetProgress(&store.Progress{
 			UserID: uid, EditionID: s.Edition.ID, FileID: &fileID,
 			EditionPositionSecs: pos, DurationSecs: &dur,
 			IsFinished: submission, Device: &device,
-		})
+		}); err != nil {
+			a.respond(w, r, errResponse(errGeneric, "Failed to save progress"))
+			return
+		}
 	}
 	a.respond(w, r, ok())
 }

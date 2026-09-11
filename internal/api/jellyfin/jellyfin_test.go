@@ -140,6 +140,24 @@ func TestSessionStoppedWritesOnceAndClosesTranscode(t *testing.T) {
 	}
 }
 
+func TestSessionsPlayingProgressFailure(t *testing.T) {
+	e := newEnv(t)
+	lib := e.addLibrary(t, "tv")
+	work := e.addSeries(t, lib, "Show", 1, 1)
+	edID := e.editionID(t, work, 1, 1)
+	if _, err := e.db.Exec(`DROP TABLE progress`); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("POST", "/Sessions/Playing",
+		strings.NewReader(fmt.Sprintf(`{"ItemId":"e%d","PositionTicks":120000000}`, edID)))
+	req.Header.Set("X-Emby-Token", e.token)
+	rec := httptest.NewRecorder()
+	e.h.ServeHTTP(rec, req)
+	if rec.Code != 500 {
+		t.Fatalf("playing report with progress-store failure = %d %s, want 500", rec.Code, rec.Body.String())
+	}
+}
+
 func TestMediaStreamsNoFakeSubtitle(t *testing.T) {
 	dir := t.TempDir()
 	video := filepath.Join(dir, "movie.mkv")
