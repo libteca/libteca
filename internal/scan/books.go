@@ -2,6 +2,7 @@ package scan
 
 import (
 	"archive/zip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -40,7 +41,7 @@ type bookDoc struct {
 	toc         []EpubTOCEntry
 }
 
-func scanBooksLibrary(db *store.DB, lib *store.Library, coversDir string, tr *tracker) (int, error) {
+func scanBooksLibrary(ctx context.Context, db *store.DB, lib *store.Library, coversDir string, tr *tracker) (int, error) {
 	abs, err := filepath.Abs(lib.Path)
 	if err != nil {
 		return 0, err
@@ -48,6 +49,9 @@ func scanBooksLibrary(db *store.DB, lib *store.Library, coversDir string, tr *tr
 	cbrTool := cbrExtractor()
 	var docs []bookDoc
 	err = filepath.WalkDir(abs, func(p string, d os.DirEntry, err error) error {
+		if cerr := cancelErr(ctx); cerr != nil {
+			return cerr
+		}
 		if err != nil {
 			return nil
 		}
@@ -78,6 +82,9 @@ func scanBooksLibrary(db *store.DB, lib *store.Library, coversDir string, tr *tr
 
 	count := 0
 	for i := range docs {
+		if cerr := cancelErr(ctx); cerr != nil {
+			return count, cerr
+		}
 		d := &docs[i]
 		if size, mtime, ok, serr := db.FileStatByPath(d.path); serr == nil && ok && size == d.size && mtime == d.mtime {
 			continue

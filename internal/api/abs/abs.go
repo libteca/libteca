@@ -19,6 +19,8 @@ import (
 type API struct {
 	DB      *store.DB
 	DataDir string
+
+	LoginLimiter *auth.Limiter
 }
 
 func New(db *store.DB, dataDir string) *API {
@@ -46,6 +48,14 @@ func (a *API) Mount(r *neutron.Router) {
 }
 
 func (a *API) Login(w http.ResponseWriter, r *http.Request) {
+	ip := auth.ClientIP(r)
+	if a.LoginLimiter != nil {
+		if ok, retry := a.LoginLimiter.Allow(ip); !ok {
+			auth.WriteRetryAfter(w, retry)
+			fail(w, 429, "Too many attempts, try again later")
+			return
+		}
+	}
 	var body struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
@@ -56,8 +66,14 @@ func (a *API) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	u, err := a.DB.UserByName(body.Username)
 	if err != nil || !auth.Verify(body.Password, u.PasswordHash) {
+		if a.LoginLimiter != nil {
+			a.LoginLimiter.Failure(ip)
+		}
 		fail(w, 401, "Invalid username or password")
 		return
+	}
+	if a.LoginLimiter != nil {
+		a.LoginLimiter.Success(ip)
 	}
 	token, err := auth.IssueToken(a.DB, u.ID, "abs-app")
 	if err != nil {

@@ -50,6 +50,7 @@ func (s *Server) Handler() http.Handler {
 	r := app.Router()
 
 	authMW := auth.Middleware(s.DB)
+	loginLimiter := auth.NewLimiter()
 
 	if s.Core == nil {
 		s.Core = core.New(s.DB, s.Dir)
@@ -63,6 +64,7 @@ func (s *Server) Handler() http.Handler {
 
 	c := s.Core
 	c.TC = tm
+	c.LoginLimiter = loginLimiter
 	coreBodyLimit := neutron.BodyLimit(4 << 20)
 	c.MountPublic(r.Group("/api/core", coreBodyLimit))
 	c.Mount(r.Group("/api/core", coreBodyLimit, authMW))
@@ -73,6 +75,7 @@ func (s *Server) Handler() http.Handler {
 	s.jf = jf
 
 	a := abs.New(s.DB, s.Dir)
+	a.LoginLimiter = loginLimiter
 	r.HandleFunc("GET /s/{sid}/t/{index}", a.SessionTrack)
 	r.HandleFunc("POST /login", a.Login)
 	r.HandleFunc("GET /ping", a.Ping)
@@ -81,6 +84,7 @@ func (s *Server) Handler() http.Handler {
 	a.Mount(ag)
 
 	sub := subsonic.New(s.DB, s.Dir)
+	sub.LoginLimiter = loginLimiter
 	sub.Mount(r)
 
 	od := opds.New(s.DB, s.Dir)

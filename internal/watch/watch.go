@@ -17,7 +17,7 @@ import (
 
 // Scanner is the core API seam the watcher drives scan jobs through.
 type Scanner interface {
-	TriggerScan(libraryID int64) (int64, error)
+	TriggerScan(ctx context.Context, libraryID int64) (int64, error)
 }
 
 const (
@@ -192,7 +192,7 @@ func (w *Watcher) fire(libID int64) {
 }
 
 func (w *Watcher) triggerAndWait(ctx context.Context, libID int64) {
-	jobID, err := w.scan.TriggerScan(libID)
+	jobID, err := w.scan.TriggerScan(ctx, libID)
 	if err != nil {
 		// A change that arrived while a scan was already running must not be
 		// dropped: its debounce timer fired into the running scan and was

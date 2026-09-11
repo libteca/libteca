@@ -1,6 +1,7 @@
 package scan
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -41,7 +42,7 @@ func durStr(d float64) string { return time.Duration(d * float64(time.Second)).S
 func scanOnce(t *testing.T, db *store.DB, lib *store.Library, covers string) Progress {
 	t.Helper()
 	var final Progress
-	_, err := Library(db, lib, covers, func(p Progress) { final = p })
+	_, err := Library(context.Background(), db, lib, covers, func(p Progress) { final = p })
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}

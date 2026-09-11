@@ -2,6 +2,7 @@ package core
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -50,7 +51,7 @@ func newTestAPI(t *testing.T, fn ScanFunc) (*API, *store.DB, int64, int64) {
 }
 
 func blockingScan(started chan<- int64, release <-chan struct{}) ScanFunc {
-	return func(db *store.DB, lib *store.Library, coversDir string, onProgress scan.ProgressFn) (int, error) {
+	return func(ctx context.Context, db *store.DB, lib *store.Library, coversDir string, onProgress scan.ProgressFn) (int, error) {
 		started <- lib.ID
 		<-release
 		onProgress(scan.Progress{FilesSeen: 5, FilesProbed: 4, FilesAdded: 3, FilesUpdated: 1, WorksChanged: 2, CurrentPath: "x/y.mp3"})
@@ -155,7 +156,7 @@ func TestScanDedupWindowExpires(t *testing.T) {
 	old := scanDedupWindow
 	scanDedupWindow = 30 * time.Millisecond
 	t.Cleanup(func() { scanDedupWindow = old })
-	a, db, libA, _ := newTestAPI(t, func(db *store.DB, lib *store.Library, coversDir string, onProgress scan.ProgressFn) (int, error) {
+	a, db, libA, _ := newTestAPI(t, func(ctx context.Context, db *store.DB, lib *store.Library, coversDir string, onProgress scan.ProgressFn) (int, error) {
 		return 0, nil
 	})
 
@@ -177,7 +178,7 @@ func TestScanDedupWindowExpires(t *testing.T) {
 }
 
 func TestScanJobErrorRecorded(t *testing.T) {
-	a, db, libA, _ := newTestAPI(t, func(db *store.DB, lib *store.Library, coversDir string, onProgress scan.ProgressFn) (int, error) {
+	a, db, libA, _ := newTestAPI(t, func(ctx context.Context, db *store.DB, lib *store.Library, coversDir string, onProgress scan.ProgressFn) (int, error) {
 		return 0, fmt.Errorf("disk fell over")
 	})
 	code, _ := postScan(t, a, libA)
@@ -318,7 +319,7 @@ func TestScanEventsIdleSendsBaselineAndCloses(t *testing.T) {
 	}
 }
 func TestScanPrunesProviderCache(t *testing.T) {
-	a, db, libA, libB := newTestAPI(t, func(db *store.DB, lib *store.Library, coversDir string, onProgress scan.ProgressFn) (int, error) {
+	a, db, libA, libB := newTestAPI(t, func(ctx context.Context, db *store.DB, lib *store.Library, coversDir string, onProgress scan.ProgressFn) (int, error) {
 		return 0, nil
 	})
 	now := time.Now().UnixMilli()

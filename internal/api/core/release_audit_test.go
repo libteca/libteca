@@ -2,6 +2,7 @@ package core
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
@@ -30,7 +31,7 @@ func TestCoverRejectsTraversalNames(t *testing.T) {
 }
 
 func TestScanJobErrorMaskedForNonAdmin(t *testing.T) {
-	a, db, libA, _ := newTestAPI(t, func(db *store.DB, lib *store.Library, coversDir string, onProgress scan.ProgressFn) (int, error) {
+	a, db, libA, _ := newTestAPI(t, func(ctx context.Context, db *store.DB, lib *store.Library, coversDir string, onProgress scan.ProgressFn) (int, error) {
 		return 0, fmt.Errorf("open /srv/media: permission denied")
 	})
 	res, err := db.Exec(`INSERT INTO users (name, password_hash, is_admin, created_at, updated_at) VALUES ('plain','x',0,0,0)`)

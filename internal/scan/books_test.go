@@ -2,6 +2,7 @@ package scan
 
 import (
 	"archive/zip"
+	"context"
 	"bytes"
 	"database/sql"
 	"os"
@@ -204,7 +205,7 @@ func TestScanBooksLibrary(t *testing.T) {
 	// library row not required by scan.Library, but inserted for realism
 	db.AddLibrary("Books", "books", root)
 
-	n, err := Library(db, lib, covers, nil)
+	n, err := Library(context.Background(), db, lib, covers, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,7 +300,7 @@ func TestScanBooksLibrary(t *testing.T) {
 		before = append(before, v)
 	}
 	rows.Close()
-	if n, err := Library(db, lib, covers, nil); err != nil || n != 0 {
+	if n, err := Library(context.Background(), db, lib, covers, nil); err != nil || n != 0 {
 		t.Fatalf("rescan = (%d, %v), want 0 new docs", n, err)
 	}
 	rows, _ = db.Query(`SELECT probed_at FROM files ORDER BY id`)
@@ -402,7 +403,7 @@ func TestScanCBRSkippedWithoutExtractor(t *testing.T) {
 	root := t.TempDir()
 	os.WriteFile(filepath.Join(root, "comic.cbr"), []byte("Rar!"), 0o644)
 	db.AddLibrary("Comics", "comics", root)
-	n, err := Library(db, &store.Library{ID: 1, Type: "comics", Path: root}, filepath.Join(t.TempDir(), "covers"), nil)
+	n, err := Library(context.Background(), db, &store.Library{ID: 1, Type: "comics", Path: root}, filepath.Join(t.TempDir(), "covers"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -429,7 +430,7 @@ func TestScanBooksLibraryCBR(t *testing.T) {
 	os.MkdirAll(covers, 0o755)
 	db.AddLibrary("Comics", "comics", root)
 
-	n, err := Library(db, &store.Library{ID: 1, Type: "comics", Path: root}, covers, nil)
+	n, err := Library(context.Background(), db, &store.Library{ID: 1, Type: "comics", Path: root}, covers, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

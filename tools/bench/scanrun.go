@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -128,7 +129,7 @@ type scanStats struct {
 func scanRun(db *store.DB, lib *store.Library, covers string) scanStats {
 	var final scan.Progress
 	start := time.Now()
-	_, err := scan.Library(db, lib, covers, func(p scan.Progress) { final = p })
+	_, err := scan.Library(context.Background(), db, lib, covers, func(p scan.Progress) { final = p })
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "bench: scan error: %v\n", err)
 	}

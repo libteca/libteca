@@ -1,6 +1,7 @@
 package scan
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -55,11 +56,14 @@ func (v *vidFile) probe() error {
 	return nil
 }
 
-func scanVideoLibrary(db *store.DB, lib *store.Library, coversDir string, tv bool, tr *tracker) (int, error) {
+func scanVideoLibrary(ctx context.Context, db *store.DB, lib *store.Library, coversDir string, tv bool, tr *tracker) (int, error) {
 	abs, _ := filepath.Abs(lib.Path)
 	var files []vidFile
 	var series = map[string][]vidFile{}
-	filepath.WalkDir(abs, func(path string, d os.DirEntry, err error) error {
+	err := filepath.WalkDir(abs, func(path string, d os.DirEntry, err error) error {
+		if cerr := cancelErr(ctx); cerr != nil {
+			return cerr
+		}
 		if err != nil {
 			return nil
 		}
@@ -89,6 +93,9 @@ func scanVideoLibrary(db *store.DB, lib *store.Library, coversDir string, tv boo
 		tr.seen(path)
 		return nil
 	})
+	if err != nil {
+		return 0, err
+	}
 
 	tops := make([]string, 0, len(series))
 	for k := range series {
@@ -98,6 +105,9 @@ func scanVideoLibrary(db *store.DB, lib *store.Library, coversDir string, tv boo
 
 	count := 0
 	for _, top := range tops {
+		if cerr := cancelErr(ctx); cerr != nil {
+			return count, cerr
+		}
 		group := series[top]
 		sort.Slice(group, func(i, j int) bool {
 			if group[i].season != group[j].season {
@@ -294,7 +304,7 @@ func titleYear(base string) (string, string) {
 	return title, year
 }
 
-func scanMusicLibrary(db *store.DB, lib *store.Library, coversDir string, tr *tracker) (int, error) {
+func scanMusicLibrary(ctx context.Context, db *store.DB, lib *store.Library, coversDir string, tr *tracker) (int, error) {
 	abs, _ := filepath.Abs(lib.Path)
 	type track struct {
 		path  string
@@ -304,7 +314,10 @@ func scanMusicLibrary(db *store.DB, lib *store.Library, coversDir string, tr *tr
 		mtime int64
 	}
 	albums := map[string][]track{}
-	filepath.WalkDir(abs, func(path string, d os.DirEntry, err error) error {
+	err := filepath.WalkDir(abs, func(path string, d os.DirEntry, err error) error {
+		if cerr := cancelErr(ctx); cerr != nil {
+			return cerr
+		}
 		if err != nil {
 			return nil
 		}
@@ -334,6 +347,9 @@ func scanMusicLibrary(db *store.DB, lib *store.Library, coversDir string, tr *tr
 		tr.seen(path)
 		return nil
 	})
+	if err != nil {
+		return 0, err
+	}
 
 	tops := make([]string, 0, len(albums))
 	for k := range albums {
@@ -343,6 +359,9 @@ func scanMusicLibrary(db *store.DB, lib *store.Library, coversDir string, tr *tr
 
 	count := 0
 	for _, top := range tops {
+		if cerr := cancelErr(ctx); cerr != nil {
+			return count, cerr
+		}
 		group := albums[top]
 		sort.Slice(group, func(i, j int) bool { return group[i].num < group[j].num })
 		skip := make([]bool, len(group))

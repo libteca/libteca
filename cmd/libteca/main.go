@@ -73,10 +73,16 @@ func main() {
 	}
 
 	if *scanOnly {
-		n, err := scan.All(db, filepath.Join(abs, "covers"), func(p scan.Progress) {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		n, err := scan.All(ctx, db, filepath.Join(abs, "covers"), func(p scan.Progress) {
 			fmt.Printf("\rscan: %d seen, %d probed, %d added, %d updated   ", p.FilesSeen, p.FilesProbed, p.FilesAdded, p.FilesUpdated)
 		})
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				fmt.Printf("\nscan cancelled: %d editions current\n", n)
+				return
+			}
 			fatal(err)
 		}
 		fmt.Printf("\nscan complete: %d editions current\n", n)
@@ -90,6 +96,7 @@ func main() {
 	srv.Core.Podcasts = podcasts
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	srv.Core.SetShutdownCtx(ctx)
 	go podcasts.Run(ctx)
 
 	if v := os.Getenv("LIBTECA_WATCH"); v != "" {

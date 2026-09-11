@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -22,7 +23,7 @@ import (
 	"github.com/neutron-build/neutron/go/neutron"
 )
 
-type ScanFunc func(db *store.DB, lib *store.Library, coversDir string, onProgress scan.ProgressFn) (int, error)
+type ScanFunc func(ctx context.Context, db *store.DB, lib *store.Library, coversDir string, onProgress scan.ProgressFn) (int, error)
 
 type API struct {
 	DB       *store.DB
@@ -31,8 +32,11 @@ type API struct {
 	TC       *transcode.Manager
 	Podcasts *podcast.Service
 
-	mu   sync.Mutex
-	runs map[int64]*scanRun
+	LoginLimiter *auth.Limiter
+
+	mu       sync.Mutex
+	runs     map[int64]*scanRun
+	shutdown context.Context
 
 	metaMu   sync.Mutex
 	metaRuns map[int64]*metaRun
@@ -46,6 +50,21 @@ func New(db *store.DB, dataDir string) *API {
 		fmt.Printf("libteca: marked %d interrupted scan job(s) as error\n", n)
 	}
 	return &API{DB: db, DataDir: dataDir, runs: map[int64]*scanRun{}, metaRuns: map[int64]*metaRun{}}
+}
+
+func (a *API) SetShutdownCtx(ctx context.Context) {
+	a.mu.Lock()
+	a.shutdown = ctx
+	a.mu.Unlock()
+}
+
+func (a *API) scanCtx() context.Context {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.shutdown == nil {
+		return context.Background()
+	}
+	return a.shutdown
 }
 
 func (a *API) MountPublic(r *neutron.Router) {
@@ -116,6 +135,14 @@ var loginDummyHash = func() string {
 }()
 
 func (a *API) login(w http.ResponseWriter, r *http.Request) {
+	ip := auth.ClientIP(r)
+	if a.LoginLimiter != nil {
+		if ok, retry := a.LoginLimiter.Allow(ip); !ok {
+			auth.WriteRetryAfter(w, retry)
+			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many attempts, try again later"})
+			return
+		}
+	}
 	var body struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
@@ -127,12 +154,21 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 	u, err := a.DB.UserByName(body.Username)
 	if err != nil {
 		auth.Verify(body.Password, loginDummyHash)
+		if a.LoginLimiter != nil {
+			a.LoginLimiter.Failure(ip)
+		}
 		writeJSON(w, 401, map[string]string{"error": "invalid credentials"})
 		return
 	}
 	if !auth.Verify(body.Password, u.PasswordHash) {
+		if a.LoginLimiter != nil {
+			a.LoginLimiter.Failure(ip)
+		}
 		writeJSON(w, 401, map[string]string{"error": "invalid credentials"})
 		return
+	}
+	if a.LoginLimiter != nil {
+		a.LoginLimiter.Success(ip)
 	}
 	token, err := auth.IssueToken(a.DB, u.ID, r.UserAgent())
 	if err != nil {
@@ -257,7 +293,7 @@ func (a *API) scanLibrary(w http.ResponseWriter, r *http.Request) {
 	run := newScanRun(jobID, id)
 	a.runs[id] = run
 	a.mu.Unlock()
-	go a.runScan(run, lib)
+	go a.runScan(a.scanCtx(), run, lib)
 	writeJSON(w, 202, map[string]any{"status": "scanning", "jobId": jobID})
 }
 
@@ -266,7 +302,7 @@ var ErrScanRunning = errors.New("scan already running")
 // TriggerScan starts a library scan through the same lock and job machinery
 // as POST /libraries/{id}/scan. It returns ErrScanRunning when a scan is
 // already in flight for the library (in-process run or running job row).
-func (a *API) TriggerScan(libraryID int64) (int64, error) {
+func (a *API) TriggerScan(ctx context.Context, libraryID int64) (int64, error) {
 	lib, err := a.DB.Library(libraryID)
 	if err != nil {
 		return 0, err
@@ -288,13 +324,13 @@ func (a *API) TriggerScan(libraryID int64) (int64, error) {
 	run := newScanRun(jobID, libraryID)
 	a.runs[libraryID] = run
 	a.mu.Unlock()
-	go a.runScan(run, lib)
+	go a.runScan(ctx, run, lib)
 	return jobID, nil
 }
 
 const scanPersistInterval = 2 * time.Second
 
-func (a *API) runScan(run *scanRun, lib *store.Library) {
+func (a *API) runScan(ctx context.Context, run *scanRun, lib *store.Library) {
 	defer func() {
 		a.mu.Lock()
 		if a.runs[run.libraryID] == run {
@@ -314,11 +350,14 @@ func (a *API) runScan(run *scanRun, lib *store.Library) {
 			a.DB.UpdateScanJobCounts(run.jobID, int64(p.FilesSeen), int64(p.FilesProbed), int64(p.FilesAdded), int64(p.FilesUpdated), int64(p.WorksChanged))
 		}
 	}
-	_, err := scanFn(a.DB, lib, filepath.Join(a.DataDir, "covers"), onProgress)
+	_, err := scanFn(ctx, a.DB, lib, filepath.Join(a.DataDir, "covers"), onProgress)
 	final := run.snapshot()
 	a.DB.UpdateScanJobCounts(run.jobID, int64(final.FilesSeen), int64(final.FilesProbed), int64(final.FilesAdded), int64(final.FilesUpdated), int64(final.WorksChanged))
 	if err != nil {
 		msg := err.Error()
+		if ctx.Err() != nil {
+			msg = "cancelled"
+		}
 		a.DB.FinishScanJob(run.jobID, "error", &msg)
 		run.finish("error", msg)
 		fmt.Println("libteca: scan:", err)

@@ -1,6 +1,7 @@
 package scan
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -29,7 +30,14 @@ type bookFile struct {
 	mtime int64
 }
 
-func All(db *store.DB, coversDir string, onProgress ProgressFn) (int, error) {
+func cancelErr(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("scan cancelled: %w", err)
+	}
+	return nil
+}
+
+func All(ctx context.Context, db *store.DB, coversDir string, onProgress ProgressFn) (int, error) {
 	libs, err := db.Libraries()
 	if err != nil {
 		return 0, err
@@ -37,7 +45,10 @@ func All(db *store.DB, coversDir string, onProgress ProgressFn) (int, error) {
 	tr := newTracker(onProgress)
 	total := 0
 	for _, lib := range libs {
-		n, err := Library(db, &lib, coversDir, tr.fn)
+		if cerr := cancelErr(ctx); cerr != nil {
+			return total, cerr
+		}
+		n, err := Library(ctx, db, &lib, coversDir, tr.fn)
 		if err != nil {
 			return total, fmt.Errorf("library %q: %w", lib.Name, err)
 		}
@@ -46,31 +57,34 @@ func All(db *store.DB, coversDir string, onProgress ProgressFn) (int, error) {
 	return total, nil
 }
 
-func Library(db *store.DB, lib *store.Library, coversDir string, onProgress ProgressFn) (int, error) {
+func Library(ctx context.Context, db *store.DB, lib *store.Library, coversDir string, onProgress ProgressFn) (int, error) {
 	tr := newTracker(onProgress)
 	defer tr.flush()
 	switch lib.Type {
 	case "movies":
-		return scanVideoLibrary(db, lib, coversDir, false, tr)
+		return scanVideoLibrary(ctx, db, lib, coversDir, false, tr)
 	case "tv":
-		return scanVideoLibrary(db, lib, coversDir, true, tr)
+		return scanVideoLibrary(ctx, db, lib, coversDir, true, tr)
 	case "music":
-		return scanMusicLibrary(db, lib, coversDir, tr)
+		return scanMusicLibrary(ctx, db, lib, coversDir, tr)
 	case "books", "comics":
-		return scanBooksLibrary(db, lib, coversDir, tr)
+		return scanBooksLibrary(ctx, db, lib, coversDir, tr)
 	case "podcasts":
 		return 0, nil
 	}
-	return scanAudioLibrary(db, lib, coversDir, tr)
+	return scanAudioLibrary(ctx, db, lib, coversDir, tr)
 }
 
-func scanAudioLibrary(db *store.DB, lib *store.Library, coversDir string, tr *tracker) (int, error) {
+func scanAudioLibrary(ctx context.Context, db *store.DB, lib *store.Library, coversDir string, tr *tracker) (int, error) {
 	abs, err := filepath.Abs(lib.Path)
 	if err != nil {
 		return 0, err
 	}
 	var files []bookFile
 	err = filepath.WalkDir(abs, func(path string, d os.DirEntry, err error) error {
+		if cerr := cancelErr(ctx); cerr != nil {
+			return cerr
+		}
 		if err != nil {
 			return nil
 		}
@@ -121,6 +135,9 @@ func scanAudioLibrary(db *store.DB, lib *store.Library, coversDir string, tr *tr
 
 	count := 0
 	for _, top := range topFolders {
+		if cerr := cancelErr(ctx); cerr != nil {
+			return count, cerr
+		}
 		group := groups[top]
 		sort.Slice(group, func(i, j int) bool { return natLess(group[i].name, group[j].name) })
 		if err := scanBook(db, lib, top, group, coversDir, tr); err != nil {

@@ -359,3 +359,21 @@ backup = `libteca backup` (15g); neutron-go published (17).
     Remaining: Gate W + Gate F (human), scan ctx threading + login
     rate-limit (documented limits, not blockers for single-household).
     Reverse: none.
+
+29. **Gate W agent soak + last two non-blockers (2026-09-11).** (a)
+    Scan cancellation: ctx threaded through all scanners + watch +
+    HTTP/API paths; shutdown marks running jobs "cancelled"; per-book
+    txs keep partial progress consistent. (b) Login rate limiting:
+    auth.Limiter (rolling 10-min window, 5 fails -> 15-min lockout,
+    success resets, 10k IP cap) shared by core, ABS, and Subsonic
+    plain-password auth; RemoteAddr-keyed (no XFF trust - no proxy
+    config exists). (c) Agent soak (machine Gate W): finish-TV ->
+    nextup advances (1x1->1x2), finish-movie -> resume drops,
+    finished flag round-trips, progress persists restart, concurrent
+    scan+range-stream+progress no 5xx, faces 200 under limiter, RSS
+    stable, zero server errors. Progress POST contract is
+    {"position","duration","finished"} - soak initially used
+    "isFinished" (wrong key, silently ignored) - no app bug.
+    Remaining human: founder week on real corpus (Gate W), live
+    client + corpus (Gate F).
+    Reverse: none.

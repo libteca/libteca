@@ -50,8 +50,9 @@ const (
 const ignoredArticles = "The El La Los Las Le Les" // corpus: value unverified against real servers
 
 type API struct {
-	DB  *store.DB
-	Dir string
+	LoginLimiter *auth.Limiter
+	DB           *store.DB
+	Dir          string
 }
 
 func New(db *store.DB, dir string) *API {
@@ -135,6 +136,11 @@ func (a *API) authenticate(r *http.Request) (int64, bool) {
 	if pass == "" {
 		return 0, false
 	}
+	if a.LoginLimiter != nil {
+		if ok, _ := a.LoginLimiter.Allow(auth.ClientIP(r)); !ok {
+			return 0, false
+		}
+	}
 	if enc, found := strings.CutPrefix(pass, "enc:"); found {
 		raw, err := hex.DecodeString(enc)
 		if err != nil {
@@ -143,7 +149,13 @@ func (a *API) authenticate(r *http.Request) (int64, bool) {
 		pass = string(raw)
 	}
 	if !auth.Verify(pass, u.PasswordHash) {
+		if a.LoginLimiter != nil {
+			a.LoginLimiter.Failure(auth.ClientIP(r))
+		}
 		return 0, false
+	}
+	if a.LoginLimiter != nil {
+		a.LoginLimiter.Success(auth.ClientIP(r))
 	}
 	if cached, has := a.DB.GetSetting(subsonicSecretKey(u.ID)); !has || cached != pass {
 		a.DB.SetSetting(subsonicSecretKey(u.ID), pass)
