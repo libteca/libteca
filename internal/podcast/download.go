@@ -72,6 +72,18 @@ func (s *Service) downloadEpisode(ctx context.Context, p *store.Podcast, ep *sto
 		return fmt.Errorf("enclosure fetch: %s", resp.Status)
 	}
 
+	readCtx, cancel := context.WithTimeout(ctx, s.downloadTimeout(resp.ContentLength))
+	defer cancel()
+	watchDone := make(chan struct{})
+	defer close(watchDone)
+	go func() {
+		select {
+		case <-readCtx.Done():
+			resp.Body.Close()
+		case <-watchDone:
+		}
+	}()
+
 	tmp, err := os.CreateTemp(dir, name+".*.part")
 	if err != nil {
 		return err
@@ -97,6 +109,15 @@ func (s *Service) downloadEpisode(ctx context.Context, p *store.Podcast, ep *sto
 		return err
 	}
 	return s.DB.LinkEpisodeFile(ep.ID, fileID)
+}
+
+func (s *Service) downloadTimeout(contentLength int64) time.Duration {
+	if secs := contentLength / (32 * 1024); secs > 0 {
+		if sized := time.Duration(secs) * time.Second; sized > s.dlReadFloor {
+			return sized
+		}
+	}
+	return s.dlReadFloor
 }
 
 // enforceRetention keeps only the newest maxEpisodes downloaded episodes.

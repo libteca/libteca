@@ -32,10 +32,11 @@ type Service struct {
 	Client   *http.Client // feeds + covers, 30s whole-request timeout
 	DLClient *http.Client // enclosures: no total timeout, ctx-cancellable
 
-	fetcher  Fetcher
-	mu       sync.Mutex
-	inflight map[int64]bool
-	sem      chan struct{}
+	fetcher     Fetcher
+	mu          sync.Mutex
+	inflight    map[int64]bool
+	sem         chan struct{}
+	dlReadFloor time.Duration
 }
 
 func New(db *store.DB, dataDir string) *Service {
@@ -43,13 +44,14 @@ func New(db *store.DB, dataDir string) *Service {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.ResponseHeaderTimeout = 30 * time.Second
 	return &Service{
-		DB:       db,
-		DataDir:  dataDir,
-		Client:   client,
-		DLClient: &http.Client{Transport: tr},
-		fetcher:  Fetcher{Client: client},
-		inflight: map[int64]bool{},
-		sem:      make(chan struct{}, workerPool),
+		DB:          db,
+		DataDir:     dataDir,
+		Client:      client,
+		DLClient:    &http.Client{Transport: tr},
+		fetcher:     Fetcher{Client: client},
+		inflight:    map[int64]bool{},
+		sem:         make(chan struct{}, workerPool),
+		dlReadFloor: 90 * time.Second,
 	}
 }
 

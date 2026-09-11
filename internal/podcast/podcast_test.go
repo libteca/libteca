@@ -588,6 +588,65 @@ func TestConcurrentDownloadEpisodesUseDistinctTempFiles(t *testing.T) {
 	}
 }
 
+func TestDownloadEpisodeDripFeedTimesOut(t *testing.T) {
+	svc, db := newTestService(t)
+	svc.dlReadFloor = 150 * time.Millisecond
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "audio/mpeg")
+		w.Header().Set("Content-Length", "16")
+		w.(http.Flusher).Flush()
+		for i := 0; i < 40; i++ {
+			io.WriteString(w, "x")
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	libID, err := db.EnsurePodcastsLibrary(filepath.Join(svc.DataDir, "podcasts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := db.AddPodcast(&store.Podcast{LibraryID: libID, FeedURL: srv.URL + "/feed", Title: "Cast", AutoDownload: true, MaxEpisodes: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := db.Podcast(pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ep := &store.PodcastEpisode{PodcastID: pid, GUID: "drip-1", Title: strPtr("Ep"), EnclosureURL: srv.URL + "/e.mp3"}
+	if _, err := db.UpsertPodcastEpisode(ep); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	start := time.Now()
+	go func() { done <- svc.downloadEpisode(context.Background(), p, ep) }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("drip-feed download unexpectedly succeeded")
+		}
+		if elapsed := time.Since(start); elapsed > 5*time.Second {
+			t.Fatalf("download took %v, want body-read deadline to fire", elapsed)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("downloadEpisode never returned from drip-feed server")
+	}
+
+	dir := filepath.Join(svc.DataDir, "podcasts", strconv.FormatInt(pid, 10))
+	if entries, err := os.ReadDir(dir); err == nil {
+		for _, e := range entries {
+			if strings.HasSuffix(e.Name(), ".part") {
+				t.Fatalf("leftover temp file %s after failed download", e.Name())
+			}
+		}
+	}
+}
+
 func TestNormalizeFeedURL(t *testing.T) {
 	cases := map[string]string{
 		"http://example.com/feed":        "https://example.com/feed",
