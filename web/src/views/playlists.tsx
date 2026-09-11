@@ -228,8 +228,8 @@ function PlaylistList() {
                 {renaming === p.id ? (
                   <form style={{ display: "flex", gap: "0.4rem" }} onSubmit={(e) => { e.preventDefault(); rename(p.id); }}>
                     <input style={input} autoFocus value={renameVal} onInput={(e) => setRenameVal((e.target as HTMLInputElement).value)} />
-                    <button style={primaryBtn} type="submit">Save</button>
-                    <button style={ghostBtn} type="button" onClick={() => setRenaming(null)}>Cancel</button>
+                    <button className="press btnp" style={primaryBtn} type="submit">Save</button>
+                    <button className="press" style={ghostBtn} type="button" onClick={() => setRenaming(null)}>Cancel</button>
                   </form>
                 ) : (
                   <a href={`#/playlists?id=${p.id}`} style={{ textDecoration: "none", color: c.text, minWidth: 0 }}>
@@ -238,16 +238,16 @@ function PlaylistList() {
                   </a>
                 )}
                 <span style={{ display: "flex", gap: "0.3rem", flexShrink: 0 }}>
-                  <button style={linkBtn} onClick={() => { setRenaming(p.id); setRenameVal(p.name); }}>Rename</button>
-                  <button style={{ ...linkBtn, color: c.danger }} onClick={() => remove(p.id, p.name)}>Delete</button>
+                  <button className="press" style={linkBtn} onClick={() => { setRenaming(p.id); setRenameVal(p.name); }}>Rename</button>
+                  <button className="press" style={{ ...linkBtn, color: c.danger }} onClick={() => remove(p.id, p.name)}>Delete</button>
                 </span>
               </div>
             ))}
           </div>
         )}
-      <form style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap", marginTop: "1.6rem", alignItems: "center" }} onSubmit={create}>
+      <form style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap", marginTop: "2.4rem", alignItems: "center" }} onSubmit={create}>
         <input style={{ ...input, flex: 1, minWidth: "12rem" }} placeholder="New playlist name" value={name} onInput={(e) => setName((e.target as HTMLInputElement).value)} />
-        <button style={primaryBtn} type="submit" disabled={busy}>{busy ? "Creating…" : "Create"}</button>
+        <button className="press btnp" style={primaryBtn} type="submit" disabled={busy}>{busy ? "Creating…" : "Create"}</button>
       </form>
       {err && <p style={errStyle}>{err}</p>}
     </div>
@@ -310,7 +310,7 @@ function PlaylistDetail(props: { id: number }) {
       <div>
         <button className="press" style={backLink} onClick={() => { location.hash = "#/playlists"; }}><IconChevronLeft size={16} /> Playlists</button>
         <EmptyState title="Couldn't reach the server" hint="The playlist failed to load.">
-          <button style={primaryBtn} onClick={refresh}>Retry</button>
+          <button className="press btnp" style={primaryBtn} onClick={refresh}>Retry</button>
         </EmptyState>
       </div>
     );
@@ -326,7 +326,7 @@ function PlaylistDetail(props: { id: number }) {
         <h2 style={{ ...sectionTitle, margin: 0 }}>{p.name}</h2>
         <span style={muted}>{p.songCount} items · {fmt(p.durationSecs)} · {p.owner}</span>
         {audioItems.length > 0 && (
-          <button style={primaryBtn} onClick={() => setPlaying(true)}>
+          <button className="press btnp" style={primaryBtn} onClick={() => setPlaying(true)}>
             <span style={{ display: "inline-flex", gap: "0.45rem", alignItems: "center" }}>
               <IconPlay size={14} /> Play all ({audioItems.length})
             </span>

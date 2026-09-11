@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { api, getToken, setToken } from "./api";
-import { HEADER_H, brand, c, center, content, headerBar, headerInner, input, linkBtn, muted, nav, navLink, page, primaryBtn } from "./styles";
+import { globalCss, brand, c, center, content, headerBar, headerInner, input, linkBtn, muted, nav, navLink, page, primaryBtn } from "./styles";
 import { Login } from "./views/login";
 import { Home } from "./views/home";
 import { LibraryView } from "./views/library";
@@ -48,168 +48,6 @@ function parseHash(): View {
   if (name === "library") return { name: "library", lib, type: typ || undefined };
   return { name: "home" };
 }
-
-const globalCss = `
-:root { --ease: cubic-bezier(0.22, 1, 0.36, 1); color-scheme: dark; }
-html, body { margin: 0; background: #0c0d0f; }
-.rail-x { scrollbar-width: none; }
-.rail-x::-webkit-scrollbar { display: none; }
-.topbar { height: ${HEADER_H}; padding: 0 1.6rem; }
-a { color: inherit; }
-::selection { background: rgba(10, 132, 255, 0.22); }
-select option { background: #141518; color: #f5f5f7; }
-video::cue { background: rgba(0,0,0,0.7); }
-
-button, a, input, select { outline: none; }
-button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible {
-  outline: 2px solid #0a84ff;
-  outline-offset: 2px;
-}
-
-.cover-box { transition: transform 0.45s var(--ease), box-shadow 0.45s var(--ease); transform-origin: 50% 80%; }
-.rail-card:hover .cover-box, .cover-card:hover .cover-box {
-  transform: translateY(-4px) scale(1.03);
-  box-shadow: 0 22px 48px rgba(0,0,0,0.55);
-}
-
-.rail-nav { opacity: 0; transition: opacity 180ms ease; }
-section:hover .rail-nav, section:focus-within .rail-nav { opacity: 1; }
-@media (hover: none) { .rail-nav { opacity: 1; } }
-
-.press { transition: opacity 140ms ease; }
-.press:active { opacity: 0.7; }
-
-.row-hit { transition: background 140ms ease; }
-.row-hit:hover { background: rgba(255,255,255,0.028); }
-
-.search-wrap {
-  display: flex;
-  align-items: center;
-  gap: 0.45rem;
-  padding: 0.2rem 0.2rem 0.2rem 0.85rem;
-  border-radius: 999px;
-  background: transparent;
-  border: 1px solid transparent;
-  min-height: 34px;
-  transition: background 160ms ease, border-color 160ms ease;
-}
-.search-wrap:hover, .search-wrap:focus-within {
-  background: #141518;
-  border-color: #26282d;
-}
-
-select.pill {
-  appearance: none;
-  -webkit-appearance: none;
-  background: transparent;
-  color: #86868b;
-  border: none;
-  padding: 0.25rem 1.6rem 0.25rem 0;
-  font-size: 0.82rem;
-  font-family: inherit;
-  min-height: 32px;
-  cursor: pointer;
-}
-
-input[type="range"].seek {
-  -webkit-appearance: none;
-  appearance: none;
-  height: 36px;
-  background: transparent;
-  cursor: pointer;
-  margin: 0;
-  flex: 1;
-  min-width: 4rem;
-}
-input[type="range"].seek::-webkit-slider-runnable-track {
-  height: 3px;
-  border-radius: 999px;
-  background: transparent;
-}
-input[type="range"].seek::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: #f5f5f7;
-  margin-top: -4.5px;
-  border: none;
-}
-input[type="range"].seek::-moz-range-track {
-  height: 3px; border-radius: 999px; background: transparent; border: none;
-}
-input[type="range"].seek::-moz-range-thumb {
-  width: 12px; height: 12px; border-radius: 50%; background: #f5f5f7; border: none;
-}
-
-@keyframes libteca-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
-.sk {
-  background: linear-gradient(100deg, #141518 40%, #1e2025 50%, #141518 60%);
-  background-size: 200% 100%;
-  animation: libteca-shimmer 1.7s ease-in-out infinite;
-  border-radius: 6px;
-}
-
-@keyframes libteca-spin { to { transform: rotate(360deg); } }
-.spin { animation: libteca-spin 0.8s linear infinite; }
-
-.menu {
-  position: absolute; right: 0; top: calc(100% + 0.35rem);
-  min-width: 10.5rem; padding: 0.35rem;
-  background: #141518; border: 1px solid #26282d; border-radius: 12px;
-  box-shadow: 0 18px 40px rgba(0,0,0,0.5); z-index: 60;
-}
-.menu a, .menu button {
-  display: block; width: 100%; text-align: left;
-  background: none; border: none; color: #c7c9ce;
-  font: inherit; font-size: 0.84rem; padding: 0.5rem 0.7rem;
-  border-radius: 8px; cursor: pointer; text-decoration: none;
-}
-.menu a:hover, .menu button:hover { background: rgba(255,255,255,0.05); color: #f5f5f7; }
-
-.cardwrap { position: relative; }
-.cardover {
-  position: absolute; inset: 0; border-radius: 6px; overflow: hidden;
-  opacity: 0; transition: opacity 200ms ease;
-  background: linear-gradient(to top, rgba(0,0,0,0.82) 0%, rgba(0,0,0,0.25) 45%, transparent 70%);
-  display: flex; align-items: flex-end; padding: 0.7rem;
-}
-.cardplay {
-  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) scale(0.85);
-  width: 46px; height: 46px; border-radius: 50%;
-  background: rgba(10,132,255,0.92); color: #fff;
-  display: flex; align-items: center; justify-content: center;
-  box-shadow: 0 10px 30px rgba(10,132,255,0.45);
-  transition: transform 200ms var(--ease);
-}
-.rail-card:hover .cardover, .cover-card:hover .cardover { opacity: 1; }
-.rail-card:hover .cardplay, .cover-card:hover .cardplay { transform: translate(-50%, -50%) scale(1); }
-.navlink {
-  display: inline-flex; align-items: center; gap: 0.45rem;
-  padding: 0.42rem 0.8rem; min-height: 36px; border-radius: 999px;
-  color: #86868b; text-decoration: none; font-size: 0.86rem; font-weight: 500;
-  transition: background 140ms ease, color 140ms ease;
-}
-.navlink:hover { color: #f5f5f7; background: rgba(255,255,255,0.05); }
-.navlink.on { color: #f5f5f7; background: #1c1e22; font-weight: 650; }
-nav a svg { flex-shrink: 0; }
-@media (max-width: 1024px) { .nav-cat { display: none; } nav a { padding: 0.42rem 0.55rem; } }
-@media (max-width: 760px) {
-  .topbar { flex-wrap: wrap; height: auto; padding: 0.5rem 1rem; }
-  .topbar nav { flex-grow: 1; }
-  .topbar > div:first-of-type { min-width: 6rem !important; }
-  .rail-nav { opacity: 1; }
-}
-
-@media (max-width: 640px) {
-  input.seek { flex-basis: 100% !important; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .cover-box, .press, .spin, .sk, .row-hit, .rail-nav { transition: none; animation: none; }
-  .rail-card:hover .cover-box, .cover-card:hover .cover-box { transform: none; }
-}
-`;
 
 function pageTitle(v: View): string {
   switch (v.name) {
@@ -284,13 +122,13 @@ export function App() {
   }, []);
 
   if (!ready) return <div style={center} role="status" aria-label="Loading"><IconSpinner size={22} /></div>;
-  if (!getToken()) return <Login onLogin={() => { setView({ name: "home" }); location.hash = "#/home"; location.reload(); }} />;
+  if (!getToken()) return <div className="anim-page"><Login onLogin={() => { setView({ name: "home" }); location.hash = "#/home"; location.reload(); }} /></div>;
   if (!me) {
     if (bootErr) {
       return (
         <div style={{ ...center, flexDirection: "column", gap: "0.9rem" }}>
           <p style={{ ...muted, margin: 0 }}>Couldn't reach the server.</p>
-          <button className="press" style={primaryBtn} onClick={() => { setBootErr(false); loadMe(); }}>Retry</button>
+          <button className="press btnp" style={primaryBtn} onClick={() => { setBootErr(false); loadMe(); }}>Retry</button>
         </div>
       );
     }
@@ -354,7 +192,7 @@ export function App() {
           </div>
         </div>
       </header>
-      <div style={content}>
+      <div key={JSON.stringify(view)} className="anim-page pagecontent" style={content}>
         {view.name === "home" && <Home />}
         {view.name === "library" && <LibraryView lib={view.lib} type={view.type} />}
         {view.name === "work" && view.id != null && <WorkView id={view.id} />}
@@ -435,11 +273,13 @@ function ChangePassModal(props: { userId: number; isAdmin: boolean; onClose: () 
 
   return (
     <div
+      className="anim-fade"
       onClick={(e) => { if (e.target === e.currentTarget) props.onClose(); }}
       style={{ position: "fixed", inset: 0, zIndex: 80, background: "rgba(8,9,11,0.72)", display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}
     >
       <form
         ref={formRef}
+        className="anim-pop"
         onSubmit={submit}
         role="dialog"
         aria-modal="true"
@@ -455,7 +295,7 @@ function ChangePassModal(props: { userId: number; isAdmin: boolean; onClose: () 
         {err && <p style={{ margin: 0, fontSize: "0.84rem", color: c.danger }}>{err}</p>}
         <div style={{ display: "flex", gap: "0.6rem", justifyContent: "flex-end" }}>
           <button className="press" type="button" onClick={props.onClose} style={{ ...linkBtn, color: c.muted }}>Cancel</button>
-          <button className="press" style={primaryBtn} type="submit" disabled={busy}>{busy ? "Updating…" : "Update"}</button>
+          <button className="press btnp" style={primaryBtn} type="submit" disabled={busy}>{busy ? "Updating…" : "Update"}</button>
         </div>
       </form>
     </div>

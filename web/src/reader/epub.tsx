@@ -209,7 +209,7 @@ export function EpubReader(props: { editionId: number; title: string; progress: 
   const pillText = [percent != null ? `${Math.round(percent * 100)}%` : "", chapter].filter(Boolean).join(" · ");
 
   return (
-    <div style={readerOverlay}>
+    <div className="rd-in" style={readerOverlay}>
       <TopBar title={props.title} meta={phase === "indexing" ? "indexing…" : undefined} saveState={saver.state} onBack={props.onBack}>
         <button className={toolBtnCls} style={toolBtn} aria-label="Smaller text" title="Smaller text" disabled={fontSize <= FONT_MIN} onClick={() => setFontSize((f) => Math.max(FONT_MIN, f - FONT_STEP))}><IconMinus size={15} /></button>
         <span style={{ color: c.muted, fontSize: "0.72rem", minWidth: "2.6rem", textAlign: "center" }}>{fontSize}%</span>
@@ -223,8 +223,8 @@ export function EpubReader(props: { editionId: number; title: string; progress: 
         <PagePill text={pillText} watch={`${percent ?? ""}|${sectionHref}`} />
         {tocOpen && (
           <div>
-            <button aria-label="Close contents" style={{ position: "absolute", inset: 0, zIndex: 15, background: "rgba(0,0,0,0.45)", border: "none", padding: 0, cursor: "pointer" }} onClick={() => setTocOpen(false)} />
-            <div style={drawerPanel}>
+            <button aria-label="Close contents" className="rd-scrim" style={{ position: "absolute", inset: 0, zIndex: 15, background: "rgba(0,0,0,0.45)", border: "none", padding: 0, cursor: "pointer" }} onClick={() => setTocOpen(false)} />
+            <div className="rd-drawer" style={drawerPanel}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.7rem 1rem", borderBottom: `1px solid ${c.line}` }}>
                 <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>Contents</span>
                 <button className={toolBtnCls} style={toolBtn} aria-label="Close contents" title="Close" onClick={() => setTocOpen(false)}><IconClose size={15} /></button>
@@ -234,7 +234,10 @@ export function EpubReader(props: { editionId: number; title: string; progress: 
                 {toc.map((t, i) => {
                   const active = sameChapter(t.href, sectionHref);
                   return (
-                    <button key={`${t.href}-${i}`} style={{ ...drawerItem, paddingLeft: `${1 + t.depth * 0.7}rem`, ...(active ? { color: c.text, background: c.accentSoft } : {}) }} onClick={() => { setTocOpen(false); void renditionRef.current?.display(t.href); }}>{t.label}</button>
+                    <button key={`${t.href}-${i}`} className="row-hit" style={{ ...drawerItem, position: "relative", paddingLeft: `${1 + t.depth * 0.7}rem`, ...(active ? { color: c.text, background: c.accentSoft } : {}) }} onClick={() => { setTocOpen(false); void renditionRef.current?.display(t.href); }}>
+                      {active && <span style={{ position: "absolute", left: 0, top: "0.5rem", bottom: "0.5rem", width: "3px", borderRadius: "999px", background: c.accent }} />}
+                      {t.label}
+                    </button>
                   );
                 })}
               </div>

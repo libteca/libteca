@@ -231,7 +231,7 @@ export function MatchingView() {
         <QuietLoad />
       ) : loadErr ? (
         <EmptyState title="Couldn't load the inbox">
-          <button style={primaryBtn} type="button" onClick={loadQueue}>Retry</button>
+          <button className="press btnp" style={primaryBtn} type="button" onClick={loadQueue}>Retry</button>
         </EmptyState>
       ) : queue.length === 0 ? (
         <EmptyState title="Nothing to match" hint={'Run "Improve metadata" on a library to look up missing descriptions.'} />
@@ -306,7 +306,7 @@ export function MatchingView() {
                         )}
                       </div>
                       <span style={{ display: "flex", flexDirection: "column", gap: "0.45rem", flexShrink: 0, alignSelf: "center" }}>
-                        <button className="press" style={primaryBtn} disabled={busy} onClick={() => apply(cand)}>Apply</button>
+                        <button className="press btnp" style={primaryBtn} disabled={busy} onClick={() => apply(cand)}>Apply</button>
                         {kind === "tv" && (
                           <button className="press" style={ghostBtn} disabled={busy} onClick={() => applyEpisodes(cand)}>Apply episodes</button>
                         )}

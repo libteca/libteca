@@ -1,32 +1,53 @@
-import { useRef } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import type { ComponentChildren, CSSProperties } from "preact";
 import { IconChevronLeft, IconChevronRight, IconPlay, IconSpinner } from "./svg";
 import { iconBtn, railTitle } from "../styles";
 import { Cover, type CoverRatio } from "./cover";
-import { c, card, cardMeta, cardTitle, grid, gridSquare, muted, workCover, workHead, workMeta } from "../styles";
+import { c, card, cardMeta, cardTitleWrap, grid, gridSquare, muted, workCover, workHead, workMeta } from "../styles";
 
 export function Rail(props: { title: string; children: ComponentChildren }) {
   const ref = useRef<HTMLDivElement | null>(null);
+  const [edges, setEdges] = useState({ l: false, r: false });
   const scrollBy = (dir: number) => {
     const el = ref.current;
     if (!el) return;
     const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
     el.scrollBy({ left: dir * el.clientWidth * 0.85, behavior: reduce ? "auto" : "smooth" });
   };
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const update = () => setEdges({
+      l: el.scrollLeft > 8,
+      r: el.scrollLeft + el.clientWidth < el.scrollWidth - 8,
+    });
+    update();
+    el.addEventListener("scroll", update, { passive: true });
+    addEventListener("resize", update);
+    return () => {
+      el.removeEventListener("scroll", update);
+      removeEventListener("resize", update);
+    };
+  }, []);
+  const scrollable = edges.l || edges.r;
   return (
     <section style={{ marginBottom: "2.4rem" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <h2 style={railTitle}>{props.title}</h2>
-        <div className="rail-nav" style={{ display: "flex", gap: "0.15rem" }}>
-          <button className="press" style={iconBtn} aria-label={`Scroll ${props.title} left`} onClick={() => scrollBy(-1)}>
+        <div className="rail-nav" style={{ display: scrollable ? "flex" : "none", gap: "0.15rem" }}>
+          <button className="press" style={iconBtn} aria-label={`Scroll ${props.title} left`} disabled={!edges.l} onClick={() => scrollBy(-1)}>
             <IconChevronLeft size={16} />
           </button>
-          <button className="press" style={iconBtn} aria-label={`Scroll ${props.title} right`} onClick={() => scrollBy(1)}>
+          <button className="press" style={iconBtn} aria-label={`Scroll ${props.title} right`} disabled={!edges.r} onClick={() => scrollBy(1)}>
             <IconChevronRight size={16} />
           </button>
         </div>
       </div>
-      <div ref={ref} className="rail-x" style={{ display: "flex", gap: "1.05rem", overflowX: "auto", padding: "0.55rem 0.25rem 1rem", scrollSnapType: "x mandatory", scrollPaddingInline: "0.25rem" }}>
+      <div
+        ref={ref}
+        className={`rail-x${edges.l ? " rail-mask-l" : ""}${edges.r ? " rail-mask-r" : ""}`}
+        style={{ display: "flex", gap: "1.05rem", overflowX: "auto", padding: "0.55rem 0.25rem 1rem", scrollSnapType: "x mandatory", scrollPaddingInline: "0.25rem" }}
+      >
         {props.children}
       </div>
     </section>
@@ -57,7 +78,7 @@ export function RailCard(props: {
         <div className="cardover"><div className="cardplay"><IconPlay size={18} /></div></div>
         {props.progress != null && props.progress > 0 && <CardProgress pct={props.progress} />}
       </div>
-      <p style={cardTitle}>{props.title}</p>
+      <p style={cardTitleWrap}>{props.title}</p>
       {props.meta && <p style={cardMeta}>{props.meta}</p>}
     </a>
   );

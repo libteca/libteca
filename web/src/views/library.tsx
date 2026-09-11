@@ -163,14 +163,14 @@ export function LibraryView(props: { lib?: number; type?: string }) {
       {works.length === 0
         ? loadErr && loaded
           ? <EmptyState title="Couldn't reach the server" hint="The library failed to load.">
-              <button style={ghostBtn} onClick={refreshWorks}>Retry</button>
+              <button className="press" style={ghostBtn} onClick={refreshWorks}>Retry</button>
             </EmptyState>
           : loaded
             ? <EmptyState title={filter === "all" ? "No works yet" : "Nothing matches this filter"}
                 icon={<TypeIcon type={activeLib?.type || ""} size={22} />}
                 hint={filter === "all" ? "Add a library in Admin and scan." : "Try a different filter."} />
             : <SkeletonGrid square={ratio === "square"} />
-        : <div style={gridFor(activeLib?.type)}>
+        : <div style={gridFor(activeLib?.type)} className="cover-grid">
             {works.map((w) => {
               const meta = w.author || w.subtitle;
               return (

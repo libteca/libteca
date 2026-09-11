@@ -5,7 +5,7 @@ import { IconCheck, IconChevronLeft, IconPause, IconPlay, IconPodcast, IconScan 
 import { toast } from "../toast";
 import { fmt, fmtClock, fmtRel } from "../util";
 import {
-  backLink, badge, c, errStyle, ghostBtn, gridSquare, iconBtn, input, muted, playerBar, primaryBtn,
+  backLink, badge, c, cardMeta, cardTitleWrap, errStyle, ghostBtn, gridSquare, iconBtn, input, muted, playerBar, primaryBtn,
   progressMini, sectionTitle, workTitle,
 } from "../styles";
 
@@ -41,7 +41,7 @@ const letter: preact.JSX.CSSProperties = {
 
 function PodcastCover(props: { pod: Podcast; size?: string }) {
   return (
-    <div style={{ ...coverBox, width: props.size || "100%" }}>
+    <div className="cover-box" style={{ ...coverBox, width: props.size || "100%" }}>
       {props.pod.hasCover && props.pod.coverUrl
         ? <img src={tokened(props.pod.coverUrl)} alt="" loading="lazy" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
         : <span style={letter}>{props.pod.title.charAt(0).toUpperCase()}</span>}
@@ -124,17 +124,17 @@ export function PodcastsView() {
 
       {loadErr ? (
         <EmptyState title="Couldn't load podcasts">
-          <button style={primaryBtn} type="button" onClick={refresh}>Retry</button>
+          <button className="press btnp" style={primaryBtn} type="button" onClick={refresh}>Retry</button>
         </EmptyState>
       ) : pods.length === 0 ? (
         <EmptyState title="No subscriptions yet" icon={<IconPodcast size={22} />} hint="Add a feed URL or import an OPML file." />
       ) : (
-        <div style={gridSquare}>
+        <div style={gridSquare} className="cover-grid">
           {pods.map((p) => (
             <button key={p.id} type="button" onClick={() => setSelected(p.id)} className="cover-card" style={{ background: "none", border: "none", padding: 0, textAlign: "left", cursor: "pointer", display: "block", color: "inherit", fontFamily: "inherit" }}>
               <PodcastCover pod={p} />
-              <span style={{ display: "block", margin: "0.5rem 0 0", fontWeight: 600, fontSize: "0.88rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.title}</span>
-              <span style={{ display: "block", margin: 0, color: c.muted, fontSize: "0.78rem" }}>
+              <span style={cardTitleWrap}>{p.title}</span>
+              <span style={cardMeta}>
                 {p.episodeCount} episodes · {p.downloadedCount} downloaded
               </span>
               {p.autoDownload && <span style={{ display: "block", margin: 0 }}><span style={badge}>auto</span></span>}
@@ -143,9 +143,9 @@ export function PodcastsView() {
         </div>
       )}
 
-      <form style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap", marginTop: "2rem", alignItems: "center" }} onSubmit={subscribe}>
+      <form style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap", marginTop: "2.4rem", alignItems: "center" }} onSubmit={subscribe}>
         <input style={{ ...input, flex: 1, minWidth: "14rem" }} type="url" required placeholder="https://example.com/feed.xml" value={feedUrl} onInput={(e) => setFeedUrl((e.target as HTMLInputElement).value)} />
-        <button style={primaryBtn} type="submit" disabled={busy}>{busy ? "Subscribing…" : "Subscribe"}</button>
+        <button className="press btnp" style={primaryBtn} type="submit" disabled={busy}>{busy ? "Subscribing…" : "Subscribe"}</button>
       </form>
       {err && <p style={errStyle}>{err}</p>}
 
@@ -289,7 +289,7 @@ function PodcastShow(props: { id: number; onBack: () => void; onChanged: () => v
       <button className="press" style={backLink} onClick={props.onBack}><IconChevronLeft size={16} /> Podcasts</button>
       {loadErr && !pod ? (
         <EmptyState title="Couldn't load this podcast">
-          <button style={primaryBtn} type="button" onClick={load}>Retry</button>
+          <button className="press btnp" style={primaryBtn} type="button" onClick={load}>Retry</button>
         </EmptyState>
       ) : pod ? (
         <div style={{ display: "flex", gap: "2rem", alignItems: "flex-start", flexWrap: "wrap" }}>
@@ -333,7 +333,7 @@ function PodcastShow(props: { id: number; onBack: () => void; onChanged: () => v
             {msg && <p style={muted}>{msg}</p>}
             {err && <p style={errStyle}>{err}</p>}
             {resumeEp && (
-              <button style={primaryBtn} type="button" onClick={() => play(resumeEp)}>
+              <button className="press btnp" style={primaryBtn} type="button" onClick={() => play(resumeEp)}>
                 <span style={{ display: "inline-flex", gap: "0.45rem", alignItems: "center" }}>
                   <IconPlay size={14} /> Resume
                   {resumeEp.durationSecs ? ` · ${fmt(Math.max(0, resumeEp.durationSecs - (resumeEp.positionSecs || 0)))} left` : ""}

@@ -85,7 +85,7 @@ export function WorkView(props: { id: number }) {
   if (loadErr) {
     return (
       <EmptyState title="Couldn't reach the server" hint="The work failed to load.">
-        <button style={primaryBtn} onClick={reload}>Retry</button>
+        <button className="press btnp" style={primaryBtn} onClick={reload}>Retry</button>
       </EmptyState>
     );
   }
@@ -122,7 +122,7 @@ export function WorkView(props: { id: number }) {
                 {facts.map((f) => <span key={f} style={badge}>{f}</span>)}
               </div>
             )}
-            <button style={primaryBtn} onClick={() => setVideoEdition(first.id)}>
+            <button className="press btnp" style={primaryBtn} onClick={() => setVideoEdition(first.id)}>
               <span style={{ display: "inline-flex", gap: "0.45rem", alignItems: "center" }}>
                 <IconPlay size={14} /> {first.position && !first.isFinished ? "Resume" : "Play"}
               </span>
@@ -182,7 +182,7 @@ function EpisodeList(props: { w: WorkDetail; onPlay: (id: number) => void }) {
           <GenreChips genres={props.w.genres} />
           <p style={muted}>{eps.length} episodes</p>
           {resumeEp && (
-            <button style={primaryBtn} onClick={() => props.onPlay(resumeEp.id)}>
+            <button className="press btnp" style={primaryBtn} onClick={() => props.onPlay(resumeEp.id)}>
               <span style={{ display: "inline-flex", gap: "0.45rem", alignItems: "center" }}>
                 <IconPlay size={14} /> Continue S{resumeEp.seasonNum}E{resumeEp.episodeNum}
               </span>
@@ -392,7 +392,7 @@ function EditionsView(props: { w: WorkDetail; editionId: number; setEdition: (id
           <EditionMenu w={w} edition={ed} isAdmin={props.isAdmin} reload={props.reload} />
           {(ed.format === "m4b" || ed.format === "mp3" || ed.format === "audio") && <AddToPlaylist editionId={ed.id} />}
           {playable ? (
-            <button style={primaryBtn} onClick={resumeOrPlay}>
+            <button className="press btnp" style={primaryBtn} onClick={resumeOrPlay}>
               <span style={{ display: "inline-flex", gap: "0.45rem", alignItems: "center" }}>
                 <IconPlay size={14} />
                 {inProgress ? `Resume · ${fmt(ed.duration - (ed.position || 0))} left` : ed.isFinished ? "Listen again" : "Listen"}
@@ -400,7 +400,7 @@ function EditionsView(props: { w: WorkDetail; editionId: number; setEdition: (id
             </button>
           ) : readable ? (
             <div style={{ display: "flex", gap: "0.6rem", alignItems: "center", flexWrap: "wrap" }}>
-              <button style={primaryBtn} onClick={() => { location.hash = `#/read?edition=${ed.id}&id=${w.id}`; }}>
+              <button className="press btnp" style={primaryBtn} onClick={() => { location.hash = `#/read?edition=${ed.id}&id=${w.id}`; }}>
                 <span style={{ display: "inline-flex", gap: "0.45rem", alignItems: "center" }}>
                   <IconBook size={14} />
                   {ed.isFinished ? "Read again" : rp && rp.pct > 0 ? `Resume · ${rp.label}` : "Read"}
@@ -472,6 +472,7 @@ const menuCard: preact.JSX.CSSProperties = {
   minWidth: "17rem", maxWidth: "22rem", background: c.bgRaised,
   border: `1px solid ${c.line}`, borderRadius: "12px", padding: "0.75rem",
   display: "flex", flexDirection: "column", gap: "0.45rem",
+  boxShadow: "0 18px 40px rgba(0,0,0,0.5)",
 };
 
 const menuRow: preact.JSX.CSSProperties = {
@@ -482,7 +483,7 @@ const menuRow: preact.JSX.CSSProperties = {
 
 function PickerRow(props: { title: string; sub?: string | null; onClick: () => void; danger?: boolean }) {
   return (
-    <button type="button" style={{ ...menuRow, color: props.danger ? c.danger : c.textDim }} onClick={props.onClick}>
+    <button type="button" className="menurow" style={{ ...menuRow, color: props.danger ? c.danger : c.textDim }} onClick={props.onClick}>
       <span style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{props.title}</span>
       {props.sub ? (
         <span style={{ display: "block", color: c.muted, fontSize: "0.75rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{props.sub}</span>
@@ -526,7 +527,7 @@ function WorkPicker(props: {
         <PickerRow title={`New work: "${q.trim()}"`} onClick={() => props.onPick(null, q.trim())} />
       )}
       {matches.length === 0 && !(props.allowNew && ql) && <p style={muted}>No matches.</p>}
-      <button type="button" style={{ ...menuRow, color: c.muted }} onClick={props.onClose}>Cancel</button>
+      <button type="button" className="menurow" style={{ ...menuRow, color: c.muted }} onClick={props.onClose}>Cancel</button>
     </div>
   );
 }
@@ -708,7 +709,7 @@ function EditionMenu(props: { w: WorkDetail; edition: { id: number; title: strin
           <div style={{ display: "flex", flexDirection: "column", gap: "0.45rem" }}>
             <p style={muted}>Move "{props.edition.title}" into its own work?</p>
             <div style={{ display: "flex", gap: "0.5rem" }}>
-              <button type="button" style={primaryBtn} disabled={busy} onClick={doSplit}>{busy ? "Splitting…" : "Split"}</button>
+              <button type="button" className="press btnp" style={primaryBtn} disabled={busy} onClick={doSplit}>{busy ? "Splitting…" : "Split"}</button>
               <button type="button" style={ghostBtn} onClick={() => setMode("")}>Cancel</button>
             </div>
           </div>

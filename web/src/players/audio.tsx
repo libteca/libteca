@@ -3,7 +3,7 @@ import { media } from "../api";
 import { fmtClock } from "../util";
 import { c, mono, playerBar } from "../styles";
 import { toast } from "../toast";
-import { IconBack30, IconFwd30, IconMoon, IconPause, IconPlay } from "../components/svg";
+import { IconBack30, IconFwd30, IconHeadphones, IconMoon, IconPause, IconPlay } from "../components/svg";
 
 export type PlayerFile = { id: number; title: string; duration: number };
 
@@ -34,6 +34,8 @@ export function AudioPlayer(props: {
   const [hoverT, setHoverT] = useState<number | null>(null);
   const [chOpen, setChOpen] = useState(false);
   const [idxV, setIdxV] = useState(0);
+  const [artErr, setArtErr] = useState(false);
+  const [bufAbs, setBufAbs] = useState(0);
   const sleepAt = useRef(0);
   const lastSent = useRef(0);
   const absRef = useRef(0);
@@ -181,6 +183,7 @@ export function AudioPlayer(props: {
   };
 
   const pct = total > 0 ? Math.min(100, (abs / total) * 100) : 0;
+  const bufPct = total > 0 ? Math.max(pct, Math.min(100, (bufAbs / total) * 100)) : 0;
 
   return (
     <div className="player-bar" style={{
@@ -210,6 +213,17 @@ export function AudioPlayer(props: {
           const a = audioRef.current;
           if (a && pendingOffset.current > 0) { a.currentTime = pendingOffset.current; }
           pendingOffset.current = 0;
+        }}
+        onProgress={() => {
+          const a = audioRef.current;
+          if (!a) return;
+          try {
+            if (a.buffered.length > 0) {
+              const dur = props.files[curIdx.current]?.duration || 0;
+              const end = Math.min(a.buffered.end(a.buffered.length - 1), dur);
+              setBufAbs(cumBefore(curIdx.current) + end);
+            }
+          } catch { /* noop */ }
         }}
         onPlay={() => { queueEnded.current = false; setPlaying(true); if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "playing"; }}
         onError={() => { setPlaying(false); toast("Playback failed — the audio could not be loaded", "error"); }}
@@ -241,8 +255,10 @@ export function AudioPlayer(props: {
           }
         }}
       />
-      <div style={{ display: "flex", alignItems: "center", gap: "0.9rem", padding: "0.7rem 0.95rem 0.25rem", flexWrap: "wrap" }}>
-        {props.artwork && <img src={props.artwork} alt="" className="ap-art" style={{ boxShadow: c.coverShadow }} />}
+      <div className="ap-row" style={{ display: "flex", alignItems: "center", gap: "0.9rem", paddingTop: "0.7rem", paddingBottom: "0.25rem", flexWrap: "wrap" }}>
+        {props.artwork && !artErr
+          ? <img src={props.artwork} alt="" className="ap-art" style={{ boxShadow: c.coverShadow }} onError={() => setArtErr(true)} />
+          : <span className="ap-art ap-art-fb"><IconHeadphones size={20} /></span>}
         <div style={{ display: "flex", flexDirection: "column", minWidth: 0, flex: 1 }}>
           <span style={{ fontSize: "0.95rem", fontWeight: 600, letterSpacing: "-0.01em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{props.header}</span>
           <span style={{ fontSize: "0.78rem", color: c.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -251,7 +267,7 @@ export function AudioPlayer(props: {
         </div>
         <div style={{ display: "flex", gap: "0.15rem", alignItems: "center", flexShrink: 0 }}>
           <button className="press ap-btn" style={{ ...barBtn, color: c.textDim }} aria-label="Back 30 seconds" title="Back 30s" onClick={() => nudge(-30)}><IconBack30 size={19} /></button>
-          <button className="press" style={{ ...barBtn, width: "46px", height: "46px", background: c.accent, color: "#fff", boxShadow: c.accentGlow }} aria-label={playing ? "Pause" : "Play"} title="Play or pause" onClick={toggle}>
+          <button className="press ap-play" style={{ ...barBtn, width: "46px", height: "46px", background: c.accent, color: "#fff", boxShadow: c.accentGlow }} aria-label={playing ? "Pause" : "Play"} title="Play or pause" onClick={toggle}>
             {playing ? <IconPause size={22} /> : <IconPlay size={22} />}
           </button>
           <button className="press ap-btn" style={{ ...barBtn, color: c.textDim }} aria-label="Forward 30 seconds" title="Forward 30s" onClick={() => nudge(30)}><IconFwd30 size={19} /></button>
@@ -280,7 +296,7 @@ export function AudioPlayer(props: {
                 <IconChapters size={18} />
               </button>
               {chOpen && (
-                <div style={{ position: "absolute", right: 0, bottom: "calc(100% + 0.55rem)", zIndex: 2, width: "19rem", maxWidth: "calc(100vw - 3rem)", maxHeight: "40vh", overflowY: "auto", padding: "0.3rem", borderRadius: "12px", background: "rgba(18,19,22,0.92)", backdropFilter: "blur(24px) saturate(160%)", WebkitBackdropFilter: "blur(24px) saturate(160%)", border: "1px solid rgba(255,255,255,0.09)", boxShadow: "0 18px 50px rgba(0,0,0,0.55)" }}>
+                <div className="ap-pop" style={{ position: "absolute", right: 0, bottom: "calc(100% + 0.55rem)", zIndex: 2, width: "19rem", maxWidth: "min(19rem, calc(100vw - 3rem))", maxHeight: "40vh", overflowY: "auto", padding: "0.3rem", borderRadius: "12px", background: "rgba(18,19,22,0.92)", backdropFilter: "blur(24px) saturate(160%)", WebkitBackdropFilter: "blur(24px) saturate(160%)", border: "1px solid rgba(255,255,255,0.09)", boxShadow: "0 18px 50px rgba(0,0,0,0.55)" }}>
                   {props.files.map((f, i) => {
                     const active = i === idxV;
                     return (
@@ -297,7 +313,7 @@ export function AudioPlayer(props: {
           )}
         </div>
       </div>
-      <div style={{ display: "flex", alignItems: "center", gap: "0.65rem", padding: "0.1rem 0.95rem 0.8rem" }}>
+      <div className="ap-row" style={{ display: "flex", alignItems: "center", gap: "0.65rem", paddingTop: "0.1rem", paddingBottom: "0.8rem" }}>
         <span style={timeTxt}>{fmtClock(abs)}</span>
         <div
           className="ap-seek"
@@ -309,13 +325,14 @@ export function AudioPlayer(props: {
             <div style={{
               position: "absolute", left: `clamp(0px, calc(${(hoverT / total) * 100}% - 1.9rem), calc(100% - 3.8rem))`, top: "-1.5rem",
               width: "3.8rem", textAlign: "center", fontSize: "0.72rem", fontVariantNumeric: "tabular-nums",
-              color: c.text, background: "rgba(12,13,15,0.94)", border: "1px solid rgba(255,255,255,0.09)",
+              color: c.text, background: "rgba(12,13,15,0.75)", backdropFilter: "blur(12px) saturate(160%)", WebkitBackdropFilter: "blur(12px) saturate(160%)", border: "1px solid rgba(255,255,255,0.09)",
               borderRadius: "6px", padding: "0.18rem 0", pointerEvents: "none", zIndex: 2,
             }}>{fmtClock(hoverT)}</div>
           )}
           <div className="ap-track" style={{ position: "absolute", left: 0, right: 0, top: "50%", transform: "translateY(-50%)", borderRadius: "999px", background: "rgba(255,255,255,0.15)" }} />
+          <div className="ap-track" style={{ position: "absolute", left: 0, width: `${bufPct}%`, top: "50%", transform: "translateY(-50%)", borderRadius: "999px", background: "rgba(255,255,255,0.28)" }} />
           <div className="ap-track" style={{ position: "absolute", left: 0, width: `${pct}%`, top: "50%", transform: "translateY(-50%)", borderRadius: "999px", background: c.accent }} />
-          <div className="ap-thumb" style={{ position: "absolute", left: `calc(${pct}% - 6px)`, top: "50%", transform: "translateY(-50%)", width: "12px", height: "12px", borderRadius: "50%", background: "#fff", boxShadow: "0 1px 4px rgba(0,0,0,0.5)" }} />
+          <div className="ap-thumb" style={{ position: "absolute", left: `calc(${pct}% - 6px)`, top: "50%", width: "12px", height: "12px", borderRadius: "50%", background: "#fff", boxShadow: "0 1px 4px rgba(0,0,0,0.5)" }} />
           <input
             type="range" min={0} max={Math.max(1, Math.floor(total))} step={1} value={Math.min(Math.floor(abs), Math.max(1, Math.floor(total)))}
             className="seek"
@@ -327,17 +344,36 @@ export function AudioPlayer(props: {
         <span style={timeTxt}>{fmtClock(total)}</span>
       </div>
       <style>{`
-        .ap-btn { background: transparent; transition: background 140ms ease, color 140ms ease; }
+        .player-bar { animation: ap-in 300ms var(--ease); }
+        @keyframes ap-in { from { opacity: 0; transform: translateY(10px); } }
+        .ap-row { padding-left: 0.95rem; padding-right: 0.95rem; }
+        .ap-btn { background: transparent; transition: background 140ms ease, color 140ms ease, transform 140ms var(--ease); }
         .ap-btn:hover { background: rgba(255,255,255,0.08); }
+        .ap-btn:active { transform: scale(0.94); }
+        .ap-play { transition: transform 150ms var(--ease), box-shadow 150ms ease; }
+        .ap-play:hover { transform: scale(1.045); box-shadow: 0 12px 34px rgba(10, 132, 255, 0.5); }
+        .ap-play:active { transform: scale(0.96); }
+        .ap-pop { animation: ap-pop 180ms var(--ease); transform-origin: 100% 100%; }
+        @keyframes ap-pop { from { opacity: 0; transform: translateY(6px) scale(0.98); } }
         .ap-pill { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.09); transition: background 140ms ease, border-color 140ms ease; }
         .ap-pill:hover { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.16); }
-        .ap-art { width: 56px; height: 56px; border-radius: 10px; object-fit: cover; flex-shrink: 0; transition: transform 180ms ease; }
+        .ap-art { width: 56px; height: 56px; border-radius: 10px; object-fit: cover; flexShrink: 0; transition: transform 180ms ease; }
         .ap-art:hover { transform: scale(1.04); }
+        .ap-art-fb { display: inline-flex; align-items: center; justify-content: center; color: ${c.muted}; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); }
         .ap-track { height: 4px; transition: height 150ms ease; }
         .ap-seek:hover .ap-track, .ap-seek:focus-within .ap-track { height: 6px; }
-        .ap-thumb { transition: box-shadow 150ms ease; }
-        .ap-seek:hover .ap-thumb, .ap-seek:focus-within .ap-thumb { box-shadow: 0 0 12px rgba(255,255,255,0.9), 0 1px 4px rgba(0,0,0,0.5); }
-        @media (max-width: 639px) { .ap-art { width: 48px; height: 48px; } }
+        .ap-thumb { transform: translateY(-50%); transition: transform 150ms var(--ease), box-shadow 150ms ease; }
+        .ap-seek:hover .ap-thumb, .ap-seek:focus-within .ap-thumb { transform: translateY(-50%) scale(1.18); box-shadow: 0 0 12px rgba(255,255,255,0.9), 0 1px 4px rgba(0,0,0,0.5); }
+        @media (max-width: 639px) {
+          .ap-art { width: 48px; height: 48px; }
+          .ap-row { padding-left: 0.6rem; padding-right: 0.6rem; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .player-bar, .ap-pop { animation: none; }
+          .ap-btn, .ap-play, .ap-thumb, .ap-art { transition: none; }
+          .ap-play:hover { transform: none; }
+          .ap-seek:hover .ap-thumb, .ap-seek:focus-within .ap-thumb { transform: translateY(-50%); }
+        }
       `}</style>
     </div>
   );

@@ -1,5 +1,5 @@
 import { useState } from "preact/hooks";
-import { c, errStyle, input, loginCard, loginSub, loginTitle, loginWrap, primaryBtn } from "../styles";
+import { globalCss, c, errStyle, input, loginCard, loginSub, loginTitle, loginWrap, primaryBtn } from "../styles";
 
 export function Login(props: { onLogin: () => void }) {
   const [name, setName] = useState("");
@@ -31,11 +31,13 @@ export function Login(props: { onLogin: () => void }) {
   };
   return (
     <div style={{ ...loginWrap, background: "radial-gradient(1100px 720px at 30% 20%, #141c2c 0%, #0c0d0f 60%)" }}>
+      <style>{globalCss}</style>
       <form style={loginCard} onSubmit={submit}>
         <h1 style={{ ...loginTitle, fontSize: "2.3rem" }}>libteca</h1>
-        <p style={loginSub}>Your library.</p>
+        <p style={loginSub}>Your library</p>
         <input
-          style={{ ...input, minHeight: "42px", background: "transparent", border: "none", borderBottom: `1px solid ${c.line}`, borderRadius: 0, paddingLeft: 0 }}
+          className={`login-field${err ? " login-err" : ""}`}
+          style={{ ...input, minHeight: "42px" }}
           placeholder="Username"
           autoComplete="username"
           autoFocus
@@ -43,15 +45,16 @@ export function Login(props: { onLogin: () => void }) {
           onInput={(e) => setName((e.target as HTMLInputElement).value)}
         />
         <input
-          style={{ ...input, minHeight: "42px", background: "transparent", border: "none", borderBottom: `1px solid ${c.line}`, borderRadius: 0, paddingLeft: 0 }}
+          className={`login-field${err ? " login-err" : ""}`}
+          style={{ ...input, minHeight: "42px" }}
           type="password"
           placeholder="Password"
           autoComplete="current-password"
           value={pass}
           onInput={(e) => setPass((e.target as HTMLInputElement).value)}
         />
-        {err && <p style={errStyle}>{err}</p>}
-        <button className="press" style={{ ...primaryBtn, width: "100%", alignSelf: "stretch", marginTop: "0.6rem", boxShadow: c.accentGlow }} type="submit" disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
+        {err && <p className="login-err-msg" style={errStyle}>{err}</p>}
+        <button className="press btnp" style={{ ...primaryBtn, width: "100%", alignSelf: "stretch", marginTop: "0.6rem", boxShadow: c.accentGlow }} type="submit" disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
       </form>
     </div>
   );

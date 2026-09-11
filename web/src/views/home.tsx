@@ -118,7 +118,7 @@ export function Home() {
               </p>
             )}
             <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", marginTop: "1.5rem", flexWrap: "wrap" }}>
-              <span style={primaryBtn}>
+              <span className="btnp" style={primaryBtn}>
                 <IconPlay size={15} /> {HERO_ACTION[heroKind]}
               </span>
               <span className="navlink">Details</span>
@@ -202,18 +202,18 @@ export function Home() {
           ))}
         </Rail>
       )}
-      <section style={{ marginBottom: "2.6rem" }}>
+      <section style={{ marginBottom: "2.4rem" }}>
         <h2 style={railTitle}>Libraries</h2>
         {libs.length === 0 ? (
           loaded && (
             <EmptyState title="No libraries yet" icon={<IconLibrary size={22} />} hint="Point libteca at a folder of media and it does the rest.">
-              <a href="#/admin" style={primaryBtn}>Open Admin</a>
+              <a href="#/admin" className="press btnp" style={primaryBtn}>Open Admin</a>
             </EmptyState>
           )
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(13rem, 1fr))", gap: "0.9rem" }}>
             {libs.map((l) => (
-              <a key={l.id} href={`#/library?lib=${l.id}`} className="press" style={libTile}>
+              <a key={l.id} href={`#/library?lib=${l.id}`} className="press libtile" style={libTile}>
                 <span style={libTileIcon}>{libIcon(l.type)}</span>
                 <span style={{ minWidth: 0 }}>
                   <span style={{

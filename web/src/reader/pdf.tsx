@@ -101,7 +101,7 @@ export function PdfReader(props: { editionId: number; title: string; isFinished:
     : `${download}#toolbar=1`;
 
   return (
-    <div style={readerOverlay}>
+    <div className="rd-in" style={readerOverlay}>
       <TopBar title={props.title} meta={finished ? "Finished" : "PDF · native viewer"} saveState={null} onBack={props.onBack}>
         <span style={{ display: "inline-flex", alignItems: "center", gap: "0.25rem", color: c.muted, fontSize: "0.78rem", fontVariantNumeric: "tabular-nums" }}>
           <input

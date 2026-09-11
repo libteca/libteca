@@ -321,7 +321,21 @@ export function toolBtnActive(active: boolean): CSSProperties {
 
 export function ReaderChrome() {
   return (
-    <style>{".lt-tool:not(:disabled):hover{background:rgba(255,255,255,0.08)}.lt-tool:disabled{opacity:0.4;cursor:default}"}</style>
+    <style>{`
+      .lt-tool:not(:disabled):hover{background:rgba(255,255,255,0.08)}
+      .lt-tool:disabled{opacity:0.4;cursor:default}
+      @keyframes rd-in{from{opacity:0}}
+      @keyframes rd-scrim-in{from{opacity:0}}
+      @keyframes rd-drawer-in{from{transform:translateX(100%)}}
+      .rd-scrim{animation:rd-scrim-in 200ms ease}
+      .rd-drawer{animation:rd-drawer-in 240ms var(--ease)}
+      .rd-in{animation:rd-in 200ms var(--ease)}
+      .tap-hint{opacity:0;transition:opacity 160ms ease}
+      @media (hover:hover){.tap-zone:hover .tap-hint{opacity:1}}
+      .lt-edge{transition:background 150ms ease,color 150ms ease;opacity:0.9}
+      .lt-edge:hover{opacity:1;background:rgba(20,21,24,0.92);color:#f5f5f7}
+      @media (prefers-reduced-motion:reduce){.rd-in,.rd-scrim,.rd-drawer{animation:none}.tap-hint,.lt-edge{transition:none}}
+    `}</style>
   );
 }
 
@@ -396,10 +410,21 @@ export function TapZones(props: { onLeft: () => void; onRight: () => void; leftL
     position: "absolute", top: 0, bottom: 0, width: "33.333%", zIndex: 5,
     background: "transparent", border: "none", padding: 0, cursor: "pointer",
   };
+  const hint: CSSProperties = {
+    position: "absolute", top: "50%", transform: "translateY(-50%)",
+    width: "2.4rem", height: "2.4rem", borderRadius: "50%",
+    display: "flex", alignItems: "center", justifyContent: "center",
+    background: "rgba(12,13,15,0.72)", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)",
+    border: "1px solid rgba(255,255,255,0.08)", color: c.textDim, pointerEvents: "none",
+  };
   return (
     <div style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
-      <button aria-label={props.leftLabel ?? "Previous page"} style={{ ...zone, left: 0, pointerEvents: "auto" }} onClick={props.onLeft} />
-      <button aria-label={props.rightLabel ?? "Next page"} style={{ ...zone, right: 0, pointerEvents: "auto" }} onClick={props.onRight} />
+      <button aria-label={props.leftLabel ?? "Previous page"} className="tap-zone" style={{ ...zone, left: 0, pointerEvents: "auto" }} onClick={props.onLeft}>
+        <span className="tap-hint" style={{ ...hint, left: "0.55rem" }}><IconChevLeft size={17} /></span>
+      </button>
+      <button aria-label={props.rightLabel ?? "Next page"} className="tap-zone" style={{ ...zone, right: 0, pointerEvents: "auto" }} onClick={props.onRight}>
+        <span className="tap-hint" style={{ ...hint, right: "0.55rem" }}><IconChevRight size={17} /></span>
+      </button>
     </div>
   );
 }

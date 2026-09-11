@@ -21,6 +21,14 @@ function group(items: SearchItem[]) {
   });
 }
 
+function Hi(props: { text: string; q: string }) {
+  const q = props.q.trim();
+  if (q.length < 2) return <>{props.text}</>;
+  const i = props.text.toLowerCase().indexOf(q.toLowerCase());
+  if (i < 0) return <>{props.text}</>;
+  return <>{props.text.slice(0, i)}<mark>{props.text.slice(i, i + q.length)}</mark>{props.text.slice(i + q.length)}</>;
+}
+
 let focusTrigger: (() => void) | null = null;
 
 export function focusSearch() {
@@ -95,7 +103,7 @@ export function SearchBox() {
                   style={{ display: "flex", gap: "0.7rem", alignItems: "center", padding: "0.5rem 0.85rem", textDecoration: "none", color: c.text, minHeight: "44px" }}>
                   <span style={{ width: "2.1rem", flexShrink: 0 }}><Cover has={it.hasCover} id={it.workId} title={it.title} progress={it.percent || undefined} ratio={coverRatio(type)} /></span>
                   <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
-                    <span style={{ fontSize: "0.85rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.title}</span>
+                    <span style={{ fontSize: "0.85rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}><Hi text={it.title} q={q} /></span>
                     {it.author && <span style={{ fontSize: "0.73rem", color: c.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.author}</span>}
                   </span>
                   <span style={{ marginLeft: "auto", color: c.faint, display: "inline-flex", flexShrink: 0 }}><TypeIcon type={type} size={13} /></span>
@@ -145,9 +153,9 @@ export function SearchPage(props: { q: string }) {
       </p>
       {!done && items.length === 0 && <QuietLoad />}
       {group(items).map(([type, list]) => (
-        <section key={type} style={{ marginBottom: "1.8rem" }}>
+        <section key={type} style={{ marginBottom: "2.4rem" }}>
           <p style={eyebrow}>{typeLabel(type)}</p>
-          <div style={gridFor(type)}>
+          <div style={gridFor(type)} className="cover-grid">
             {list.map((it) => (
               <a key={it.workId} href={`#/work?id=${it.workId}`} className="cover-card" style={card}>
                 <div className="cardwrap">
@@ -155,7 +163,7 @@ export function SearchPage(props: { q: string }) {
                   <div className="cardover"><div className="cardplay"><IconPlay size={18} /></div></div>
                   {it.percent ? <CardProgress pct={it.percent} /> : null}
                 </div>
-                <p style={cardTitleWrap}>{it.title}</p>
+                <p style={cardTitleWrap}><Hi text={it.title} q={props.q} /></p>
                 <p style={cardMeta}>{it.author}</p>
               </a>
             ))}

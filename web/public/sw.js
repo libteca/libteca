@@ -9,7 +9,7 @@
 //     hashed names rule out install-time precaching from this verbatim
 //     file, so reader code is cached on first reader use
 //   - NOT offline: book files, streams, covers, everything under NEVER
-const VERSION = "libteca-v3";
+const VERSION = "libteca-v4";
 const CACHE = "libteca-" + VERSION;
 const NEVER = [/\/api\//, /^\/s\//, /^\/stream\//, /^\/covers\//, /^\/subtitles\//, /^\/Videos\//, /^\/Audio\//];
 

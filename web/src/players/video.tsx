@@ -25,6 +25,16 @@ function IconPip(p: { size?: number }) {
   );
 }
 
+function IconExitFullscreen(p: { size?: number }) {
+  return (
+    <svg width={p.size ?? 16} height={p.size ?? 16} viewBox="0 0 24 24"
+      fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"
+      style={{ display: "block", flexShrink: 0 }}>
+      <path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" />
+    </svg>
+  );
+}
+
 export function VideoPlayer(props: {
   w: WorkDetail;
   editionId: number;
@@ -59,6 +69,7 @@ export function VideoPlayer(props: {
   const [thumbs, setThumbs] = useState<Thumbs | null>(null);
   const [fatal, setFatal] = useState("");
   const [pip, setPip] = useState(false);
+  const [fsOn, setFsOn] = useState(false);
   const pipOK = typeof document !== "undefined" && document.pictureInPictureEnabled;
   const fileId = ed.files[0]?.id ?? 0;
 
@@ -144,6 +155,12 @@ export function VideoPlayer(props: {
       v.removeEventListener("enterpictureinpicture", sync);
       v.removeEventListener("leavepictureinpicture", sync);
     };
+  }, []);
+
+  useEffect(() => {
+    const sync = () => setFsOn(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", sync);
+    return () => document.removeEventListener("fullscreenchange", sync);
   }, []);
 
   useEffect(() => {
@@ -328,8 +345,8 @@ export function VideoPlayer(props: {
 
   if (fatal || !found || fileId === 0) {
     return (
-      <div style={{ position: "fixed", inset: 0, zIndex: 35, background: "#000", display: "flex", flexDirection: "column", gap: "0.9rem", alignItems: "center", justifyContent: "center", padding: "1rem" }}>
-        <p style={{ ...muted, margin: 0, fontSize: "0.95rem" }}>{fatal || "This edition is no longer available."}</p>
+      <div style={{ position: "fixed", inset: 0, zIndex: 35, background: "#000", display: "flex", flexDirection: "column", gap: "1rem", alignItems: "center", justifyContent: "center", padding: "1rem" }}>
+        <p style={{ ...muted, margin: 0, fontSize: "0.95rem", maxWidth: "26rem", textAlign: "center", lineHeight: 1.5 }}>{fatal || "This edition is no longer available."}</p>
         <button className="press" style={ghostBtn} onClick={props.onClose}>Back</button>
       </div>
     );
@@ -364,17 +381,26 @@ export function VideoPlayer(props: {
 
   return (
     <div
+      className="vp-root"
       style={{ position: "fixed", inset: 0, zIndex: 35, background: "#000", cursor: uiVis ? "default" : "none" }}
       onMouseMove={showUI}
     >
       <style>{`
+        .vp-root { animation: vp-in 240ms var(--ease); }
+        @keyframes vp-in { from { opacity: 0; transform: scale(1.015); } }
         .vbtn { background: none; border: none; color: rgba(245,245,247,0.9); cursor: pointer;
           width: 44px; height: 44px; border-radius: 12px; display: inline-flex; align-items: center; justify-content: center;
           transition: background 130ms ease, color 130ms ease, transform 130ms var(--ease); }
         .vbtn:hover { background: rgba(255,255,255,0.1); color: #fff; }
         .vbtn:active { transform: scale(0.94); }
         .vbtn.on { color: ${c.accent}; background: rgba(10,132,255,0.16); }
-        .vscrub { position: relative; height: 20px; display: flex; align-items: center; touch-action: none; }
+        .vui { transition: opacity 240ms var(--ease), transform 240ms var(--ease), visibility 0s linear 0s; }
+        .vui-hide { opacity: 0; visibility: hidden; pointer-events: none;
+          transition: opacity 190ms ease, transform 190ms ease, visibility 0s linear 190ms; }
+        .vui-top.vui-hide { transform: translateY(-0.5rem); }
+        .vui-bot.vui-hide { transform: translateY(0.5rem); }
+        .vbar { padding-left: 1rem; padding-right: 1rem; }
+        .vscrub { position: relative; height: 24px; display: flex; align-items: center; touch-action: none; }
         .vtrack { position: absolute; left: 0; right: 0; height: 3.5px; border-radius: 999px;
           background: rgba(255,255,255,0.16); transition: height 140ms var(--ease); }
         .vscrub:hover .vtrack, .vscrub:focus-within .vtrack { height: 7px; }
@@ -390,10 +416,17 @@ export function VideoPlayer(props: {
         .vscrub:hover .vthumb, .vscrub:focus-within .vthumb { transform: translate(-50%, -50%) scale(1.25);
           box-shadow: 0 2px 16px rgba(10,132,255,0.65); }
         .vchap { position: absolute; top: 50%; width: 3px; height: 3px; border-radius: 1px;
-          background: rgba(12,13,15,0.9); transform: translate(-50%, -50%); pointer-events: none; }
-        .vscrub:hover .vchap { height: 7px; width: 3.5px; }
+          background: rgba(12,13,15,0.9); box-shadow: 0 0 0 1px rgba(255,255,255,0.12);
+          transform: translate(-50%, -50%); pointer-events: none; transition: height 140ms var(--ease); }
+        .vscrub:hover .vchap { height: 7px; }
         .vvol { width: 0; opacity: 0; overflow: hidden; transition: width 180ms var(--ease), opacity 180ms ease; }
         .vvolwrap:hover .vvol, .vvolwrap:focus-within .vvol { width: 4.2rem; opacity: 1; }
+        @media (max-width: 640px) { .vbar { padding-left: 0.45rem; padding-right: 0.45rem; } }
+        @media (prefers-reduced-motion: reduce) {
+          .vp-root { animation: none; }
+          .vui, .vui-hide { transition: none; }
+          .vbtn { transition: none; }
+        }
       `}</style>
 
       <div style={{ position: "absolute", inset: 0 }} onClick={(e) => {
@@ -457,7 +490,7 @@ export function VideoPlayer(props: {
 
         {waiting && src && (
           <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
-            <span className="spin" style={{ color: "rgba(255,255,255,0.85)" }}><IconSpinner size={36} /></span>
+            <span className="spin" style={{ color: "rgba(255,255,255,0.9)", filter: "drop-shadow(0 2px 8px rgba(0,0,0,0.5))" }}><IconSpinner size={38} /></span>
           </div>
         )}
 
@@ -488,41 +521,40 @@ export function VideoPlayer(props: {
           </div>
         )}
 
-        {uiVis && (
-          <>
-            <div style={{
-              position: "absolute", top: 0, left: 0, right: 0, padding: "0.7rem 1rem 2rem",
-              display: "flex", alignItems: "flex-start", gap: "0.8rem",
-              background: "linear-gradient(to bottom, rgba(0,0,0,0.75), transparent)",
-            }}>
-              <button className="vbtn press" style={{ color: "rgba(245,245,247,0.94)" }}
-                onClick={() => { void save(saved.current); props.onClose(); }}
-                aria-label="Back">
-                <IconChevronLeft size={20} />
-              </button>
-              <div style={{ minWidth: 0, paddingTop: "0.3rem" }}>
-                <div style={{ fontSize: "1.05rem", fontWeight: 650, letterSpacing: "-0.015em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "48vw" }}>
-                  {ed.seasonNum !== undefined ? ed.title || props.w.title : props.w.title}
-                </div>
-                <div style={{ color: "rgba(245,245,247,0.55)", fontSize: "0.8rem", marginTop: "0.1rem", whiteSpace: "nowrap" }}>
-                  {ed.seasonNum !== undefined ? `${props.w.title} · S${ed.seasonNum}E${ed.episodeNum} · ` : ""}
-                  {props.w.author ? `${props.w.author} · ` : ""}
-                  {fmtClock(Math.max(0, total - time))} left
-                </div>
-              </div>
+        <div className={`vui vui-top${uiVis ? "" : " vui-hide"}`} style={{
+          position: "absolute", top: 0, left: 0, right: 0, paddingTop: "0.7rem", paddingBottom: "2rem",
+          display: "flex", alignItems: "flex-start", gap: "0.8rem",
+          background: "linear-gradient(to bottom, rgba(0,0,0,0.75), transparent)",
+        }}>
+          <button className="vbtn press" style={{ color: "rgba(245,245,247,0.94)" }}
+            onClick={() => { void save(saved.current); props.onClose(); }}
+            aria-label="Back">
+            <IconChevronLeft size={20} />
+          </button>
+          <div style={{ minWidth: 0, paddingTop: "0.3rem" }}>
+            <div style={{ fontSize: "1.05rem", fontWeight: 650, letterSpacing: "-0.015em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "48vw", textShadow: "0 1px 10px rgba(0,0,0,0.6)" }}>
+              {ed.seasonNum !== undefined ? ed.title || props.w.title : props.w.title}
             </div>
+            <div style={{ color: "rgba(245,245,247,0.55)", fontSize: "0.8rem", marginTop: "0.1rem", whiteSpace: "nowrap", textShadow: "0 1px 8px rgba(0,0,0,0.6)" }}>
+              {ed.seasonNum !== undefined ? `${props.w.title} · S${ed.seasonNum}E${ed.episodeNum} · ` : ""}
+              {props.w.author ? `${props.w.author} · ` : ""}
+              {fmtClock(Math.max(0, total - time))} left
+            </div>
+          </div>
+        </div>
 
-            <div style={{
-              position: "absolute", bottom: 0, left: 0, right: 0, padding: "2.2rem 1rem calc(0.8rem + env(safe-area-inset-bottom))",
-              background: "linear-gradient(to top, rgba(0,0,0,0.82), transparent)",
-              display: "flex", flexDirection: "column", gap: "0.1rem",
-            }}>
+        <div className={`vui vui-bot vbar${uiVis ? "" : " vui-hide"}`} style={{
+          position: "absolute", bottom: 0, left: 0, right: 0, paddingTop: "2.2rem", paddingBottom: "calc(0.8rem + env(safe-area-inset-bottom))",
+          background: "linear-gradient(to top, rgba(0,0,0,0.82), transparent)",
+          display: "flex", flexDirection: "column", gap: "0.1rem",
+        }}>
               <div className="vscrub" onPointerMove={scrubHover} onPointerLeave={() => setHoverT(null)}>
                 {hoverT != null && total > 0 && (
                   <div style={{
                     position: "absolute", left: `clamp(0px, calc(${(hoverT / total) * 100}% - 1.9rem), calc(100% - 3.8rem))`, top: "-1.7rem",
                     width: "3.8rem", textAlign: "center", fontSize: "0.74rem", fontVariantNumeric: "tabular-nums",
-                    color: c.text, background: "rgba(12,13,15,0.92)", borderRadius: "7px", padding: "0.18rem 0", pointerEvents: "none",
+                    color: c.text, background: "rgba(12,13,15,0.72)", backdropFilter: "blur(12px) saturate(160%)", WebkitBackdropFilter: "blur(12px) saturate(160%)",
+                    border: "1px solid rgba(255,255,255,0.09)", borderRadius: "7px", padding: "0.18rem 0", pointerEvents: "none",
                     boxShadow: "0 6px 18px rgba(0,0,0,0.5)",
                   }}>{fmtClock(hoverT)}</div>
                 )}
@@ -537,14 +569,15 @@ export function VideoPlayer(props: {
                 <div className="vtrack" />
                 <div className="vbuf" style={{ width: `${bufPct * 100}%` }} />
                 <div className="vfill" style={{ width: `${scrubPct * 100}%` }} />
-                {chapters.map((ch, i) => (
+                {chapters.filter((ch) => ch.start > 1).map((ch, i) => (
                   <div key={i} className="vchap" style={{ left: `${(ch.start / total) * 100}%` }} />
                 ))}
                 <div className="vthumb" style={{ left: `${scrubPct * 100}%` }} />
                 <input
                   type="range" className="seek" min={0} max={total > 0 ? total : 1} step={0.1} value={total > 0 ? Math.min(time, total) : 0}
+                  disabled={total <= 0}
                   aria-label="Seek"
-                  style={{ position: "absolute", inset: 0, width: "100%", height: "20px", margin: 0, opacity: 0, cursor: "pointer" }}
+                  style={{ position: "absolute", inset: 0, width: "100%", height: "24px", margin: 0, opacity: 0, cursor: total > 0 ? "pointer" : "default" }}
                   onInput={(e) => seekTo(Number((e.target as HTMLInputElement).value))}
                 />
               </div>
@@ -553,11 +586,11 @@ export function VideoPlayer(props: {
                 <button className="vbtn press" onClick={togglePlay} aria-label={playing ? "Pause" : "Play"}>
                   {playing ? <IconPause size={22} /> : <IconPlay size={22} />}
                 </button>
-                {prevEp && <button className="vbtn press" aria-label="Previous episode" onClick={() => { void save(saved.current); props.onSelectEdition(prevEp.id); }}><IconChevronLeft size={19} /></button>}
-                {next && <button className="vbtn press" aria-label="Next episode" onClick={() => { void save(saved.current); props.onSelectEdition(next.id); }}><IconChevronRight size={19} /></button>}
+                {prevEp && <button className="vbtn press" aria-label="Previous episode" onClick={() => { void save(saved.current); props.onSelectEdition(prevEp.id); }}><IconChevronLeft size={20} /></button>}
+                {next && <button className="vbtn press" aria-label="Next episode" onClick={() => { void save(saved.current); props.onSelectEdition(next.id); }}><IconChevronRight size={20} /></button>}
                 <span className="vvolwrap" style={{ display: "inline-flex", alignItems: "center" }}>
                   <button className="vbtn press" aria-label={isMuted ? "Unmute" : "Mute"} onClick={() => setVolume(isMuted ? 1 : 0)}>
-                    {isMuted ? <IconVolumeOff size={19} /> : <IconVolume size={19} />}
+                    {isMuted ? <IconVolumeOff size={20} /> : <IconVolume size={20} />}
                   </button>
                   <span className="vvol" style={{ display: "inline-flex", alignItems: "center" }}>
                     <input
@@ -567,13 +600,13 @@ export function VideoPlayer(props: {
                     />
                   </span>
                 </span>
-                <span style={{ color: "rgba(245,245,247,0.65)", fontSize: "0.8rem", fontVariantNumeric: "tabular-nums", margin: "0 0.6rem 0 0.35rem", whiteSpace: "nowrap" }}>
-                  {fmtClock(time)} <span style={{ opacity: 0.45 }}>/ {fmtClock(total)}</span>
+                <span style={{ color: "rgba(245,245,247,0.88)", fontSize: "0.8rem", fontWeight: 600, fontVariantNumeric: "tabular-nums", margin: "0 0.6rem 0 0.35rem", whiteSpace: "nowrap" }}>
+                  {fmtClock(time)} <span style={{ color: "rgba(245,245,247,0.4)", fontWeight: 400 }}>/ {fmtClock(total)}</span>
                 </span>
                 <span style={{ flex: 1 }} />
                 {subs && <button className={`vbtn press${ccOn ? " on" : ""}`} aria-label="Subtitles (c)" title="Subtitles (c)" onClick={toggleCC}><IconCC size={20} /></button>}
-                <button className="vbtn press" onClick={cycleRate} aria-label="Playback speed" title="Playback speed"
-                  style={{ width: "auto", padding: "0 0.7rem", fontSize: "0.8rem", fontWeight: 650, fontVariantNumeric: "tabular-nums" }}>
+                <button className={`vbtn press${rate !== 1 ? " on" : ""}`} onClick={cycleRate} aria-label="Playback speed" title="Playback speed"
+                  style={{ width: "auto", minWidth: "2.9rem", padding: "0 0.7rem", fontSize: "0.8rem", fontWeight: 650, fontVariantNumeric: "tabular-nums" }}>
                   {rate}x
                 </button>
                 {pipOK && (
@@ -581,11 +614,11 @@ export function VideoPlayer(props: {
                     <IconPip size={20} />
                   </button>
                 )}
-                <button className="vbtn press" aria-label="Fullscreen (f)" title="Fullscreen (f)" onClick={toggleFullscreen}><IconFullscreen size={20} /></button>
+                <button className={`vbtn press${fsOn ? " on" : ""}`} aria-label={fsOn ? "Exit fullscreen (f)" : "Fullscreen (f)"} title={fsOn ? "Exit fullscreen (f)" : "Fullscreen (f)"} onClick={toggleFullscreen}>
+                  {fsOn ? <IconExitFullscreen size={20} /> : <IconFullscreen size={20} />}
+                </button>
               </div>
             </div>
-          </>
-        )}
       </div>
       <style>{`@keyframes libteca-glyph { 0% { opacity: 1; transform: scale(0.92); } 70% { opacity: 1; } 100% { opacity: 0; transform: scale(1.08); } }`}</style>
     </div>

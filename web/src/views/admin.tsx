@@ -3,7 +3,7 @@ import type { CSSProperties, ComponentChildren } from "preact";
 import { api, type Library, type ScanEvent } from "../api";
 import { useScan } from "../scan";
 import { IconChevronDown, IconChevronLeft, IconScan } from "../components/svg";
-import { fmtRel } from "../util";
+import { fmtRel, typeLabel } from "../util";
 import {
   backLink, badge, c, fieldLabel, formBlock, formNote, formNoteErr, ghostBtn, input, mono,
   muted, panel, panelHead, preBlock, primaryBtn, railTitle, sectionTitle, selectChevron,
@@ -20,7 +20,7 @@ const thRight: CSSProperties = { ...th, textAlign: "right" };
 const tdRight: CSSProperties = { ...td, textAlign: "right" };
 const libRow: CSSProperties = {
   display: "flex", gap: "0.9rem", alignItems: "center", minHeight: "44px",
-  padding: "0.4rem 0", borderBottom: `1px solid ${c.lineSoft}`, flexWrap: "wrap",
+  padding: "0.55rem 0", borderBottom: `1px solid ${c.lineSoft}`, flexWrap: "wrap",
 };
 const libPath: CSSProperties = {
   fontFamily: mono, fontSize: "0.78rem", color: c.muted, flex: 1, minWidth: "6rem",
@@ -117,7 +117,7 @@ export function AdminView() {
           <Field label="Type">
             <div style={{ ...selectWrap, width: "100%" }}>
               <select className="pill" style={{ width: "100%" }} value={type} onChange={(e) => setType((e.target as HTMLSelectElement).value)} aria-label="Library type">
-                {TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                {TYPES.map((t) => <option key={t} value={t}>{typeLabel(t)}</option>)}
               </select>
               <span style={selectChevron}><IconChevronDown size={12} /></span>
             </div>
@@ -125,7 +125,7 @@ export function AdminView() {
           <Field label="Path">
             <input style={input} placeholder="/path/to/media" value={path} onInput={(e) => setPath((e.target as HTMLInputElement).value)} />
           </Field>
-          <button style={primaryBtn} type="submit" disabled={busy}>{busy ? "Adding…" : "Add & scan"}</button>
+          <button className="press btnp" style={primaryBtn} type="submit" disabled={busy}>{busy ? "Adding…" : "Add & scan"}</button>
           {msg && <p style={addOk ? formNote : formNoteErr}>{msg}</p>}
         </form>
       </section>
@@ -226,7 +226,7 @@ function ScanJobs(props: { libs: Library[] }) {
               {jobs.slice(0, 30).map((j) => {
                 const tone = j.status === "done" ? c.ok : j.status === "error" ? c.danger : j.status === "running" ? c.accent : c.muted;
                 return (
-                  <tr key={j.id}>
+                  <tr key={j.id} className="row-hit">
                     <td style={{ ...td, color: c.text }}>{nameOf(j.libraryId)}</td>
                     <td style={td}><StatusTag status={j.status} tone={tone} /></td>
                     <td style={td}>{j.filesSeen}</td>
@@ -308,7 +308,7 @@ function UsersSection(props: { users: AdminUser[]; onChanged: () => void }) {
           <input type="checkbox" checked={isAdmin} onChange={(e) => setIsAdmin((e.target as HTMLInputElement).checked)} style={{ accentColor: c.accent }} />
           admin
         </label>
-        <button style={primaryBtn} type="submit" disabled={busy}>{busy ? "Creating…" : "Create user"}</button>
+        <button className="press btnp" style={primaryBtn} type="submit" disabled={busy}>{busy ? "Creating…" : "Create user"}</button>
         {msg && <p style={createOk ? formNote : formNoteErr}>{msg}</p>}
       </form>
     </section>
@@ -352,7 +352,7 @@ function UserRow(props: { u: AdminUser; onChanged: () => void }) {
   const ok = msg === "password updated";
 
   return (
-    <tr>
+    <tr className="row-hit">
       <td style={{ ...td, color: c.text, fontWeight: 600 }}>{props.u.name}</td>
       <td style={td}>{props.u.isAdmin ? <span style={badge}>admin</span> : "—"}</td>
       <td style={td}>{fmtRel(props.u.createdAtMs) || "—"}</td>
@@ -465,7 +465,7 @@ function ImportSection() {
               <button className="press" style={ghostBtn} type="button" onClick={() => setConfirmRun(false)}>Cancel</button>
             </>
           ) : (
-            <button className="press" style={primaryBtn} type="button" disabled={busy || !path} onClick={() => (dryRun ? run(true) : setConfirmRun(true))}>
+            <button className="press btnp" style={primaryBtn} type="button" disabled={busy || !path} onClick={() => (dryRun ? run(true) : setConfirmRun(true))}>
               {busy ? "Working…" : dryRun ? "Run plan" : "Import"}
             </button>
           )}
@@ -547,7 +547,7 @@ function TokensSection(props: { users: AdminUser[] }) {
             </thead>
             <tbody>
               {rows.map((t) => (
-                <tr key={t.id}>
+                <tr key={t.id} className="row-hit">
                   <td style={{ ...td, color: c.text }}>{t.label}</td>
                   <td style={td}>{nameOf(t.userId)}</td>
                   <td style={td}>{fmtRel(t.createdAtMs) || "—"}</td>
@@ -569,7 +569,7 @@ function TokensSection(props: { users: AdminUser[] }) {
         <Field label="Label">
           <input style={input} placeholder="e.g. phone" value={label} onInput={(e) => setLabel((e.target as HTMLInputElement).value)} />
         </Field>
-        <button style={primaryBtn} type="submit" disabled={busy}>{busy ? "Issuing…" : "Issue"}</button>
+        <button className="press btnp" style={primaryBtn} type="submit" disabled={busy}>{busy ? "Issuing…" : "Issue"}</button>
         {msg && <p style={formNoteErr}>{msg}</p>}
       </form>
 
@@ -659,7 +659,7 @@ function ProvidersSection() {
       })}
       {rows.some((r) => r.keyed) && (
         <div style={formBlock}>
-          <button className="press" style={primaryBtn} type="button" disabled={busy} onClick={save}>Save keys</button>
+          <button className="press btnp" style={primaryBtn} type="button" disabled={busy} onClick={save}>Save keys</button>
         </div>
       )}
     </section>

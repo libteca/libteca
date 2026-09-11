@@ -301,7 +301,7 @@ export function CbzReader(props: { editionId: number; title: string; progress: R
   const pillText = phase === "ready" && count > 0 ? `Page ${page + 1} / ${count} · ${Math.round(percent * 100)}%` : "";
 
   return (
-    <div style={readerOverlay}>
+    <div className="rd-in" style={readerOverlay}>
       <TopBar title={props.title} saveState={saver.state} onBack={props.onBack} />
       <div style={readerControls}>
         <button className={toolBtnCls} style={toolBtnActive(mode === "single")} aria-label="Single page" title="Single page" onClick={() => setModeAndPersist("single")}><IconPageSingle size={15} /></button>
@@ -350,8 +350,8 @@ export function CbzReader(props: { editionId: number; title: string; progress: R
                 : <PageImg i={page} url={pageUrl(page)} style={pageStyle} />}
             </div>
             <TapZones onLeft={() => (rtl ? go(1) : go(-1))} onRight={() => (rtl ? go(-1) : go(1))} leftLabel={rtl ? "Next page" : "Previous page"} rightLabel={rtl ? "Previous page" : "Next page"} />
-            <button aria-label={rtl ? "Next page" : "Previous page"} style={{ position: "absolute", left: "0.55rem", top: "50%", transform: "translateY(-50%)", zIndex: 6, ...toolBtn, background: "rgba(12,13,15,0.72)" }} onClick={() => (rtl ? go(1) : go(-1))}><IconChevLeft size={18} /></button>
-            <button aria-label={rtl ? "Previous page" : "Next page"} style={{ position: "absolute", right: "0.55rem", top: "50%", transform: "translateY(-50%)", zIndex: 6, ...toolBtn, background: "rgba(12,13,15,0.72)" }} onClick={() => (rtl ? go(-1) : go(1))}><IconChevRight size={18} /></button>
+            <button aria-label={rtl ? "Next page" : "Previous page"} className="lt-edge" style={{ position: "absolute", left: "0.55rem", top: "50%", transform: "translateY(-50%)", zIndex: 6, ...toolBtn, background: "rgba(12,13,15,0.72)" }} onClick={() => (rtl ? go(1) : go(-1))}><IconChevLeft size={18} /></button>
+            <button aria-label={rtl ? "Previous page" : "Next page"} className="lt-edge" style={{ position: "absolute", right: "0.55rem", top: "50%", transform: "translateY(-50%)", zIndex: 6, ...toolBtn, background: "rgba(12,13,15,0.72)" }} onClick={() => (rtl ? go(-1) : go(1))}><IconChevRight size={18} /></button>
           </>
         )}
       </div>
