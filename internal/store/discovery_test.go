@@ -2,6 +2,8 @@ package store_test
 
 import (
 	"fmt"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/libteca/libteca/internal/store"
@@ -22,8 +24,12 @@ func addUser(t *testing.T, db *store.DB) int64 {
 
 func addWork(t *testing.T, db *store.DB, libID int64, title string, author *string, createdAt, updatedAt int64) int64 {
 	t.Helper()
-	res, err := db.Exec(`INSERT INTO works (library_id, title, author, created_at, updated_at) VALUES (?,?,?,?,?)`,
-		libID, title, author, createdAt, updatedAt)
+	authorL := ""
+	if author != nil {
+		authorL = strings.ToLower(*author)
+	}
+	res, err := db.Exec(`INSERT INTO works (library_id, title, title_l, author, author_l, created_at, updated_at) VALUES (?,?,?,?,?,?,?)`,
+		libID, title, strings.ToLower(title), author, authorL, createdAt, updatedAt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +322,7 @@ func TestWorksInLibraryFiltered(t *testing.T) {
 		{"unplayed filter", "title", "asc", "unplayed", []int64{gamma}, true},
 	}
 	for _, tc := range cases {
-		views, err := db.WorksInLibraryFiltered(lib, user, tc.sort, tc.dir, tc.filter)
+		views, err := db.WorksInLibraryFiltered(lib, user, tc.sort, tc.dir, tc.filter, 0, 0)
 		if err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
@@ -336,7 +342,7 @@ func TestWorksInLibraryFiltered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	filtered, err := db.WorksInLibraryFiltered(lib, user, "title", "asc", "all")
+	filtered, err := db.WorksInLibraryFiltered(lib, user, "title", "asc", "all", 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -346,14 +352,14 @@ func TestWorksInLibraryFiltered(t *testing.T) {
 
 	// Other user has no progress: filters see everything/none.
 	other := addUser(t, db)
-	views, err := db.WorksInLibraryFiltered(lib, other, "title", "asc", "unplayed")
+	views, err := db.WorksInLibraryFiltered(lib, other, "title", "asc", "unplayed", 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !equal(ids(views), alpha, beta, gamma) {
 		t.Fatalf("other user unplayed = %v, want all", ids(views))
 	}
-	views, err = db.WorksInLibraryFiltered(lib, other, "title", "asc", "in_progress")
+	views, err = db.WorksInLibraryFiltered(lib, other, "title", "asc", "in_progress", 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,7 +383,7 @@ func TestWorksInLibraryFilteredPercent(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO progress (user_id, edition_id, edition_position_secs, is_finished, updated_at, percent, page) VALUES (?,?,0,0,10,0.4,80)`, user, eid); err != nil {
 		t.Fatal(err)
 	}
-	views, err := db.WorksInLibraryFiltered(lib, user, "title", "asc", "all")
+	views, err := db.WorksInLibraryFiltered(lib, user, "title", "asc", "all", 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -391,5 +397,113 @@ func TestWorksInLibraryFilteredPercent(t *testing.T) {
 	}
 	if byID[idle].Percent != nil {
 		t.Fatalf("unplayed percent = %v, want nil", *byID[idle].Percent)
+	}
+}
+func TestSearchWorksUnicode(t *testing.T) {
+	db := openTestDB(t)
+	lib, _ := db.AddLibrary("ab", "audiobooks", t.TempDir())
+	w, err := db.UpsertWork(&store.Work{LibraryID: lib, Title: "Café Müller", Author: strp("Heinz Müller")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{"CAFÉ", "MÜLLER", "müller"} {
+		hits, err := db.SearchWorks(0, q, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(hits) != 1 || hits[0].WorkID != w {
+			t.Fatalf("q=%q: hits = %+v, want work %d", q, hits, w)
+		}
+	}
+	hits, err := db.SearchWorks(0, "zzz", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 0 {
+		t.Fatalf("no-match query returned %+v", hits)
+	}
+}
+
+func TestOpenBackfillsWorkSearchCols(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.db")
+	db, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lib, err := db.AddLibrary("ab", "audiobooks", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO works (library_id, title, author, created_at, updated_at) VALUES (?,?,?,0,0)`,
+		lib, "Ähren Bund", "Ölaf"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db2, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db2.Close() })
+	var titleL, authorL string
+	if err := db2.QueryRow(`SELECT title_l, author_l FROM works WHERE library_id = ?`, lib).Scan(&titleL, &authorL); err != nil {
+		t.Fatal(err)
+	}
+	if titleL != "ähren bund" || authorL != "ölaf" {
+		t.Fatalf("backfilled = %q/%q, want lowered unicode", titleL, authorL)
+	}
+	hits, err := db2.SearchWorks(0, "ÄHREN", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 1 {
+		t.Fatalf("post-backfill search hits = %+v, want 1", hits)
+	}
+}
+
+func TestWorksInLibraryFilteredPagination(t *testing.T) {
+	db := openTestDB(t)
+	user := addUser(t, db)
+	lib, _ := db.AddLibrary("tv", "tv", t.TempDir())
+	var ids []int64
+	for i := 0; i < 5; i++ {
+		ids = append(ids, addWork(t, db, lib, fmt.Sprintf("W%d", i), nil, int64(i), int64(i)))
+	}
+	idsOf := func(views []store.WorkView) []int64 {
+		out := make([]int64, 0, len(views))
+		for _, v := range views {
+			out = append(out, v.ID)
+		}
+		return out
+	}
+	page1, err := db.WorksInLibraryFiltered(lib, user, "title", "asc", "all", 2, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := idsOf(page1); len(got) != 2 || got[0] != ids[0] || got[1] != ids[1] {
+		t.Fatalf("page 1 = %v", got)
+	}
+	page2, err := db.WorksInLibraryFiltered(lib, user, "title", "asc", "all", 2, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := idsOf(page2); len(got) != 2 || got[0] != ids[2] || got[1] != ids[3] {
+		t.Fatalf("page 2 = %v", got)
+	}
+	page3, err := db.WorksInLibraryFiltered(lib, user, "title", "asc", "all", 2, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := idsOf(page3); len(got) != 1 || got[0] != ids[4] {
+		t.Fatalf("page 3 = %v", got)
+	}
+	all, err := db.WorksInLibraryFiltered(lib, user, "title", "asc", "all", 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := idsOf(all); len(got) != 5 {
+		t.Fatalf("zero limit = %v, want all 5", got)
 	}
 }

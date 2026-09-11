@@ -1,9 +1,11 @@
 package store
 
 import (
+	"fmt"
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/pressly/goose/v3"
 )
@@ -80,7 +82,7 @@ func TestMatchingInboxPredicate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	all, err := db.MatchingInbox(0)
+	all, err := db.MatchingInbox(0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +107,7 @@ func TestMatchingInboxPredicate(t *testing.T) {
 		t.Fatalf("W5 = %+v ok=%v", w, ok)
 	}
 
-	one, err := db.MatchingInbox(libID)
+	one, err := db.MatchingInbox(libID, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,5 +335,76 @@ func TestWorkEpisodes(t *testing.T) {
 	}
 	if eps[2].Description != nil {
 		t.Fatalf("description = %v, want untouched nil", eps[2].Description)
+	}
+}
+func TestMatchingInboxLimit(t *testing.T) {
+	db := openMetaTestDB(t)
+	libID, _ := db.AddLibrary("A", "audiobooks", t.TempDir())
+	for i := 0; i < 3; i++ {
+		addMetaWork(t, db, libID, fmt.Sprintf("W%d", i), "")
+	}
+	limited, err := db.MatchingInbox(libID, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(limited) != 2 || limited[0].Title != "W0" || limited[1].Title != "W1" {
+		t.Fatalf("limited inbox = %+v, want first 2 by id", limited)
+	}
+	def, err := db.MatchingInbox(libID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(def) != 3 {
+		t.Fatalf("default inbox = %d, want 3", len(def))
+	}
+}
+
+func TestPruneProviderCache(t *testing.T) {
+	db := openMetaTestDB(t)
+	now := time.Now().UnixMilli()
+	old := now - 22*24*3600*1000
+	age := func(provider, key string, at int64) {
+		t.Helper()
+		if err := db.PutCached(provider, key, "{}"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`UPDATE provider_cache SET fetched_at = ? WHERE provider = ? AND key = ?`, at, provider, key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	age("tmdb", "old", old)
+	age("tmdb", "fresh", now)
+	age("match-skip", "42", old)
+
+	n, err := db.PruneProviderCache()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("pruned = %d, want 1", n)
+	}
+	if _, _, ok := db.GetCached("tmdb", "old"); ok {
+		t.Fatal("old row survived prune")
+	}
+	if _, _, ok := db.GetCached("tmdb", "fresh"); !ok {
+		t.Fatal("fresh row pruned")
+	}
+	if _, _, ok := db.GetCached("match-skip", "42"); !ok {
+		t.Fatal("match-skip row pruned")
+	}
+	if _, ok := db.GetSetting("provider_cache_pruned_at"); !ok {
+		t.Fatal("prune timestamp not recorded")
+	}
+
+	age("audible", "old2", old)
+	n, err = db.PruneProviderCache()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("second prune within 24h deleted %d rows, want 0", n)
+	}
+	if _, _, ok := db.GetCached("audible", "old2"); !ok {
+		t.Fatal("guard failed: row pruned within 24h of last prune")
 	}
 }

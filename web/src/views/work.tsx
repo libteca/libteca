@@ -2,10 +2,11 @@ import type { ComponentChildren } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { api, media, type EditionDetail, type WorkDetail } from "../api";
 import { Cover } from "../components/cover";
-import { EmptyState, QuietLoad } from "../components/rail";
+import { EmptyState, SkeletonWork } from "../components/rail";
 import { AudioPlayer, type AudioController, type PlayerFile } from "../players/audio";
 import { VideoPlayer } from "../players/video";
 import { IconBook, IconCheck, IconChevronLeft, IconPlay } from "../components/svg";
+import { toast } from "../toast";
 import {
   badge, backLink, c, chapterList, chapterRow, ghostBtn, input, linkBtn, muted, primaryBtn,
   progressMini, tab, tabActive, tabRow, workCover, workHead, workMeta, workTitle,
@@ -79,7 +80,7 @@ export function WorkView(props: { id: number }) {
   }, [w]);
 
   if (missing) return <EmptyState title="Not found" hint="This work is gone, or the link is stale." />;
-  if (!w) return <QuietLoad />;
+  if (!w) return <SkeletonWork />;
   const first = w.editions[0];
   const isTV = w.editions.some((e) => e.seasonNum !== undefined);
   const isMusic = first && first.format === "audio" && !first.chapters?.length && w.editions.length > 1;
@@ -534,7 +535,8 @@ function AddToPlaylist(props: { editionId: number; compact?: boolean }) {
 
   const addTo = async (pl: PlaylistLite) => {
     const res = await api(`/playlists/${pl.id}/items`, { method: "POST", body: JSON.stringify({ editionId: props.editionId }) });
-    if (res.error) { setErr(res.error); return; }
+    if (res.error) { setErr(res.error); toast(res.error, "error"); return; }
+    toast(`Added to ${pl.name}`, "success");
     setAdded(pl.name);
     setTimeout(() => setOpen(false), 700);
   };
@@ -543,7 +545,8 @@ function AddToPlaylist(props: { editionId: number; compact?: boolean }) {
     if (!newName.trim()) return;
     setErr("");
     const res = await api("/playlists", { method: "POST", body: JSON.stringify({ name: newName.trim(), editionIds: [props.editionId] }) });
-    if (res.error) { setErr(res.error); return; }
+    if (res.error) { setErr(res.error); toast(res.error, "error"); return; }
+    toast(`Playlist "${newName.trim()}" created`, "success");
     setOpen(false);
   };
 

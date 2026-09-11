@@ -2,6 +2,8 @@ package store
 
 import (
 	"encoding/json"
+	"strconv"
+	"time"
 )
 
 // GetCached reads a provider_cache row: (response, fetched_at, ok).
@@ -22,6 +24,31 @@ func (d *DB) PutCached(provider, key, response string) error {
 	return err
 }
 
+const (
+	providerCacheRetention     = 21 * 24 * time.Hour
+	providerCachePruneInterval = 24 * time.Hour
+	providerCachePrunedAtKey   = "provider_cache_pruned_at"
+)
+
+func (d *DB) PruneProviderCache() (int64, error) {
+	nowMs := nowMilli()
+	if v, ok := d.GetSetting(providerCachePrunedAtKey); ok {
+		if last, err := strconv.ParseInt(v, 10, 64); err == nil && nowMs-last < providerCachePruneInterval.Milliseconds() {
+			return 0, nil
+		}
+	}
+	res, err := d.Exec(`DELETE FROM provider_cache WHERE provider <> 'match-skip' AND fetched_at < ?`,
+		nowMs-providerCacheRetention.Milliseconds())
+	if err != nil {
+		return 0, err
+	}
+	if err := d.SetSetting(providerCachePrunedAtKey, strconv.FormatInt(nowMs, 10)); err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 type InboxWork struct {
 	ID          int64
 	LibraryID   int64
@@ -35,7 +62,10 @@ type InboxWork struct {
 // MatchingInbox returns works lacking description AND (author or provider).
 // libID > 0 filters to one library. Works with a match-skip marker are
 // excluded.
-func (d *DB) MatchingInbox(libID int64) ([]InboxWork, error) {
+func (d *DB) MatchingInbox(libID int64, limit int) ([]InboxWork, error) {
+	if limit <= 0 {
+		limit = 500
+	}
 	q := `SELECT w.id, w.library_id, l.name, l.type, w.title, w.author, w.cover_path
 		FROM works w JOIN libraries l ON l.id = w.library_id
 		WHERE (w.description IS NULL OR w.description = '')
@@ -46,7 +76,8 @@ func (d *DB) MatchingInbox(libID int64) ([]InboxWork, error) {
 		q += ` AND w.library_id = ?`
 		args = append(args, libID)
 	}
-	q += ` ORDER BY w.id`
+	q += ` ORDER BY w.id LIMIT ?`
+	args = append(args, limit)
 	rows, err := d.Query(q, args...)
 	if err != nil {
 		return nil, err

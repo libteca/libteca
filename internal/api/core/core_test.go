@@ -317,3 +317,47 @@ func TestScanEventsIdleSendsBaselineAndCloses(t *testing.T) {
 		t.Fatal("stream did not close")
 	}
 }
+func TestScanPrunesProviderCache(t *testing.T) {
+	a, db, libA, libB := newTestAPI(t, func(db *store.DB, lib *store.Library, coversDir string, onProgress scan.ProgressFn) (int, error) {
+		return 0, nil
+	})
+	now := time.Now().UnixMilli()
+	old := now - 22*24*3600*1000
+	seedCache := func(provider, key string, at int64) {
+		t.Helper()
+		if err := db.PutCached(provider, key, "{}"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`UPDATE provider_cache SET fetched_at = ? WHERE provider = ? AND key = ?`, at, provider, key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seedCache("tmdb", "old", old)
+	seedCache("tmdb", "fresh", now)
+	seedCache("match-skip", "7", old)
+
+	code, _ := postScan(t, a, libA)
+	if code != 202 {
+		t.Fatalf("scan = %d, want 202", code)
+	}
+	waitJobDone(t, db, libA)
+	if _, _, ok := db.GetCached("tmdb", "old"); ok {
+		t.Fatal("stale cache row survived scan")
+	}
+	if _, _, ok := db.GetCached("tmdb", "fresh"); !ok {
+		t.Fatal("fresh cache row pruned")
+	}
+	if _, _, ok := db.GetCached("match-skip", "7"); !ok {
+		t.Fatal("match-skip row pruned")
+	}
+
+	seedCache("audible", "old2", old)
+	code, _ = postScan(t, a, libB)
+	if code != 202 {
+		t.Fatalf("second scan = %d, want 202", code)
+	}
+	waitJobDone(t, db, libB)
+	if _, _, ok := db.GetCached("audible", "old2"); !ok {
+		t.Fatal("24h guard failed: second scan pruned again")
+	}
+}

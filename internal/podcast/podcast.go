@@ -56,6 +56,7 @@ func New(db *store.DB, dataDir string) *Service {
 // Subscribe fetches and parses a feed now, creates the podcasts library on
 // first use, downloads the cover and the first maxEpisodes episodes.
 func (s *Service) Subscribe(ctx context.Context, feedURL string, autoDownload bool, maxEpisodes int) (*store.Podcast, error) {
+	feedURL = normalizeFeedURL(feedURL)
 	if existing, err := s.DB.PodcastByFeedURL(feedURL); err == nil {
 		return existing, ErrDuplicateFeed
 	}
@@ -167,7 +168,7 @@ func (s *Service) DeletePodcast(id int64) error {
 	ids := make([]int64, 0, len(files))
 	for _, f := range files {
 		ids = append(ids, f.ID)
-		if !f.Missing {
+		if s.purgeablePath(f.Path) {
 			osRemove(f.Path)
 		}
 	}

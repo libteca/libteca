@@ -14,6 +14,7 @@ import { MatchingView } from "./views/matching";
 import { PodcastsView } from "./views/podcasts";
 import { PlaylistsView } from "./views/playlists";
 import { IconSpinner } from "./components/svg";
+import { ToastHost } from "./toast";
 
 type View = { name: string; id?: number; q?: string; lib?: number; type?: string; edition?: number; format?: string };
 
@@ -132,6 +133,14 @@ input[type="range"].seek::-moz-range-thumb {
   width: 12px; height: 12px; border-radius: 50%; background: #f5f5f7; border: none;
 }
 
+@keyframes libteca-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+.sk {
+  background: linear-gradient(100deg, #141518 40%, #1e2025 50%, #141518 60%);
+  background-size: 200% 100%;
+  animation: libteca-shimmer 1.7s ease-in-out infinite;
+  border-radius: 6px;
+}
+
 @keyframes libteca-spin { to { transform: rotate(360deg); } }
 .spin { animation: libteca-spin 0.8s linear infinite; }
 
@@ -188,7 +197,7 @@ nav a svg { flex-shrink: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .cover-box, .press, .spin, .row-hit, .rail-nav { transition: none; animation: none; }
+  .cover-box, .press, .spin, .sk, .row-hit, .rail-nav { transition: none; animation: none; }
   .rail-card:hover .cover-box, .cover-card:hover .cover-box { transform: none; }
 }
 `;
@@ -302,6 +311,7 @@ export function App() {
         {view.name === "admin" && me.isAdmin && <AdminView />}
         {view.name === "matching" && me.isAdmin && <MatchingView />}
       </div>
+      <ToastHost />
     </div>
   );
 }

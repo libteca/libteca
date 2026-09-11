@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/libteca/libteca/internal/auth"
 	"github.com/libteca/libteca/internal/podcast"
@@ -22,11 +24,15 @@ const maxOPMLFeeds = 200
 //
 //	a.MountPodcasts(r)
 func (a *API) MountPodcasts(r *neutron.Router) {
-	svc := podcast.New(a.DB, a.DataDir)
+	if a.Podcasts == nil {
+		a.Podcasts = podcast.New(a.DB, a.DataDir)
+	}
+	svc := a.Podcasts
 	r.HandleFunc("POST /podcasts", func(w http.ResponseWriter, req *http.Request) { a.podcastSubscribe(svc, w, req) })
 	r.HandleFunc("GET /podcasts", a.podcastList)
 	r.HandleFunc("GET /podcasts/export-opml", a.podcastExportOPML)
 	r.HandleFunc("POST /podcasts/import-opml", a.podcastImportOPML)
+	r.HandleFunc("GET /podcasts/import-opml/status", a.podcastImportOPMLStatus)
 	r.HandleFunc("GET /podcasts/episodes/{epId}/stream", a.podcastEpisodeStream)
 	r.HandleFunc("POST /podcasts/episodes/{epId}/progress", a.podcastEpisodeProgress)
 	r.HandleFunc("GET /podcasts/{id}", a.podcastDetail)
@@ -196,6 +202,33 @@ func (a *API) podcastDelete(svc *podcast.Service, w http.ResponseWriter, r *http
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
+type opmlImportStatus struct {
+	Status     string `json:"status"`
+	Added      int    `json:"added"`
+	Failed     int    `json:"failed"`
+	Total      int    `json:"total"`
+	CurrentURL string `json:"currentUrl"`
+}
+
+type opmlRun struct {
+	mu   sync.Mutex
+	snap opmlImportStatus
+}
+
+func (run *opmlRun) update(s opmlImportStatus) {
+	run.mu.Lock()
+	run.snap = s
+	run.mu.Unlock()
+}
+
+func (run *opmlRun) snapshot() opmlImportStatus {
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	return run.snap
+}
+
+// podcastImportOPML validates the outline and starts a background subscribe
+// pass; progress is on GET /podcasts/import-opml/status.
 func (a *API) podcastImportOPML(w http.ResponseWriter, r *http.Request) {
 	if !a.requireAdmin(w, r) {
 		return
@@ -220,33 +253,52 @@ func (a *API) podcastImportOPML(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]any{"error": "too many feeds", "limit": maxOPMLFeeds})
 		return
 	}
-	svc := podcast.New(a.DB, a.DataDir)
-	type result struct {
-		FeedURL   string `json:"feedUrl"`
-		Status    string `json:"status"`
-		PodcastID *int64 `json:"podcastId,omitempty"`
-		Error     string `json:"error,omitempty"`
+	a.opmlMu.Lock()
+	run := a.opmlRun
+	if run != nil && run.snapshot().Status == "running" {
+		a.opmlMu.Unlock()
+		writeJSON(w, 409, map[string]any{"error": "import already running"})
+		return
 	}
-	results := make([]result, 0, len(urls))
-	subscribed, existed, failed := 0, 0, 0
+	run = &opmlRun{snap: opmlImportStatus{Status: "running", Total: len(urls)}}
+	a.opmlRun = run
+	a.opmlMu.Unlock()
+	go a.runOPMLImport(context.WithoutCancel(r.Context()), run, urls)
+	writeJSON(w, 202, run.snapshot())
+}
+
+func (a *API) podcastImportOPMLStatus(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdmin(w, r) {
+		return
+	}
+	a.opmlMu.Lock()
+	run := a.opmlRun
+	a.opmlMu.Unlock()
+	if run == nil {
+		writeJSON(w, 200, opmlImportStatus{Status: "idle"})
+		return
+	}
+	writeJSON(w, 200, run.snapshot())
+}
+
+func (a *API) runOPMLImport(ctx context.Context, run *opmlRun, urls []string) {
+	if a.Podcasts == nil {
+		a.Podcasts = podcast.New(a.DB, a.DataDir)
+	}
+	added, failed := 0, 0
 	for _, feedURL := range urls {
-		p, err := svc.Subscribe(r.Context(), feedURL, true, 3)
+		run.update(opmlImportStatus{Status: "running", Added: added, Failed: failed, Total: len(urls), CurrentURL: feedURL})
+		_, err := a.Podcasts.Subscribe(ctx, feedURL, true, 3)
 		switch {
 		case errors.Is(err, podcast.ErrDuplicateFeed):
-			existed++
-			results = append(results, result{FeedURL: feedURL, Status: "exists", PodcastID: &p.ID})
 		case err != nil:
 			failed++
-			results = append(results, result{FeedURL: feedURL, Status: "error", Error: err.Error()})
 		default:
-			subscribed++
-			id := p.ID
-			results = append(results, result{FeedURL: feedURL, Status: "subscribed", PodcastID: &id})
+			added++
 		}
+		run.update(opmlImportStatus{Status: "running", Added: added, Failed: failed, Total: len(urls), CurrentURL: feedURL})
 	}
-	writeJSON(w, 200, map[string]any{
-		"results": results, "subscribed": subscribed, "exists": existed, "failed": failed,
-	})
+	run.update(opmlImportStatus{Status: "done", Added: added, Failed: failed, Total: len(urls)})
 }
 
 func (a *API) podcastExportOPML(w http.ResponseWriter, r *http.Request) {

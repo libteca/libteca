@@ -161,8 +161,12 @@ func (d *DB) EditionByID(id int64) (*EditionView, error) {
 }
 
 func (d *DB) WorkByID(id int64) (*Work, error) {
+	return workRow(d, id)
+}
+
+func workRow(q dbtx, id int64) (*Work, error) {
 	var w Work
-	err := d.QueryRow(`SELECT id, library_id, title, subtitle, author, description, cover_path, created_at, updated_at FROM works WHERE id = ?`, id).
+	err := q.QueryRow(`SELECT id, library_id, title, subtitle, author, description, cover_path, created_at, updated_at FROM works WHERE id = ?`, id).
 		Scan(&w.ID, &w.LibraryID, &w.Title, &w.Subtitle, &w.Author, &w.Description, &w.CoverPath, &w.CreatedAt, &w.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound

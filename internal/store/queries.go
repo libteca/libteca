@@ -4,9 +4,24 @@ import (
 	"database/sql"
 	"errors"
 	"os"
+	"strings"
 )
 
 var ErrNotFound = errors.New("not found")
+
+type dbtx interface {
+	Exec(query string, args ...any) (sql.Result, error)
+	Query(query string, args ...any) (*sql.Rows, error)
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+func workSearchCols(title string, author *string) (string, string) {
+	a := ""
+	if author != nil {
+		a = *author
+	}
+	return strings.ToLower(title), strings.ToLower(a)
+}
 
 func (d *DB) Libraries() ([]Library, error) {
 	rows, err := d.Query(`SELECT id, name, type, path, created_at FROM libraries ORDER BY id`)
@@ -144,13 +159,18 @@ func (d *DB) User(id int64) (*User, error) {
 
 // UpsertWork upserts a work; w.Created reports whether a new row was inserted.
 func (d *DB) UpsertWork(w *Work) (int64, error) {
+	return upsertWork(d, w)
+}
+
+func upsertWork(q dbtx, w *Work) (int64, error) {
 	var id int64
-	err := d.QueryRow(`SELECT id FROM works WHERE library_id = ? AND lower(title) = lower(?) AND lower(coalesce(author,'')) = lower(coalesce(?,''))`,
+	err := q.QueryRow(`SELECT id FROM works WHERE library_id = ? AND lower(title) = lower(?) AND lower(coalesce(author,'')) = lower(coalesce(?,''))`,
 		w.LibraryID, w.Title, w.Author).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		now := nowMilli()
-		res, ierr := d.Exec(`INSERT INTO works (library_id, title, subtitle, author, description, created_at, updated_at) VALUES (?,?,?,?,?,?,?)`,
-			w.LibraryID, w.Title, w.Subtitle, w.Author, w.Description, now, now)
+		titleL, authorL := workSearchCols(w.Title, w.Author)
+		res, ierr := q.Exec(`INSERT INTO works (library_id, title, title_l, subtitle, author, author_l, description, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+			w.LibraryID, w.Title, titleL, w.Subtitle, w.Author, authorL, w.Description, now, now)
 		if ierr != nil {
 			return 0, ierr
 		}
@@ -160,8 +180,9 @@ func (d *DB) UpsertWork(w *Work) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	_, err = d.Exec(`UPDATE works SET title = ?, subtitle = ?, author = ?, description = coalesce(?, works.description), updated_at = ? WHERE id = ?`,
-		w.Title, w.Subtitle, w.Author, w.Description, nowMilli(), id)
+	titleL, authorL := workSearchCols(w.Title, w.Author)
+	_, err = q.Exec(`UPDATE works SET title = ?, title_l = ?, subtitle = ?, author = ?, author_l = ?, description = coalesce(?, works.description), updated_at = ? WHERE id = ?`,
+		w.Title, titleL, w.Subtitle, w.Author, authorL, w.Description, nowMilli(), id)
 	return id, err
 }
 
@@ -199,10 +220,12 @@ func (d *DB) UpsertFile(f *FileRec) error {
 	err := d.QueryRow(`SELECT id FROM files WHERE path = ?`, f.Path).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		if f.Hash != nil && *f.Hash != "" {
-			if hid, ok, herr := d.relinkableFileID(*f.Hash, f.Path); herr != nil {
-				return herr
-			} else if ok {
-				return d.updateFileRow(hid, f)
+			relinked, rerr := d.relinkFile(*f.Hash, f)
+			if rerr != nil {
+				return rerr
+			}
+			if relinked {
+				return nil
 			}
 		}
 		res, ierr := d.Exec(`INSERT INTO files (edition_id, path, seq, size_bytes, mtime_secs, hash, codec, video_codec, width, height, container, bitrate, channels, sample_rate, duration_secs, chapters, embedded_meta, missing, probed_at)
@@ -219,11 +242,27 @@ func (d *DB) UpsertFile(f *FileRec) error {
 	if err != nil {
 		return err
 	}
-	return d.updateFileRow(id, f)
+	return updateFileRow(d, id, f)
 }
 
-func (d *DB) relinkableFileID(hash, newPath string) (int64, bool, error) {
-	rows, err := d.Query(`SELECT id, path, missing FROM files WHERE hash = ? AND path != ? ORDER BY missing DESC, id ASC`, hash, newPath)
+func (d *DB) relinkFile(hash string, f *FileRec) (bool, error) {
+	tx, err := d.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	hid, ok, err := relinkableFileID(tx, hash, f.Path)
+	if err != nil || !ok {
+		return false, err
+	}
+	if err := updateFileRow(tx, hid, f); err != nil {
+		return false, err
+	}
+	return true, tx.Commit()
+}
+
+func relinkableFileID(q dbtx, hash, newPath string) (int64, bool, error) {
+	rows, err := q.Query(`SELECT id, path, missing FROM files WHERE hash = ? AND path != ? ORDER BY missing DESC, id ASC`, hash, newPath)
 	if err != nil {
 		return 0, false, err
 	}
@@ -245,8 +284,8 @@ func (d *DB) relinkableFileID(hash, newPath string) (int64, bool, error) {
 	return 0, false, rows.Err()
 }
 
-func (d *DB) updateFileRow(id int64, f *FileRec) error {
-	_, err := d.Exec(`UPDATE files SET edition_id = ?, path = ?, seq = ?, size_bytes = ?, mtime_secs = ?, hash = ?, codec = ?, video_codec = ?, width = ?, height = ?, container = ?, bitrate = ?, channels = ?, sample_rate = ?, duration_secs = ?, chapters = ?, missing = 0, probed_at = ? WHERE id = ?`,
+func updateFileRow(q dbtx, id int64, f *FileRec) error {
+	_, err := q.Exec(`UPDATE files SET edition_id = ?, path = ?, seq = ?, size_bytes = ?, mtime_secs = ?, hash = ?, codec = ?, video_codec = ?, width = ?, height = ?, container = ?, bitrate = ?, channels = ?, sample_rate = ?, duration_secs = ?, chapters = ?, missing = 0, probed_at = ? WHERE id = ?`,
 		f.EditionID, f.Path, f.Seq, f.SizeBytes, f.MtimeSecs, f.Hash, f.Codec, f.VideoCodec, f.Width, f.Height, f.Container, f.Bitrate, f.Channels, f.SampleRate, f.DurationSecs, f.Chapters, nowMilli(), id)
 	f.ID = id
 	f.Inserted = false

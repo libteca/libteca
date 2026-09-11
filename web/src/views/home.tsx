@@ -1,12 +1,13 @@
 import { useEffect, useState } from "preact/hooks";
 import { api, media, type Library, type NextUpItem, type RecentItem, type ResumeItem } from "../api";
 import { Cover } from "../components/cover";
-import { EmptyState, QuietLoad, Rail, RailCard } from "../components/rail";
+import { EmptyState, Rail, RailCard, SkeletonRail } from "../components/rail";
 import {
   IconBook,
   IconComic,
   IconFilm,
   IconHeadphones,
+  IconLibrary,
   IconMusic,
   IconPlay,
   IconPodcast,
@@ -205,7 +206,7 @@ export function Home() {
         <h2 style={railTitle}>Libraries</h2>
         {libs.length === 0 ? (
           loaded && (
-            <EmptyState title="No libraries yet" hint="Point libteca at a folder of media and it does the rest.">
+            <EmptyState title="No libraries yet" icon={<IconLibrary size={22} />} hint="Point libteca at a folder of media and it does the rest.">
               <a href="#/admin" style={primaryBtn}>Open Admin</a>
             </EmptyState>
           )
@@ -234,7 +235,12 @@ export function Home() {
       {loaded && resume.length === 0 && recent.length === 0 && libs.length > 0 && (
         <EmptyState title="Nothing on the shelves yet" hint="Scan a library and everything you add lands here." />
       )}
-      {!loaded && resume.length === 0 && recent.length === 0 && <QuietLoad />}
+      {!loaded && resume.length === 0 && recent.length === 0 && (
+        <div>
+          <SkeletonRail />
+          <SkeletonRail />
+        </div>
+      )}
     </div>
   );
 }

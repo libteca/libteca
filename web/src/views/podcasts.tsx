@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { api, getToken, media } from "../api";
 import { EmptyState, QuietLoad } from "../components/rail";
-import { IconCheck, IconChevronLeft, IconPause, IconPlay, IconScan } from "../components/svg";
+import { IconCheck, IconChevronLeft, IconPause, IconPlay, IconPodcast, IconScan } from "../components/svg";
+import { toast } from "../toast";
 import { fmt, fmtClock, fmtRel } from "../util";
 import {
   backLink, badge, c, errStyle, ghostBtn, gridSquare, iconBtn, input, muted, playerBar, primaryBtn,
@@ -80,12 +81,14 @@ export function PodcastsView() {
     try {
       const res: PodcastDetailBody | { error: string; podcastId?: number } = await api("/podcasts", { method: "POST", body: JSON.stringify({ feedUrl: feedUrl.trim() }) });
       if ("error" in res) {
-        if (res.podcastId != null) { setFeedUrl(""); setSelected(res.podcastId); refresh(); return; }
+        if (res.podcastId != null) { setFeedUrl(""); setSelected(res.podcastId); toast("Already subscribed"); refresh(); return; }
         setErr(res.error);
+        toast(res.error, "error");
         return;
       }
       setFeedUrl("");
       setSelected(res.id);
+      toast(`Subscribed to ${res.title}`, "success");
       refresh();
     } catch {
       setErr("Couldn't reach the server.");
@@ -100,12 +103,14 @@ export function PodcastsView() {
       const opml = await file.text();
       const res: { subscribed: number; exists: number; failed: number; error?: string } =
         await api("/podcasts/import-opml", { method: "POST", body: JSON.stringify({ opml }) });
-      if (res.error) { setErr(res.error); setMsg(""); return; }
+      if (res.error) { setErr(res.error); setMsg(""); toast(res.error, "error"); return; }
       setMsg(`Imported ${res.subscribed} new, ${res.exists} already subscribed, ${res.failed} failed`);
+      toast(`OPML imported — ${res.subscribed} subscribed, ${res.exists} already there`, res.failed > 0 ? "default" : "success");
       refresh();
     } catch {
       setErr("Import failed — couldn't reach the server.");
       setMsg("");
+      toast("Import failed — couldn't reach the server.", "error");
     }
   };
 
@@ -122,7 +127,7 @@ export function PodcastsView() {
           <button style={primaryBtn} type="button" onClick={refresh}>Retry</button>
         </EmptyState>
       ) : pods.length === 0 ? (
-        <EmptyState title="No subscriptions yet" hint="Add a feed URL or import an OPML file." />
+        <EmptyState title="No subscriptions yet" icon={<IconPodcast size={22} />} hint="Add a feed URL or import an OPML file." />
       ) : (
         <div style={gridSquare}>
           {pods.map((p) => (
@@ -385,7 +390,7 @@ function PodcastShow(props: { id: number; onBack: () => void; onChanged: () => v
         {pod && eps.length === 0 && <p style={muted}>No episodes yet. Refresh the feed to fetch the catalog.</p>}
       </div>
       {playing != null && pod && (
-        <div style={playerBar}>
+        <div className="player-bar" style={playerBar}>
           <div style={{ width: "3rem", flexShrink: 0 }}><PodcastCover pod={pod} /></div>
           <div style={{ display: "flex", flexDirection: "column", minWidth: 0, width: "12rem", flexShrink: 1 }}>
             <span style={{ fontSize: "0.88rem", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>

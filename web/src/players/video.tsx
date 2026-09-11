@@ -9,6 +9,22 @@ import {
 
 const RATES = [1, 1.25, 1.5, 2];
 
+type Thumbs = {
+  Width: number; Height: number; TileWidth: number; TileHeight: number;
+  Interval: number; TileCount: number;
+};
+
+function IconPip(p: { size?: number }) {
+  return (
+    <svg width={p.size ?? 16} height={p.size ?? 16} viewBox="0 0 24 24"
+      fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"
+      style={{ display: "block", flexShrink: 0 }}>
+      <rect x="3" y="5" width="18" height="14" rx="2.5" />
+      <rect x="12" y="12" width="7" height="5" rx="1" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
 export function VideoPlayer(props: {
   w: WorkDetail;
   editionId: number;
@@ -39,6 +55,9 @@ export function VideoPlayer(props: {
   const [skip, setSkip] = useState<"" | "back" | "fwd">("");
   const [hoverT, setHoverT] = useState<number | null>(null);
   const [waiting, setWaiting] = useState(false);
+  const [thumbs, setThumbs] = useState<Thumbs | null>(null);
+  const [pip, setPip] = useState(false);
+  const pipOK = typeof document !== "undefined" && document.pictureInPictureEnabled;
   const fileId = ed.files[0].id;
 
   const total = dur || ed.duration || 0;
@@ -102,6 +121,28 @@ export function VideoPlayer(props: {
       .catch(() => {});
     return () => { alive = false; };
   }, [fileId]);
+
+  useEffect(() => {
+    setThumbs(null);
+    if (!ed.files[0].videoCodec) return;
+    let alive = true;
+    api(`/editions/${props.editionId}/thumbs`)
+      .then((m) => { if (alive && m && m.TileCount > 0 && m.Width > 0 && m.Height > 0 && m.Interval > 0) setThumbs(m as Thumbs); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [props.editionId]);
+
+  useEffect(() => {
+    const v = ref.current;
+    if (!v || !document.pictureInPictureEnabled) return;
+    const sync = () => setPip(document.pictureInPictureElement === v);
+    v.addEventListener("enterpictureinpicture", sync);
+    v.addEventListener("leavepictureinpicture", sync);
+    return () => {
+      v.removeEventListener("enterpictureinpicture", sync);
+      v.removeEventListener("leavepictureinpicture", sync);
+    };
+  }, []);
 
   useEffect(() => {
     setTime(0);
@@ -191,6 +232,13 @@ export function VideoPlayer(props: {
     }
   };
 
+  const togglePip = () => {
+    const v = ref.current;
+    if (!v) return;
+    if (document.pictureInPictureElement) void document.exitPictureInPicture().catch(() => {});
+    else void v.requestPictureInPicture().catch(() => {});
+  };
+
   const cycleRate = () => {
     const v = ref.current;
     if (!v) return;
@@ -275,6 +323,26 @@ export function VideoPlayer(props: {
     const frac = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
     setHoverT(frac * total);
   };
+
+  const thumbBox = (() => {
+    if (!thumbs || hoverT == null || total <= 0) return null;
+    const perSheet = thumbs.TileWidth * thumbs.TileHeight;
+    const frame = Math.max(0, Math.min(Math.floor(hoverT / thumbs.Interval), thumbs.TileCount * perSheet - 1));
+    const sheet = Math.floor(frame / perSheet);
+    const inSheet = frame % perSheet;
+    const col = inSheet % thumbs.TileWidth;
+    const row = Math.floor(inSheet / thumbs.TileWidth);
+    const w = thumbs.Width;
+    const h = thumbs.Height;
+    return {
+      left: `clamp(0px, calc(${(hoverT / total) * 100}% - ${w / 2}px), calc(100% - ${w}px))`,
+      width: `${w}px`,
+      height: `${h}px`,
+      backgroundImage: `url(${media(`/editions/${props.editionId}/thumbs/${sheet}.jpg`)})`,
+      backgroundSize: `${w * thumbs.TileWidth}px ${h * thumbs.TileHeight}px`,
+      backgroundPosition: `-${col * w}px -${row * h}px`,
+    };
+  })();
 
   return (
     <div
@@ -436,6 +504,14 @@ export function VideoPlayer(props: {
                     boxShadow: "0 6px 18px rgba(0,0,0,0.5)",
                   }}>{fmtClock(hoverT)}</div>
                 )}
+                {hoverT != null && thumbBox && (
+                  <div style={{
+                    position: "absolute", ...thumbBox,
+                    bottom: "calc(100% + 2rem)", overflow: "hidden", pointerEvents: "none",
+                    borderRadius: "8px", background: "#000", border: "1px solid rgba(255,255,255,0.14)",
+                    boxShadow: "0 6px 18px rgba(0,0,0,0.5)",
+                  }} />
+                )}
                 <div className="vtrack" />
                 <div className="vbuf" style={{ width: `${bufPct * 100}%` }} />
                 <div className="vfill" style={{ width: `${scrubPct * 100}%` }} />
@@ -478,6 +554,11 @@ export function VideoPlayer(props: {
                   style={{ width: "auto", padding: "0 0.7rem", fontSize: "0.8rem", fontWeight: 650, fontVariantNumeric: "tabular-nums" }}>
                   {rate}x
                 </button>
+                {pipOK && (
+                  <button className={`vbtn press${pip ? " on" : ""}`} onClick={togglePip} aria-label="Picture in picture" title="Picture in picture">
+                    <IconPip size={20} />
+                  </button>
+                )}
                 <button className="vbtn press" aria-label="Fullscreen (f)" title="Fullscreen (f)" onClick={toggleFullscreen}><IconFullscreen size={20} /></button>
               </div>
             </div>

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { api, getToken, media } from "../api";
 import { EmptyState, QuietLoad } from "../components/rail";
-import { IconBack30, IconChevronDown, IconChevronLeft, IconChevronUp, IconFwd30, IconPause, IconPlay, IconX } from "../components/svg";
+import { IconBack30, IconChevronDown, IconChevronLeft, IconChevronUp, IconFwd30, IconMusic, IconPause, IconPlay, IconX } from "../components/svg";
+import { toast } from "../toast";
 import { fmt, fmtClock } from "../util";
 import {
   backLink, badge, c, errStyle, ghostBtn, iconBtn, input, linkBtn, muted, playerBar, primaryBtn, sectionTitle,
@@ -105,7 +106,7 @@ function PlaylistPlayer(props: { items: PlaylistItem[]; onDone: () => void }) {
   };
 
   return (
-    <div style={playerBar}>
+    <div className="player-bar" style={playerBar}>
       <audio
         ref={audioRef}
         src={item ? media(`/editions/${item.editionId}/download`) : undefined}
@@ -182,6 +183,7 @@ function PlaylistList() {
     try {
       const res = await api("/playlists", { method: "POST", body: JSON.stringify({ name: name.trim() }) });
       if (res.error) { setErr(res.error); return; }
+      toast(`Playlist "${name.trim()}" created`, "success");
       setName("");
       location.hash = `#/playlists?id=${res.id}`;
     } catch {
@@ -218,7 +220,7 @@ function PlaylistList() {
     <div>
       <h2 style={sectionTitle}>Playlists</h2>
       {lists.length === 0
-        ? <EmptyState title="No playlists yet" hint="Create one below, or add editions from a work page." />
+        ? <EmptyState title="No playlists yet" icon={<IconMusic size={22} />} hint="Create one below, or add editions from a work page." />
         : (
           <div style={{ borderTop: `1px solid ${c.lineSoft}` }}>
             {lists.map((p) => (
@@ -322,7 +324,7 @@ function PlaylistDetail(props: { id: number }) {
       </div>
       {err && <p style={errStyle}>{err}</p>}
       {p.items.length === 0 ? (
-        <EmptyState title="Empty playlist" hint="Add editions from a work page." />
+        <EmptyState title="Empty playlist" icon={<IconMusic size={22} />} hint="Add editions from a work page." />
       ) : (
         <div style={{ borderTop: `1px solid ${c.lineSoft}` }}>
           {p.items.map((it, i) => (

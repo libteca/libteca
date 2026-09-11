@@ -550,7 +550,13 @@ func (a *API) skipWork(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) matchingInbox(w http.ResponseWriter, r *http.Request) {
-	works, err := a.DB.MatchingInbox(0)
+	limit := 500
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	works, err := a.DB.MatchingInbox(0, limit)
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
@@ -577,7 +583,7 @@ type metaSnap struct {
 type metaRun struct {
 	mu     sync.Mutex
 	snap   metaSnap
-	subs   []chan metaSnap
+	subs   map[chan metaSnap]struct{}
 	closed bool
 }
 
@@ -585,7 +591,7 @@ func (r *metaRun) publish(s metaSnap) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.snap = s
-	for _, ch := range r.subs {
+	for ch := range r.subs {
 		select {
 		case ch <- s:
 		default:
@@ -609,10 +615,19 @@ func (r *metaRun) subscribe() chan metaSnap {
 		close(ch)
 		return ch
 	}
-	r.subs = append(r.subs, ch)
+	if r.subs == nil {
+		r.subs = map[chan metaSnap]struct{}{}
+	}
+	r.subs[ch] = struct{}{}
 	r.mu.Unlock()
 	ch <- s
 	return ch
+}
+
+func (r *metaRun) unsubscribe(ch chan metaSnap) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.subs, ch)
 }
 
 func (r *metaRun) finish(s metaSnap) {
@@ -622,7 +637,7 @@ func (r *metaRun) finish(s metaSnap) {
 	subs := r.subs
 	r.subs = nil
 	r.mu.Unlock()
-	for _, ch := range subs {
+	for ch := range subs {
 		select {
 		case ch <- s:
 		default:
@@ -662,6 +677,10 @@ func (a *API) refreshMeta(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) refreshMetaStatus(w http.ResponseWriter, r *http.Request) {
 	id := auth.Atoi64(r.PathValue("id"))
+	if _, err := a.DB.Library(id); err != nil {
+		writeJSON(w, 404, map[string]string{"error": "library not found"})
+		return
+	}
 	a.metaMu.Lock()
 	run := a.metaRuns[id]
 	a.metaMu.Unlock()
@@ -674,6 +693,10 @@ func (a *API) refreshMetaStatus(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) refreshMetaEvents(w http.ResponseWriter, r *http.Request) {
 	id := auth.Atoi64(r.PathValue("id"))
+	if _, err := a.DB.Library(id); err != nil {
+		writeJSON(w, 404, map[string]string{"error": "library not found"})
+		return
+	}
 	fl, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "no flush", 500)
@@ -690,10 +713,18 @@ func (a *API) refreshMetaEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ch := run.subscribe()
+	defer run.unsubscribe(ch)
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
 	for {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-heartbeat.C:
+			if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
+				return
+			}
+			fl.Flush()
 		case s, ok := <-ch:
 			if !ok {
 				return
@@ -709,7 +740,7 @@ func (a *API) refreshMetaEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) runRefreshMeta(ctx context.Context, libID int64, run *metaRun) {
-	inbox, err := a.DB.MatchingInbox(libID)
+	inbox, err := a.DB.MatchingInbox(libID, 0)
 	if err != nil {
 		run.finish(metaSnap{Status: "error", Error: err.Error()})
 		return

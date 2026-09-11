@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -72,8 +73,12 @@ func bodyStr(t *testing.T, resp *http.Response) string {
 
 func seedWork(t *testing.T, db *store.DB, libID int64, title string, author, cover *string, createdAt, updatedAt int64) int64 {
 	t.Helper()
-	res, err := db.Exec(`INSERT INTO works (library_id, title, author, cover_path, created_at, updated_at) VALUES (?,?,?,?,?,?)`,
-		libID, title, author, cover, createdAt, updatedAt)
+	authorL := ""
+	if author != nil {
+		authorL = strings.ToLower(*author)
+	}
+	res, err := db.Exec(`INSERT INTO works (library_id, title, title_l, author, author_l, cover_path, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)`,
+		libID, title, strings.ToLower(title), author, authorL, cover, createdAt, updatedAt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -434,5 +439,44 @@ func TestSRTToVTT(t *testing.T) {
 	want = "WEBVTT\n\n00:00:00.000 --> 00:00:01.250\nLF cue\n"
 	if got := srtToVTT(in); got != want {
 		t.Fatalf("got %q\nwant %q", got, want)
+	}
+}
+func TestWorksPaginationEndpoint(t *testing.T) {
+	db, base, token := newDiscoveryEnv(t)
+	lib, _ := db.AddLibrary("ab", "audiobooks", t.TempDir())
+	var ids []int64
+	for i := 0; i < 3; i++ {
+		ids = append(ids, seedWork(t, db, lib, fmt.Sprintf("W%d", i), nil, nil, int64(i), int64(i)))
+	}
+	fetchIDs := func(query string) []int64 {
+		t.Helper()
+		resp := authedGet(t, base+"/libraries/"+strconv.FormatInt(lib, 10)+"/works"+query, token)
+		if resp.StatusCode != 200 {
+			t.Fatalf("%s: status = %d", query, resp.StatusCode)
+		}
+		var items []map[string]any
+		if err := json.Unmarshal([]byte(bodyStr(t, resp)), &items); err != nil {
+			t.Fatalf("%s: %v", query, err)
+		}
+		out := make([]int64, 0, len(items))
+		for _, it := range items {
+			out = append(out, int64(it["id"].(float64)))
+		}
+		return out
+	}
+	if got := fetchIDs(""); len(got) != 3 {
+		t.Fatalf("default = %v, want all 3", got)
+	}
+	if got := fetchIDs("?limit=2"); len(got) != 2 || got[0] != ids[0] || got[1] != ids[1] {
+		t.Fatalf("limit=2 = %v", got)
+	}
+	if got := fetchIDs("?limit=2&offset=2"); len(got) != 1 || got[0] != ids[2] {
+		t.Fatalf("page 2 = %v", got)
+	}
+	if got := fetchIDs("?offset=1"); len(got) != 2 || got[0] != ids[1] || got[1] != ids[2] {
+		t.Fatalf("offset only = %v", got)
+	}
+	if got := fetchIDs("?limit=junk&offset=-4"); len(got) != 3 {
+		t.Fatalf("junk params = %v, want defaults", got)
 	}
 }

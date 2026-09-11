@@ -101,8 +101,12 @@ func (d *DB) UpsertEditionPages(e *EditionPages) (int64, error) {
 
 // FindWorkID mirrors the works unique-index lookup used by UpsertWork.
 func (d *DB) FindWorkID(libraryID int64, title string, author *string) (int64, bool) {
+	return findWorkID(d, libraryID, title, author)
+}
+
+func findWorkID(q dbtx, libraryID int64, title string, author *string) (int64, bool) {
 	var id int64
-	err := d.QueryRow(`SELECT id FROM works WHERE library_id = ? AND lower(title) = lower(?) AND lower(coalesce(author,'')) = lower(coalesce(?,''))`,
+	err := q.QueryRow(`SELECT id FROM works WHERE library_id = ? AND lower(title) = lower(?) AND lower(coalesce(author,'')) = lower(coalesce(?,''))`,
 		libraryID, title, author).Scan(&id)
 	if err != nil {
 		return 0, false

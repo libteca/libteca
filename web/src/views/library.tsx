@@ -3,8 +3,8 @@ import { api, type Library, type Work } from "../api";
 import { useScan } from "../scan";
 import { useRefreshMeta } from "../refresh-meta";
 import { Cover } from "../components/cover";
-import { CardProgress, EmptyState, QuietLoad } from "../components/rail";
-import { IconChevronDown, IconPlay } from "../components/svg";
+import { CardProgress, EmptyState, SkeletonGrid } from "../components/rail";
+import { IconChevronDown, IconPlay, TypeIcon } from "../components/svg";
 import { coverRatio, typeLabel } from "../util";
 import {
   c, card, cardMeta, cardTitleWrap, filterBtn, filterBtnOn, filterTrack, ghostBtn,
@@ -162,8 +162,9 @@ export function LibraryView(props: { lib?: number; type?: string }) {
       {works.length === 0
         ? loaded
           ? <EmptyState title={filter === "all" ? "No works yet" : "Nothing matches this filter"}
+              icon={<TypeIcon type={activeLib?.type || ""} size={22} />}
               hint={filter === "all" ? "Add a library in Admin and scan." : "Try a different filter."} />
-          : <QuietLoad />
+          : <SkeletonGrid square={ratio === "square"} />
         : <div style={gridFor(activeLib?.type)}>
             {works.map((w) => {
               const meta = w.author || w.subtitle;

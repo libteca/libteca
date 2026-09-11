@@ -99,7 +99,7 @@ func (d *DB) MusicArtistsSearch(q string, limit, offset int) ([]MusicArtist, err
 	pat := "%" + likeEscape(strings.ToLower(q)) + "%"
 	rows, err := d.Query(`SELECT `+musicAuthorKey+`, max(`+musicAuthorName+`), count(*)
 		FROM works w JOIN libraries l ON l.id = w.library_id
-		WHERE l.type = 'music' AND `+musicAuthorKey+` LIKE ? ESCAPE '\'
+		WHERE l.type = 'music' AND coalesce(nullif(w.author_l, ''), `+musicAuthorKey+`) LIKE ? ESCAPE '\'
 		GROUP BY `+musicAuthorKey+`
 		ORDER BY `+musicAuthorKey+`
 		LIMIT ? OFFSET ?`, pat, limit, offset)
@@ -168,7 +168,7 @@ func (d *DB) MusicAlbumByID(workID int64) (*MusicAlbum, error) {
 
 func (d *DB) MusicAlbumsSearch(q string, limit, offset int) ([]MusicAlbum, error) {
 	pat := "%" + likeEscape(strings.ToLower(q)) + "%"
-	return d.musicAlbums(` AND (lower(w.title) LIKE ? ESCAPE '\' OR `+musicAuthorKey+` LIKE ? ESCAPE '\')
+	return d.musicAlbums(` AND (coalesce(w.title_l, lower(w.title)) LIKE ? ESCAPE '\' OR coalesce(nullif(w.author_l, ''), `+musicAuthorKey+`) LIKE ? ESCAPE '\')
 		ORDER BY lower(w.title), w.id LIMIT ? OFFSET ?`, pat, pat, limit, offset)
 }
 

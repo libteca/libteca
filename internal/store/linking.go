@@ -18,9 +18,13 @@ type MoveResult struct {
 // ErrNotFound for editions whose files are all missing, which linking must
 // tolerate.
 func (d *DB) EditionRow(id int64) (*Edition, error) {
+	return editionRow(d, id)
+}
+
+func editionRow(q dbtx, id int64) (*Edition, error) {
 	var e Edition
 	var abr int
-	err := d.QueryRow(`SELECT id, work_id, format, title, language, abridged, duration_secs, position, season_num, episode_num, created_at FROM editions WHERE id = ?`, id).
+	err := q.QueryRow(`SELECT id, work_id, format, title, language, abridged, duration_secs, position, season_num, episode_num, created_at FROM editions WHERE id = ?`, id).
 		Scan(&e.ID, &e.WorkID, &e.Format, &e.Title, &e.Language, &abr, &e.DurationSecs, &e.Position, &e.SeasonNum, &e.EpisodeNum, &e.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -37,10 +41,14 @@ func (d *DB) EditionRow(id int64) (*Edition, error) {
 // rewrites an existing work's metadata, so linking into an existing work
 // keeps its subtitle/description/cover intact.
 func (d *DB) EnsureWorkInLibrary(w *Work) (int64, error) {
-	if id, ok := d.FindWorkID(w.LibraryID, w.Title, w.Author); ok {
+	return ensureWorkInLibrary(d, w)
+}
+
+func ensureWorkInLibrary(q dbtx, w *Work) (int64, error) {
+	if id, ok := findWorkID(q, w.LibraryID, w.Title, w.Author); ok {
 		return id, nil
 	}
-	return d.UpsertWork(w)
+	return upsertWork(q, w)
 }
 
 // MoveEditionToWork reparents an edition; files and progress follow the
@@ -48,23 +56,36 @@ func (d *DB) EnsureWorkInLibrary(w *Work) (int64, error) {
 // never strand an empty work. Moving to a work in another library is allowed:
 // editions carry no library FK, the work's library applies to all of them.
 func (d *DB) MoveEditionToWork(editionID, targetWorkID int64) (MoveResult, error) {
-	e, err := d.EditionRow(editionID)
+	tx, err := d.Begin()
+	if err != nil {
+		return MoveResult{}, err
+	}
+	defer tx.Rollback()
+	res, err := moveEditionToWork(tx, editionID, targetWorkID)
+	if err != nil {
+		return MoveResult{}, err
+	}
+	return res, tx.Commit()
+}
+
+func moveEditionToWork(q dbtx, editionID, targetWorkID int64) (MoveResult, error) {
+	e, err := editionRow(q, editionID)
 	if err != nil {
 		return MoveResult{}, err
 	}
 	if e.WorkID == targetWorkID {
 		return MoveResult{TargetWorkID: targetWorkID, SourceWorkID: e.WorkID}, nil
 	}
-	if _, err := d.Exec(`UPDATE editions SET work_id = ? WHERE id = ?`, targetWorkID, editionID); err != nil {
+	if _, err := q.Exec(`UPDATE editions SET work_id = ? WHERE id = ?`, targetWorkID, editionID); err != nil {
 		return MoveResult{}, err
 	}
 	var n int
-	if err := d.QueryRow(`SELECT count(*) FROM editions WHERE work_id = ?`, e.WorkID).Scan(&n); err != nil {
+	if err := q.QueryRow(`SELECT count(*) FROM editions WHERE work_id = ?`, e.WorkID).Scan(&n); err != nil {
 		return MoveResult{}, err
 	}
 	res := MoveResult{TargetWorkID: targetWorkID, SourceWorkID: e.WorkID}
 	if n == 0 {
-		if _, err := d.Exec(`DELETE FROM works WHERE id = ?`, e.WorkID); err != nil {
+		if _, err := q.Exec(`DELETE FROM works WHERE id = ?`, e.WorkID); err != nil {
 			return MoveResult{}, err
 		}
 		res.SourceDeleted = true
@@ -79,17 +100,24 @@ func (d *DB) MergeWorks(sourceID, targetID int64) error {
 	if sourceID == targetID {
 		return ErrSameWork
 	}
-	if _, err := d.WorkByID(sourceID); err != nil {
+	tx, err := d.Begin()
+	if err != nil {
 		return err
 	}
-	if _, err := d.WorkByID(targetID); err != nil {
+	defer tx.Rollback()
+	if _, err := workRow(tx, sourceID); err != nil {
 		return err
 	}
-	if _, err := d.Exec(`UPDATE editions SET work_id = ? WHERE work_id = ?`, targetID, sourceID); err != nil {
+	if _, err := workRow(tx, targetID); err != nil {
 		return err
 	}
-	_, err := d.Exec(`DELETE FROM works WHERE id = ?`, sourceID)
-	return err
+	if _, err := tx.Exec(`UPDATE editions SET work_id = ? WHERE work_id = ?`, targetID, sourceID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM works WHERE id = ?`, sourceID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // SplitEditionToNewWork reparents an edition to a fresh work derived from its
@@ -97,11 +125,16 @@ func (d *DB) MergeWorks(sourceID, targetID int64) error {
 // work's author. If a work with that (title, author) already exists in the
 // library, the edition moves into it instead of duplicating.
 func (d *DB) SplitEditionToNewWork(editionID int64, title string, author *string) (MoveResult, error) {
-	e, err := d.EditionRow(editionID)
+	tx, err := d.Begin()
 	if err != nil {
 		return MoveResult{}, err
 	}
-	src, err := d.WorkByID(e.WorkID)
+	defer tx.Rollback()
+	e, err := editionRow(tx, editionID)
+	if err != nil {
+		return MoveResult{}, err
+	}
+	src, err := workRow(tx, e.WorkID)
 	if err != nil {
 		return MoveResult{}, err
 	}
@@ -112,14 +145,17 @@ func (d *DB) SplitEditionToNewWork(editionID int64, title string, author *string
 		author = src.Author
 	}
 	w := &Work{LibraryID: src.LibraryID, Title: title, Author: author}
-	targetID, err := d.EnsureWorkInLibrary(w)
+	targetID, err := ensureWorkInLibrary(tx, w)
 	if err != nil {
 		return MoveResult{}, err
 	}
-	res, err := d.MoveEditionToWork(editionID, targetID)
+	res, err := moveEditionToWork(tx, editionID, targetID)
 	if err != nil {
 		return MoveResult{}, err
 	}
 	res.Created = w.Created
+	if err := tx.Commit(); err != nil {
+		return MoveResult{}, err
+	}
 	return res, nil
 }

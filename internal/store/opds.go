@@ -116,7 +116,7 @@ func (d *DB) OPDSEditionsInProgress(userID int64, limit, offset int) ([]OPDSEdit
 // before author-only matches.
 func (d *DB) OPDSSearchEditions(q string, limit, offset int) ([]OPDSEdition, int, error) {
 	pat := "%" + likeEscape(strings.ToLower(q)) + "%"
-	const where = opdsBookTypes + ` AND (lower(w.title) LIKE ? ESCAPE '\' OR (w.author IS NOT NULL AND lower(w.author) LIKE ? ESCAPE '\'))`
+	const where = opdsBookTypes + ` AND (coalesce(w.title_l, lower(w.title)) LIKE ? ESCAPE '\' OR (w.author IS NOT NULL AND coalesce(w.author_l, lower(w.author)) LIKE ? ESCAPE '\'))`
 	const order = ` ORDER BY (lower(w.title) LIKE ? ESCAPE '\') DESC, lower(w.title) ASC, w.id ASC, e.id ASC`
 	total, err := d.opdsCount(where, pat, pat)
 	if err != nil {

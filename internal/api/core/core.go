@@ -1,6 +1,8 @@
 package core
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +14,7 @@ import (
 	"time"
 
 	"github.com/libteca/libteca/internal/auth"
+	"github.com/libteca/libteca/internal/podcast"
 	"github.com/libteca/libteca/internal/scan"
 	"github.com/libteca/libteca/internal/store"
 	"github.com/libteca/libteca/internal/transcode"
@@ -25,12 +28,16 @@ type API struct {
 	DataDir  string
 	ScanFunc ScanFunc
 	TC       *transcode.Manager
+	Podcasts *podcast.Service
 
 	mu   sync.Mutex
 	runs map[int64]*scanRun
 
 	metaMu   sync.Mutex
 	metaRuns map[int64]*metaRun
+
+	opmlMu  sync.Mutex
+	opmlRun *opmlRun
 }
 
 func New(db *store.DB, dataDir string) *API {
@@ -80,6 +87,14 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 
+var loginDummyHash = func() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	return auth.Hash(hex.EncodeToString(b))
+}()
+
 func (a *API) login(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Username string `json:"username"`
@@ -90,7 +105,12 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u, err := a.DB.UserByName(body.Username)
-	if err != nil || !auth.Verify(body.Password, u.PasswordHash) {
+	if err != nil {
+		auth.Verify(body.Password, loginDummyHash)
+		writeJSON(w, 401, map[string]string{"error": "invalid credentials"})
+		return
+	}
+	if !auth.Verify(body.Password, u.PasswordHash) {
 		writeJSON(w, 401, map[string]string{"error": "invalid credentials"})
 		return
 	}
@@ -279,6 +299,7 @@ func (a *API) runScan(run *scanRun, lib *store.Library) {
 		fmt.Println("libteca: scan:", err)
 		return
 	}
+	_, _ = a.DB.PruneProviderCache()
 	a.DB.FinishScanJob(run.jobID, "done", nil)
 	run.finish("done", "")
 }
@@ -568,7 +589,22 @@ func (a *API) works(w http.ResponseWriter, r *http.Request) {
 	default:
 		filter = "all"
 	}
-	works, err := a.DB.WorksInLibraryFiltered(id, auth.UserID(r), sort, dir, filter)
+	limit := 200
+	if v := q.Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	offset := 0
+	if v := q.Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			offset = n
+		}
+	}
+	works, err := a.DB.WorksInLibraryFiltered(id, auth.UserID(r), sort, dir, filter, limit, offset)
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return

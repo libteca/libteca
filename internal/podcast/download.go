@@ -100,10 +100,9 @@ func (s *Service) downloadEpisode(ctx context.Context, p *store.Podcast, ep *sto
 }
 
 // enforceRetention keeps only the newest maxEpisodes downloaded episodes.
-// Retention choice (documented per house rule): purged files are marked
-// missing=1 and left on disk — scan.go semantics, never auto-delete; cleanup
-// rules/UI win later. The episode loses its file link but keeps
-// downloaded_at, which also prevents re-downloading purged episodes.
+// Purged episode files are deleted from disk (guarded to the podcasts data
+// dir) and their rows marked missing=1. The episode loses its file link but
+// keeps downloaded_at, which also prevents re-downloading purged episodes.
 func (s *Service) enforceRetention(p *store.Podcast) error {
 	if p.MaxEpisodes <= 0 {
 		return nil
@@ -113,8 +112,22 @@ func (s *Service) enforceRetention(p *store.Podcast) error {
 		return err
 	}
 	overflow := len(downloaded) - p.MaxEpisodes
+	if overflow <= 0 {
+		return nil
+	}
+	files, err := s.DB.FilesForPodcast(p.ID)
+	if err != nil {
+		return err
+	}
+	paths := make(map[int64]string, len(files))
+	for _, f := range files {
+		paths[f.ID] = f.Path
+	}
 	for i := 0; i < overflow; i++ {
 		ep := downloaded[i]
+		if path, ok := paths[*ep.FileID]; ok && s.purgeablePath(path) {
+			osRemove(path)
+		}
 		if err := s.DB.MarkFileMissing(*ep.FileID); err != nil {
 			return err
 		}
@@ -123,6 +136,12 @@ func (s *Service) enforceRetention(p *store.Podcast) error {
 		}
 	}
 	return nil
+}
+
+func (s *Service) purgeablePath(path string) bool {
+	dir := filepath.Clean(filepath.Dir(path))
+	root := filepath.Clean(filepath.Join(s.DataDir, "podcasts"))
+	return dir == root || strings.HasPrefix(dir, root+string(os.PathSeparator))
 }
 
 var audioExtWhitelist = map[string]bool{

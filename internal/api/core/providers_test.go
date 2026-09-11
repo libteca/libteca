@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -312,7 +313,7 @@ func TestRefreshMetaAmbiguousGoesToInbox(t *testing.T) {
 	if provider != "" {
 		t.Fatalf("provider = %q, want untouched", provider)
 	}
-	inbox, err := db.MatchingInbox(libID)
+	inbox, err := db.MatchingInbox(libID, 0)
 	if err != nil || len(inbox) != 1 || inbox[0].ID != workID {
 		t.Fatalf("inbox = %+v err = %v", inbox, err)
 	}
@@ -454,7 +455,7 @@ func TestSkipWorkRemovesFromInbox(t *testing.T) {
 	a, db, libID := newMatchingAPI(t, "audiobooks")
 	workID := addMatchWork(t, db, libID, "W", "", "[]")
 
-	inbox, err := db.MatchingInbox(libID)
+	inbox, err := db.MatchingInbox(libID, 0)
 	if err != nil || len(inbox) != 1 {
 		t.Fatalf("inbox = %+v err = %v", inbox, err)
 	}
@@ -462,7 +463,7 @@ func TestSkipWorkRemovesFromInbox(t *testing.T) {
 	if code != 200 || body["ok"] != true {
 		t.Fatalf("code = %d body = %v", code, body)
 	}
-	inbox, err = db.MatchingInbox(libID)
+	inbox, err = db.MatchingInbox(libID, 0)
 	if err != nil || len(inbox) != 0 {
 		t.Fatalf("inbox after skip = %+v err = %v", inbox, err)
 	}
@@ -742,5 +743,77 @@ func TestApplyEpisodesEndpoint(t *testing.T) {
 	}
 	if body["updated"] != float64(1) {
 		t.Fatalf("body = %v", body)
+	}
+}
+func TestMatchingInboxLimitEndpoint(t *testing.T) {
+	a, db, libID := newMatchingAPI(t, "audiobooks")
+	for i := 0; i < 3; i++ {
+		addMatchWork(t, db, libID, fmt.Sprintf("W%d", i), "", "[]")
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/matching/inbox?limit=2", nil)
+	a.matchingInbox(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("code = %d", rec.Code)
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &rows); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[0]["title"] != "W0" {
+		t.Fatalf("rows = %v, want first 2", rows)
+	}
+}
+
+func TestRefreshMetaUnknownLibrary(t *testing.T) {
+	a, _, _ := newMatchingAPI(t, "audiobooks")
+	code, _ := callHandler(t, "POST", "/libraries/99/refresh-meta", "99", ``, a.refreshMeta)
+	if code != 404 {
+		t.Fatalf("refresh = %d, want 404", code)
+	}
+	code, _ = callHandler(t, "GET", "/libraries/99/refresh-meta", "99", ``, a.refreshMetaStatus)
+	if code != 404 {
+		t.Fatalf("status = %d, want 404", code)
+	}
+	code, _ = callHandler(t, "GET", "/libraries/99/refresh-meta/events", "99", ``, a.refreshMetaEvents)
+	if code != 404 {
+		t.Fatalf("events = %d, want 404", code)
+	}
+}
+
+func TestRefreshMetaEventsIdleAndTerminal(t *testing.T) {
+	fp := &fakeProvider{name: "audible", kind: "audiobooks", searchRes: []meta.Result{
+		{Provider: "audible", ID: "B1", Title: "Book"},
+	}}
+	a, db, libID := newMatchingAPI(t, "audiobooks", fp)
+	addMatchWork(t, db, libID, "Book", "", "[]")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/libraries/1/refresh-meta/events", nil)
+	req.SetPathValue("id", strconv.FormatInt(libID, 10))
+	a.refreshMetaEvents(rec, req)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"status":"idle"`) {
+		t.Fatalf("idle events = %d %s", rec.Code, rec.Body.String())
+	}
+
+	code, _ := callHandler(t, "POST", "/libraries/1/refresh-meta", strconv.FormatInt(libID, 10), ``, a.refreshMeta)
+	if code != 202 && code != 409 {
+		t.Fatalf("refresh = %d", code)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		snap := a.metaRuns[libID]
+		if snap != nil && snap.snapshot().Status != "running" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/libraries/1/refresh-meta/events", nil)
+	req.SetPathValue("id", strconv.FormatInt(libID, 10))
+	a.refreshMetaEvents(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, `"status":"done"`) {
+		t.Fatalf("finished run events = %s", body)
 	}
 }

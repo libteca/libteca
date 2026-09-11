@@ -182,7 +182,7 @@ export function AudioPlayer(props: {
   const pct = total > 0 ? Math.min(100, (abs / total) * 100) : 0;
 
   return (
-    <div style={{
+    <div className="player-bar" style={{
       ...playerBar,
       left: "1.5rem",
       right: "1.5rem",

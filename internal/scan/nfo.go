@@ -242,7 +242,7 @@ func applyNFO(db *store.DB, workID int64, n *NFO) error {
 	if d := n.Description(); d != "" {
 		desc = &d
 	}
-	if _, err := db.Exec(`UPDATE works SET title = ?, description = ?, updated_at = ? WHERE id = ?`,
+	if _, err := db.Exec(`UPDATE works SET title = ?, title_l = lower(title), description = ?, updated_at = ? WHERE id = ?`,
 		title, desc, time.Now().UnixMilli(), workID); err != nil {
 		return err
 	}

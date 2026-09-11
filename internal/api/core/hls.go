@@ -1,6 +1,7 @@
 package core
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"os"
@@ -8,10 +9,12 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/libteca/libteca/internal/auth"
 	"github.com/libteca/libteca/internal/store"
+	"github.com/libteca/libteca/internal/trickplay"
 	"github.com/neutron-build/neutron/go/neutron"
 )
 
@@ -23,8 +26,89 @@ var (
 
 func (a *API) MountHLS(r *neutron.Router) {
 	r.HandleFunc("GET /editions/{id}/playback", a.editionPlayback)
+	r.HandleFunc("GET /editions/{id}/thumbs", a.editionThumbs)
+	r.HandleFunc("GET /editions/{id}/thumbs/{file}", a.editionThumbTile)
 	r.HandleFunc("GET /hls/{sid}/{file}", a.hlsFile)
 	r.HandleFunc("DELETE /hls/{sid}", a.hlsStop)
+}
+
+const thumbsWidth = 320
+
+var (
+	tpMu  sync.Mutex
+	tpGen = map[*API]*trickplay.Generator{}
+)
+
+func (a *API) trickplayer() *trickplay.Generator {
+	tpMu.Lock()
+	defer tpMu.Unlock()
+	g := tpGen[a]
+	if g == nil {
+		g = trickplay.New(a.DataDir)
+		tpGen[a] = g
+	}
+	return g
+}
+
+func (a *API) editionThumbSource(id int64) (*store.EditionView, error) {
+	ed, err := a.DB.EditionByID(id)
+	if err != nil || len(ed.Files) == 0 {
+		return nil, store.ErrNotFound
+	}
+	if ed.Files[0].VideoCodec == nil || *ed.Files[0].VideoCodec == "" {
+		return nil, store.ErrNotFound
+	}
+	return ed, nil
+}
+
+func (a *API) editionThumbs(w http.ResponseWriter, r *http.Request) {
+	ed, err := a.editionThumbSource(auth.Atoi64(r.PathValue("id")))
+	if err != nil {
+		writeJSON(w, 404, map[string]string{"error": "not found"})
+		return
+	}
+	itemID := "e" + strconv.FormatInt(ed.ID, 10)
+	m, err := a.trickplayer().Manifest(r.Context(), itemID, ed.Files[0].Path, thumbsWidth)
+	if errors.Is(err, trickplay.ErrNoFFmpeg) {
+		w.Header().Set("Retry-After", "120")
+		writeJSON(w, 503, map[string]string{"error": "ffmpeg unavailable"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": "thumbs unavailable"})
+		return
+	}
+	writeJSON(w, 200, m)
+}
+
+func (a *API) editionThumbTile(w http.ResponseWriter, r *http.Request) {
+	ed, err := a.editionThumbSource(auth.Atoi64(r.PathValue("id")))
+	if err != nil {
+		writeJSON(w, 404, map[string]string{"error": "not found"})
+		return
+	}
+	index, ok := trickplay.ParseTileName(r.PathValue("file"))
+	if !ok {
+		writeJSON(w, 400, map[string]string{"error": "bad tile"})
+		return
+	}
+	itemID := "e" + strconv.FormatInt(ed.ID, 10)
+	path, err := a.trickplayer().Tile(r.Context(), itemID, ed.Files[0].Path, thumbsWidth, index)
+	if errors.Is(err, trickplay.ErrNotFound) {
+		writeJSON(w, 404, map[string]string{"error": "not found"})
+		return
+	}
+	if errors.Is(err, trickplay.ErrNoFFmpeg) {
+		w.Header().Set("Retry-After", "120")
+		writeJSON(w, 503, map[string]string{"error": "ffmpeg unavailable"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": "tile generation failed"})
+		return
+	}
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	serveFile(w, r, path)
 }
 
 func webSessionID(editionID int64) string {

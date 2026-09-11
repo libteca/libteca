@@ -9,6 +9,7 @@ import {
   muted, panel, panelHead, preBlock, primaryBtn, railTitle, sectionTitle, selectChevron,
   selectWrap, table, td, th,
 } from "../styles";
+import { toast } from "../toast";
 
 const TYPES = ["audiobooks", "movies", "tv", "music", "books", "comics"];
 
@@ -71,19 +72,22 @@ export function AdminView() {
     setMsg("");
     try {
       const res = await api("/libraries", { method: "POST", body: JSON.stringify({ name, type, path }) });
-      if (res.error) { setMsg(res.error); return; }
+      if (res.error) { setMsg(res.error); toast(res.error, "error"); return; }
       let scanRes: { error?: string };
       try {
         scanRes = await api(`/libraries/${res.id}/scan`, { method: "POST" });
       } catch {
         scanRes = { error: "network error" };
       }
+      const addedName = name;
       setName(""); setPath("");
       refresh();
-      if (scanRes.error) { setMsg(`Library added, but the scan failed to start: ${scanRes.error}`); return; }
+      if (scanRes.error) { setMsg(`Library added, but the scan failed to start: ${scanRes.error}`); toast(`Library "${addedName}" added, but the scan failed to start`, "error"); return; }
       setMsg("library added, scanning");
+      toast(`Library "${addedName}" added — scan started`, "success");
     } catch {
       setMsg("Failed to add library.");
+      toast("Failed to add library.", "error");
     }
   };
 
@@ -140,11 +144,13 @@ function AdminLibRow(props: { lib: Library; onRemoved: () => void }) {
     setErr("");
     try {
       const res: { error?: string } = await api(`/libraries/${props.lib.id}`, { method: "DELETE" });
-      if (res.error) { setErr(res.error); return; }
+      if (res.error) { setErr(res.error); toast(res.error, "error"); return; }
     } catch {
       setErr("Failed to remove library.");
+      toast("Failed to remove library.", "error");
       return;
     }
+    toast(`Library "${props.lib.name}" removed`);
     props.onRemoved();
   };
   return (
@@ -155,7 +161,7 @@ function AdminLibRow(props: { lib: Library; onRemoved: () => void }) {
       {line && <span style={{ fontSize: "0.78rem", color: scan.event?.status === "error" ? c.danger : c.muted, flexShrink: 0 }}>{line}</span>}
       {err && <span style={{ fontSize: "0.78rem", color: c.danger, flexShrink: 0 }}>{err}</span>}
       <span style={{ display: "inline-flex", gap: "0.5rem", marginLeft: "auto", flexShrink: 0 }}>
-        <button className="press" style={ghostBtn} disabled={scan.scanning} onClick={() => scan.start(props.lib.id)}>
+        <button className="press" style={ghostBtn} disabled={scan.scanning} onClick={() => { scan.start(props.lib.id); toast("Scan started"); }}>
           <IconScan size={13} />
           {scan.scanning ? "Scanning…" : "Scan"}
         </button>
@@ -401,11 +407,13 @@ function ImportSection() {
     try {
       const body = source === "abs" ? { dataDir: path, dryRun: dry } : { dbPath: path, dryRun: dry };
       const res = await api(`/import/${source}`, { method: "POST", body: JSON.stringify(body) });
-      if (res.error) { setMsg(res.error); return; }
+      if (res.error) { setMsg(res.error); toast(res.error, "error"); return; }
       setPlan(res.plan);
+      if (!dry) toast(`Import done — ${res.plan.works} works, ${res.plan.editions} editions`, "success");
       if (!dry) setConfirmRun(false);
     } catch {
       setMsg("Import failed — couldn't reach the server.");
+      toast("Import failed — couldn't reach the server.", "error");
     } finally {
       setBusy(false);
     }

@@ -1,9 +1,9 @@
 import { useRef } from "preact/hooks";
-import type { ComponentChildren } from "preact";
+import type { ComponentChildren, CSSProperties } from "preact";
 import { IconChevronLeft, IconChevronRight, IconPlay, IconSpinner } from "./svg";
 import { iconBtn, railTitle } from "../styles";
 import { Cover, type CoverRatio } from "./cover";
-import { card, cardMeta, cardTitle, muted } from "../styles";
+import { c, card, cardMeta, cardTitle, grid, gridSquare, muted, workCover, workHead, workMeta } from "../styles";
 
 export function Rail(props: { title: string; children: ComponentChildren }) {
   const ref = useRef<HTMLDivElement | null>(null);
@@ -63,7 +63,7 @@ export function RailCard(props: {
   );
 }
 
-export function EmptyState(props: { title: string; hint?: string; children?: ComponentChildren }) {
+export function EmptyState(props: { title: string; hint?: string; icon?: ComponentChildren; children?: ComponentChildren }) {
   return (
     <div style={{
       padding: "1.4rem 0",
@@ -71,7 +71,11 @@ export function EmptyState(props: { title: string; hint?: string; children?: Com
       flexDirection: "column",
       gap: "0.4rem",
       maxWidth: "34rem",
+      alignItems: "flex-start",
     }}>
+      {props.icon && (
+        <span style={{ color: c.faint, opacity: 0.75, display: "inline-flex", marginBottom: "0.35rem" }}>{props.icon}</span>
+      )}
       <p style={{ margin: 0, fontWeight: 600, fontSize: "1.02rem", letterSpacing: "-0.016em" }}>{props.title}</p>
       {props.hint && <p style={{ margin: 0, ...muted, fontSize: "0.88rem" }}>{props.hint}</p>}
       {props.children ? <div style={{ marginTop: "0.55rem" }}>{props.children}</div> : null}
@@ -83,6 +87,51 @@ export function QuietLoad() {
   return (
     <div style={{ display: "flex", justifyContent: "center", padding: "3.2rem 0" }} role="status" aria-label="Loading">
       <IconSpinner size={22} />
+    </div>
+  );
+}
+
+const skCard: CSSProperties = { display: "block" };
+const skLine: CSSProperties = { height: "0.75rem", borderRadius: "999px", marginTop: "0.6rem" };
+
+export function SkeletonGrid(props: { count?: number; square?: boolean }) {
+  return (
+    <div style={props.square ? gridSquare : grid}>
+      {Array.from({ length: props.count ?? 12 }, (_, i) => (
+        <div key={i} style={skCard}>
+          <div className="sk" style={{ aspectRatio: props.square ? "1 / 1" : "2 / 3", borderRadius: "6px" }} />
+          <div className="sk" style={{ ...skLine, width: "82%" }} />
+          <div className="sk" style={{ ...skLine, width: "52%", height: "0.65rem" }} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function SkeletonRail(props: { count?: number; square?: boolean }) {
+  return (
+    <div style={{ display: "flex", gap: "1.05rem", overflow: "hidden", padding: "0.55rem 0.25rem 0", marginBottom: "2.4rem" }}>
+      {Array.from({ length: props.count ?? 5 }, (_, i) => (
+        <div key={i} style={{ ...skCard, flex: `0 0 12rem` }}>
+          <div className="sk" style={{ aspectRatio: props.square ? "1 / 1" : "2 / 3", borderRadius: "6px" }} />
+          <div className="sk" style={{ ...skLine, width: "80%" }} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function SkeletonWork() {
+  return (
+    <div style={workHead}>
+      <div style={{ ...workCover, width: "13rem" }}>
+        <div className="sk" style={{ aspectRatio: "2 / 3", borderRadius: "8px" }} />
+      </div>
+      <div style={{ ...workMeta, flex: 1, gap: "0.85rem", paddingTop: "0.4rem", width: "min(30rem, 100%)" }}>
+        <div className="sk" style={{ height: "2.1rem", width: "68%", borderRadius: "8px" }} />
+        <div className="sk" style={{ ...skLine, width: "38%", marginTop: 0 }} />
+        <div className="sk" style={{ ...skLine, width: "54%", marginTop: 0 }} />
+      </div>
     </div>
   );
 }

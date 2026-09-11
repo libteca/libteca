@@ -8,6 +8,7 @@ import {
   backLink, badge, c, eyebrow, font, ghostBtn, input, mono, muted, panel, primaryBtn,
   sectionTitle, workCover, workHead, workMeta, workTitle,
 } from "../styles";
+import { toast } from "../toast";
 
 type InboxItem = {
   id: number; libraryId: number; libraryName: string; libraryType: string;
@@ -166,6 +167,7 @@ export function MatchingView() {
         body: JSON.stringify({ provider: cand.provider, id: cand.id }),
       });
       if (res.error) { setMsg(res.error); return; }
+      toast("Metadata applied", "success");
       advance();
     } catch {
       setMsg("Couldn't reach the server.");
@@ -184,6 +186,7 @@ export function MatchingView() {
         body: JSON.stringify({ provider: cand.provider, id: cand.id }),
       });
       if (res.error) { setMsg(res.error); return; }
+      toast("Episode metadata applied", "success");
       advance();
     } catch {
       setMsg("Couldn't reach the server.");
@@ -198,6 +201,7 @@ export function MatchingView() {
     try {
       const res = await api(`/works/${current.id}/skip`, { method: "POST" });
       if (res.error) { setMsg(res.error); return; }
+      toast("Skipped");
       advance();
     } catch {
       setMsg("Couldn't reach the server.");

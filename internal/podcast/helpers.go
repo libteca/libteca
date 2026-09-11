@@ -3,7 +3,9 @@ package podcast
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 )
 
 func strPtr(s string) *string {
@@ -75,4 +77,25 @@ func newGetRequest(ctx context.Context, url string) (*http.Request, error) {
 	}
 	req.Header.Set("User-Agent", UserAgent)
 	return req, nil
+}
+
+// normalizeFeedURL canonicalizes a feed URL for storage and duplicate
+// detection: http upgrades to https (loopback hosts excepted — local feeds
+// are not served over TLS), trailing slashes and fragments are stripped.
+func normalizeFeedURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return raw
+	}
+	if u.Scheme == "http" && !loopbackHost(u.Hostname()) {
+		u.Scheme = "https"
+	}
+	u.Fragment = ""
+	u.RawFragment = ""
+	u.Path = strings.TrimRight(u.Path, "/")
+	return u.String()
+}
+
+func loopbackHost(host string) bool {
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
 }

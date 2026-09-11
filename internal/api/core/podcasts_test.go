@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/libteca/libteca/internal/auth"
 	"github.com/libteca/libteca/internal/store"
@@ -331,23 +332,19 @@ func TestPodcastOPMLImportExportRoundtrip(t *testing.T) {
 	// import into a fresh server/db against the same feed servers
 	a2, db2, token2 := newPodcastTestAPI(t)
 	srv2 := mountPodcastServer(t, a2, db2)
-	code, body := doPodcastReq(t, srv2, "POST", "/api/core/podcasts/import-opml", token2, map[string]any{"opml": string(exported)})
-	if code != 200 {
-		t.Fatalf("import = %d %v", code, body)
-	}
-	if body["subscribed"] != float64(2) || body["exists"] != float64(0) || body["failed"] != float64(0) {
-		t.Fatalf("import counts = %v", body)
-	}
-	for _, r := range body["results"].([]any) {
-		if r.(map[string]any)["status"] != "subscribed" {
-			t.Fatalf("import result = %v", r)
-		}
+
+	code, body := doPodcastReq(t, srv2, "GET", "/api/core/podcasts/import-opml/status", token2, nil)
+	if code != 200 || body["status"] != "idle" {
+		t.Fatalf("idle status = %d %v", code, body)
 	}
 
-	// re-import: same set, all reported as existing
-	_, body = doPodcastReq(t, srv2, "POST", "/api/core/podcasts/import-opml", token2, map[string]any{"opml": string(exported)})
-	if body["subscribed"] != float64(0) || body["exists"] != float64(2) {
-		t.Fatalf("re-import counts = %v", body)
+	code, body = doPodcastReq(t, srv2, "POST", "/api/core/podcasts/import-opml", token2, map[string]any{"opml": string(exported)})
+	if code != 202 || body["status"] != "running" {
+		t.Fatalf("import = %d %v, want 202 running", code, body)
+	}
+	body = waitOPMLImportDone(t, srv2, token2)
+	if body["added"] != float64(2) || body["failed"] != float64(0) || body["total"] != float64(2) {
+		t.Fatalf("import counts = %v", body)
 	}
 	_, rawList := doPodcastReqBytes(t, srv2, "GET", "/api/core/podcasts", token2, nil)
 	var items []map[string]any
@@ -362,10 +359,67 @@ func TestPodcastOPMLImportExportRoundtrip(t *testing.T) {
 		t.Fatalf("imported set = %v", got)
 	}
 
+	// re-import: same set, all duplicates (neither added nor failed)
+	code, body = doPodcastReq(t, srv2, "POST", "/api/core/podcasts/import-opml", token2, map[string]any{"opml": string(exported)})
+	if code != 202 {
+		t.Fatalf("re-import = %d %v", code, body)
+	}
+	body = waitOPMLImportDone(t, srv2, token2)
+	if body["added"] != float64(0) || body["failed"] != float64(0) || body["total"] != float64(2) {
+		t.Fatalf("re-import counts = %v", body)
+	}
+
 	// garbage OPML is a 400
 	code, _ = doPodcastReq(t, srv2, "POST", "/api/core/podcasts/import-opml", token2, map[string]any{"opml": "<not-opml"})
 	if code != 400 {
 		t.Fatalf("garbage opml = %d, want 400", code)
+	}
+}
+
+func waitOPMLImportDone(t *testing.T, srv *httptest.Server, token string) map[string]any {
+	t.Helper()
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		code, body := doPodcastReq(t, srv, "GET", "/api/core/podcasts/import-opml/status", token, nil)
+		if code == 200 && body["status"] == "done" {
+			return body
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("opml import not done: %d %v", code, body)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestPodcastOPMLImportAlreadyRunning(t *testing.T) {
+	a, db, token := newPodcastTestAPI(t)
+	srv := mountPodcastServer(t, a, db)
+	fs := newPodcastFeedServer(t, "Cast")
+	a.opmlMu.Lock()
+	a.opmlRun = &opmlRun{snap: opmlImportStatus{Status: "running", Total: 1}}
+	a.opmlMu.Unlock()
+	opml := `<?xml version="1.0"?><opml version="2.0"><body><outline type="rss" text="A" xmlUrl="` + fs.URL + `/feed"/></body></opml>`
+	code, body := doPodcastReq(t, srv, "POST", "/api/core/podcasts/import-opml", token, map[string]any{"opml": opml})
+	if code != 409 {
+		t.Fatalf("concurrent import = %d %v, want 409", code, body)
+	}
+}
+
+func TestMountPodcastsReusesServiceInstance(t *testing.T) {
+	a, _, _ := newPodcastTestAPI(t)
+	if a.Podcasts != nil {
+		t.Fatal("fresh API should not have a podcast service")
+	}
+	app := neutron.New()
+	a.MountPodcasts(app.Router())
+	if a.Podcasts == nil {
+		t.Fatal("MountPodcasts did not install a service")
+	}
+	first := a.Podcasts
+	app2 := neutron.New()
+	a.MountPodcasts(app2.Router())
+	if a.Podcasts != first {
+		t.Fatal("MountPodcasts replaced an existing service")
 	}
 }
 

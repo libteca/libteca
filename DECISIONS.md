@@ -288,3 +288,20 @@ backup = `libteca backup` (15g); neutron-go published (17).
     icon-only under 1024px), audiobook corpus made real literature
     (TTS-spoken Gutenberg texts replacing song-derived fakes).
     Reverse: none.
+
+24. **Deferred tail closed (2026-09-11, four-agent wave).** Store:
+    linking/user-delete/relink transactions; works pagination +
+    bounded inbox; provider-cache pruning; non-ASCII search via
+    title_l/author_l (0010 + Go backfill; opds/subsonic predicates
+    migrated); login dummy-hash oracle fix; refresh-meta SSE
+    404/heartbeat/unsubscribe. Podcasts: one Service instance shared
+    by routes/scheduler/OPML; retention deletes episode files
+    (data-dir-prefixed guard); OPML import is a background job with
+    status polling; feed-URL normalization (https, no trailing slash;
+    loopback exempt). Web: toast system wired app-wide; skeleton
+    loaders; empty-state icons. Video: core trickplay endpoints
+    (/editions/{id}/thumbs[...]) + scrubber hover thumbnails + PiP.
+    Ops: CI workflow (go vet/test + web tsc/build). Tests: 16/16
+    green incl. new unicode-search, pagination, prune, rollback,
+    retention-disk, OPML-status, dedup tests.
+    Reverse: none.

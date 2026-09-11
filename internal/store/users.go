@@ -42,7 +42,12 @@ func (d *DB) CountAdmins() (int, error) {
 // playback sessions (all foreign-keyed to users) and returns the deleted
 // token values so callers can drop them from the auth cache.
 func (d *DB) DeleteUser(id int64) ([]string, error) {
-	rows, err := d.Query(`SELECT value FROM tokens WHERE user_id = ?`, id)
+	tx, err := d.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.Query(`SELECT value FROM tokens WHERE user_id = ?`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -59,21 +64,24 @@ func (d *DB) DeleteUser(id int64) ([]string, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	if _, err := d.Exec(`DELETE FROM playback_sessions WHERE user_id = ?`, id); err != nil {
+	if _, err := tx.Exec(`DELETE FROM playback_sessions WHERE user_id = ?`, id); err != nil {
 		return nil, err
 	}
-	if _, err := d.Exec(`DELETE FROM progress WHERE user_id = ?`, id); err != nil {
+	if _, err := tx.Exec(`DELETE FROM progress WHERE user_id = ?`, id); err != nil {
 		return nil, err
 	}
-	if _, err := d.Exec(`DELETE FROM tokens WHERE user_id = ?`, id); err != nil {
+	if _, err := tx.Exec(`DELETE FROM tokens WHERE user_id = ?`, id); err != nil {
 		return nil, err
 	}
-	res, err := d.Exec(`DELETE FROM users WHERE id = ?`, id)
+	res, err := tx.Exec(`DELETE FROM users WHERE id = ?`, id)
 	if err != nil {
 		return nil, err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return nil, ErrNotFound
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
 	}
 	return values, nil
 }

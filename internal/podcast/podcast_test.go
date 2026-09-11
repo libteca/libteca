@@ -263,8 +263,7 @@ func TestRetentionKeepsNewest(t *testing.T) {
 	if _, err := db.FilePath(*kept.FileID); err != nil {
 		t.Fatal(err)
 	}
-	// scan.go semantics: purged file row is marked missing (never served,
-	// never hard-deleted), file stays on disk
+	// purged file row is marked missing and its file freed from disk
 	var missing int
 	var path string
 	if err := db.QueryRow(`SELECT missing, path FROM files WHERE path LIKE ?`, "%/Episode_One.mp3").Scan(&missing, &path); err != nil {
@@ -273,8 +272,8 @@ func TestRetentionKeepsNewest(t *testing.T) {
 	if missing != 1 {
 		t.Fatalf("purged file missing flag = %d, want 1", missing)
 	}
-	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("purged file removed from disk, want scan-missing semantics: %v", err)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("purged file still on disk: %s", path)
 	}
 
 	// purged episodes are not pending: a changed feed (new etag, same items)
@@ -417,12 +416,13 @@ func TestDeletePodcastRemovesFiles(t *testing.T) {
 	}
 	var paths []string
 	for _, f := range files {
-		if !f.Missing {
-			paths = append(paths, f.Path)
-		}
+		paths = append(paths, f.Path)
 	}
 	if len(eps) != 2 || len(paths) != 2 {
 		t.Fatalf("expected 2 episodes / 2 downloaded files, got %d/%d", len(eps), len(paths))
+	}
+	if _, err := db.Exec(`UPDATE files SET missing = 1 WHERE id = ?`, files[0].ID); err != nil {
+		t.Fatal(err)
 	}
 	if err := svc.DeletePodcast(p.ID); err != nil {
 		t.Fatal(err)
@@ -442,6 +442,44 @@ func TestDeletePodcastRemovesFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(svc.DataDir, "covers", fmt.Sprintf("podcast-%d.jpg", p.ID))); !os.IsNotExist(err) {
 		t.Fatal("cover survived unsubscribe")
+	}
+}
+
+func TestNormalizeFeedURL(t *testing.T) {
+	cases := map[string]string{
+		"http://example.com/feed":        "https://example.com/feed",
+		"http://example.com/feed/":       "https://example.com/feed",
+		"https://example.com/feed/":      "https://example.com/feed",
+		"https://example.com/feed#frag":  "https://example.com/feed",
+		"http://example.com/feed/?q=1#f": "https://example.com/feed?q=1",
+		"http://example.com/":            "https://example.com",
+		"https://example.com":            "https://example.com",
+		"http://localhost/feed":          "http://localhost/feed",
+		"http://127.0.0.1:8096/feed/":    "http://127.0.0.1:8096/feed",
+		"http://[::1]/feed/":             "http://[::1]/feed",
+		"not a url":                      "not a url",
+	}
+	for in, want := range cases {
+		if got := normalizeFeedURL(in); got != want {
+			t.Errorf("normalizeFeedURL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestSubscribeNormalizesFeedURL(t *testing.T) {
+	svc, db := newTestService(t)
+	fs := newFeedServer(t, "Norm Cast")
+	feed := fs.URL + "/feed"
+	p, err := svc.Subscribe(context.Background(), feed+"/#frag", true, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := db.PodcastByFeedURL(feed)
+	if err != nil || stored.ID != p.ID {
+		t.Fatalf("lookup by normalized url = %v err = %v", stored, err)
+	}
+	if _, err := svc.Subscribe(context.Background(), feed+"/", true, 3); err != ErrDuplicateFeed {
+		t.Fatalf("err = %v, want ErrDuplicateFeed", err)
 	}
 }
 

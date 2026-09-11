@@ -79,6 +79,7 @@ func main() {
 	srv.HWAccel = *hwaccel
 
 	podcasts := podcast.New(db, abs)
+	srv.Core.Podcasts = podcasts
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go podcasts.Run(ctx)

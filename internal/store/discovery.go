@@ -126,8 +126,8 @@ func (d *DB) SearchWorks(userID int64, q string, limit int) ([]SearchHit, error)
 		) FROM progress p JOIN editions e ON e.id = p.edition_id
 		 WHERE p.user_id = ? AND e.work_id = w.id ORDER BY p.updated_at DESC, p.id DESC LIMIT 1)
 		FROM works w JOIN libraries l ON l.id = w.library_id
-		WHERE lower(w.title) LIKE ? ESCAPE '\' OR (w.author IS NOT NULL AND lower(w.author) LIKE ? ESCAPE '\')
-		ORDER BY (lower(w.title) LIKE ? ESCAPE '\') DESC, lower(w.title) ASC, w.id ASC
+		WHERE w.title_l LIKE ? ESCAPE '\' OR (w.author_l IS NOT NULL AND w.author_l LIKE ? ESCAPE '\')
+		ORDER BY (w.title_l LIKE ? ESCAPE '\') DESC, w.title_l ASC, w.id ASC
 		LIMIT ?`, userID, pat, pat, pat, limit)
 	if err != nil {
 		return nil, err
@@ -189,13 +189,16 @@ func sortDirSQL(dir string) string {
 // per-user progress filtering. sort: title|author|added|updated; dir:
 // asc|desc; filter: all|in_progress|unplayed|finished. sort "title" + dir
 // "asc" reproduces WorksInLibrary's ordering exactly.
-func (d *DB) WorksInLibraryFiltered(libID, userID int64, sort, dir, filter string) ([]WorkView, error) {
+func (d *DB) WorksInLibraryFiltered(libID, userID int64, sort, dir, filter string, limit, offset int) ([]WorkView, error) {
 	if dir != "asc" && dir != "desc" {
 		if sort == "added" || sort == "updated" {
 			dir = "desc"
 		} else {
 			dir = "asc"
 		}
+	}
+	if offset < 0 {
+		offset = 0
 	}
 	order := `lower(title) ` + sortDirSQL(dir)
 	switch sort {
@@ -223,8 +226,13 @@ func (d *DB) WorksInLibraryFiltered(libID, userID int64, sort, dir, filter strin
 		args = append(args, userID)
 	}
 
-	rows, err := d.Query(`SELECT id, library_id, title, subtitle, author, description, cover_path, created_at, updated_at
-		FROM works WHERE `+where+` ORDER BY `+order, args...)
+	query := `SELECT id, library_id, title, subtitle, author, description, cover_path, created_at, updated_at
+		FROM works WHERE ` + where + ` ORDER BY ` + order
+	if limit > 0 {
+		query += ` LIMIT ? OFFSET ?`
+		args = append(args, limit, offset)
+	}
+	rows, err := d.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}

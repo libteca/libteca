@@ -320,23 +320,32 @@ README matrix.
 
 | Area | % of v1 | What's left |
 |---|---|---|
-| Spine/server | 90 | tx-wrap linking paths; provider-cache pruning; works pagination; non-ASCII search fold |
-| Web UI | 85 | Gate W founder week + what it surfaces; toasts/skeletons niceties |
-| Viewers | 80 | seek thumbnails (trickplay in core face); PiP; real-device tuning |
-| Podcasts | 75 | single Service instance; retention disk cleanup UI; OPML background import |
+| Spine/server | 95 | — |
+| Web UI | 90 | Gate W founder week + what it surfaces |
+| Viewers | 90 | real-device tuning |
+| Podcasts | 90 | cleanup UX affordances if wanted |
 | Faces | 65 built / 0 verified | corpus capture + live clients (Gate F, founder-owned) |
-| Ops | 85 | CI workflow; container image; teploy /dev/dri upstream |
-| **Overall (v1 = Gate W)** | **~85** | founder week, CI, deferred tail above |
+| Ops | 90 | container image; teploy /dev/dri upstream (CI shipped) |
+| **Overall (v1 = Gate W)** | **~90** | founder week; container image |
 
 Not started by design: native apps, Kavita protocol, Plex, acquisition,
 Live TV, plugin SDK (PLAN §2).
 
-### Deferred tail (judged low-value, from audits)
+### Deferred tail
 
-single podcast Service instance; retention purge leaves files on disk;
-OPML import synchronous; login timing oracle; refresh-meta SSE
-404/heartbeat/unsubscribe; works list unpaginated; matching inbox
-unbounded; `people/series/collections` model.
+Closed 2026-09-11 (DECISIONS 24): single podcast Service instance;
+retention frees disk (guarded deletes); OPML background import w/
+status polling; login timing oracle (dummy-hash verify); refresh-meta
+SSE 404/heartbeat/unsubscribe; works pagination (limit/offset);
+matching inbox bounded (500); provider-cache pruning (21d, 1/24h);
+non-ASCII search (works.title_l/author_l, migration 0010 + backfill,
+all three search paths); linking/user-delete/relink transactions;
+toasts + skeleton loaders; seek thumbnails (core trickplay endpoints
++ scrubber hover preview) and PiP in the video player; CI workflow
+(.github/workflows/ci.yml).
+
+Still open: `people/series/collections` model (by design, not needed);
+"already in playlist" toast needs an `added` flag from the API.
 
 ### Owed — founder
 
@@ -344,7 +353,7 @@ unbounded; `people/series/collections` model.
    now, but the real library is the bar).
 2. Corpus capture + G1-G3 + version pins (Gate F, optional after W).
 3. PLAN §14: media-hub archive, public timing, license.
-4. CI: add a workflow (module path unblocked).
+4. CI: shipped (.github/workflows/ci.yml) — verify the runner picks it up.
 
 ### Demo
 

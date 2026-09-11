@@ -231,3 +231,22 @@ func TestSplitEditionToNewWork(t *testing.T) {
 		t.Fatalf("res = %+v, want source deleted", res)
 	}
 }
+func TestMergeWorksUnknownTargetRollsBack(t *testing.T) {
+	db := openLinkDB(t)
+	if _, err := db.Exec(`INSERT INTO libraries (name, type, path, created_at) VALUES ('L','audiobooks','/x',0)`); err != nil {
+		t.Fatal(err)
+	}
+	w1 := seedLinkWork(t, db, "One", "A", "")
+	e1 := seedLinkEdition(t, db, w1, "One")
+
+	if err := db.MergeWorks(w1, 999); err != ErrNotFound {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+	if n := linkCount(t, db, `SELECT count(*) FROM editions WHERE work_id = ?`, w1); n != 1 {
+		t.Fatalf("editions moved despite rollback: %d", n)
+	}
+	if _, err := db.MoveEditionToWork(999, w1); err != ErrNotFound {
+		t.Fatalf("move unknown edition err = %v, want ErrNotFound", err)
+	}
+	_ = e1
+}
