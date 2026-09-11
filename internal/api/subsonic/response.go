@@ -20,6 +20,8 @@ type Response struct {
 
 	Error *Error `xml:"error,omitempty" json:"error,omitempty"`
 
+	OpenSubsonicExtensions *[]OpenSubsonicExtension `xml:"openSubsonicExtensions>openSubsonicExtension,omitempty" json:"openSubsonicExtensions,omitempty"`
+
 	Artists       *ArtistsID3        `xml:"artists,omitempty" json:"artists,omitempty"`
 	Indexes       *Indexes           `xml:"indexes,omitempty" json:"indexes,omitempty"`
 	Artist        *ArtistWithAlbums  `xml:"artist,omitempty" json:"artist,omitempty"`
@@ -146,4 +148,9 @@ type Playlist struct {
 type PlaylistWithSongs struct {
 	Playlist
 	Entry []Child `xml:"entry" json:"entry"`
+}
+
+type OpenSubsonicExtension struct {
+	Name     string `xml:"name,attr" json:"name"`
+	Versions []int  `xml:"versions>version,omitempty" json:"versions,omitempty"`
 }

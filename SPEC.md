@@ -324,7 +324,7 @@ README matrix.
 | Web UI | 98 | Gate W founder week + what it surfaces |
 | Viewers | 98 | real-device tuning |
 | Podcasts | 95 | — |
-| Faces | 65 built / 0 verified | corpus capture + live clients (Gate F, founder-owned) |
+| Faces | 70 built / 1 verified | Subsonic verified vs Airsonic-Refix (DECISIONS 30); Jellyfin/ABS/OPDS await a live client; corpus capture founder-owned |
 | Ops | 95 | teploy /dev/dri upstream (CI + Dockerfile shipped) |
 | **Overall (v1 = Gate W)** | **~98** | founder week (Gate W); Gate F corpus |
 

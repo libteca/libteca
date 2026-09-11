@@ -59,33 +59,59 @@ func New(db *store.DB, dir string) *API {
 	return &API{DB: db, Dir: dir}
 }
 
+func subsonicCors(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (a *API) Mount(r *neutron.Router) {
+	rest := r.Group("/rest", subsonicCors)
 	routes := map[string]func(http.ResponseWriter, *http.Request, int64){
-		"ping":           a.ping,
-		"getArtists":     a.getArtists,
-		"getIndexes":     a.getIndexes,
-		"getArtist":      a.getArtist,
-		"getAlbum":       a.getAlbum,
-		"getSong":        a.getSong,
-		"getAlbumList2":  a.getAlbumList2,
-		"stream":         a.stream,
-		"download":       a.stream,
-		"getCoverArt":    a.getCoverArt,
-		"search3":        a.search3,
-		"scrobble":       a.scrobble,
-		"getPlaylists":   a.getPlaylists,
-		"getPlaylist":    a.getPlaylist,
-		"createPlaylist": a.createPlaylist,
-		"updatePlaylist": a.updatePlaylist,
-		"deletePlaylist": a.deletePlaylist,
+		"ping":                      a.ping,
+		"getOpenSubsonicExtensions": a.getOpenSubsonicExtensions,
+		"getStarred2":               a.getStarred2,
+		"savePlayQueue":             a.savePlayQueue,
+		"getPlayQueue":              a.getPlayQueue,
+		"getAlbumInfo2":             a.getAlbumInfo2,
+		"getArtists":                a.getArtists,
+		"getIndexes":                a.getIndexes,
+		"getArtist":                 a.getArtist,
+		"getAlbum":                  a.getAlbum,
+		"getSong":                   a.getSong,
+		"getAlbumList2":             a.getAlbumList2,
+		"stream":                    a.stream,
+		"download":                  a.stream,
+		"getCoverArt":               a.getCoverArt,
+		"search3":                   a.search3,
+		"scrobble":                  a.scrobble,
+		"getPlaylists":              a.getPlaylists,
+		"getPlaylist":               a.getPlaylist,
+		"createPlaylist":            a.createPlaylist,
+		"updatePlaylist":            a.updatePlaylist,
+		"deletePlaylist":            a.deletePlaylist,
 	}
 	for name, h := range routes {
 		for _, suffix := range []string{".view", ""} {
 			for _, method := range []string{"GET", "POST"} {
-				r.HandleFunc(method+" /rest/"+name+suffix, a.wrap(h))
+				rest.HandleFunc(method+" /"+name+suffix, a.wrap(h))
 			}
 		}
 	}
+	rest.HandleFunc("GET /{path}", a.notFound)
+	rest.HandleFunc("POST /{path}", a.notFound)
+}
+
+func (a *API) notFound(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+	a.respond(w, r, errResponse(70, "endpoint not supported"))
 }
 
 func (a *API) wrap(h func(http.ResponseWriter, *http.Request, int64)) http.HandlerFunc {
@@ -197,6 +223,29 @@ func (a *API) respond(w http.ResponseWriter, r *http.Request, resp *Response) {
 
 func (a *API) ping(w http.ResponseWriter, r *http.Request, _ int64) {
 	a.respond(w, r, ok())
+}
+
+func (a *API) savePlayQueue(w http.ResponseWriter, r *http.Request, _ int64) {
+	a.respond(w, r, ok())
+}
+
+func (a *API) getStarred2(w http.ResponseWriter, r *http.Request, _ int64) {
+	a.respond(w, r, ok())
+}
+
+func (a *API) getPlayQueue(w http.ResponseWriter, r *http.Request, _ int64) {
+	a.respond(w, r, ok())
+}
+
+func (a *API) getAlbumInfo2(w http.ResponseWriter, r *http.Request, _ int64) {
+	a.respond(w, r, ok())
+}
+
+func (a *API) getOpenSubsonicExtensions(w http.ResponseWriter, r *http.Request, _ int64) {
+	resp := ok()
+	empty := []OpenSubsonicExtension{}
+	resp.OpenSubsonicExtensions = &empty
+	a.respond(w, r, resp)
 }
 
 func (a *API) getArtists(w http.ResponseWriter, r *http.Request, _ int64) {

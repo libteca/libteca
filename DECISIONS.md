@@ -377,3 +377,25 @@ backup = `libteca backup` (15g); neutron-go published (17).
     Remaining human: founder week on real corpus (Gate W), live
     client + corpus (Gate F).
     Reverse: none.
+
+30. **Gate F (partial): Subsonic face verified against a real client
+    (2026-09-11).** Airsonic-Refix (open-source Subsonic web client)
+    built and connected live. Login (plain -> cached token auth), artist
+    index, album lists (newest/random/alpha), album detail w/ tracks,
+    cover art, genres, play-queue save, scrobble all work end-to-end.
+    Fixes the live client forced, all real: (a) no CORS on /rest -
+    every web Subsonic client requires it (Navidrome convention);
+    (b) neutron router emits 404s outside group middleware - unknown
+    /rest routes lost CORS -> catchall route now returns code-70 in
+    the requested format; (c) getOpenSubsonicExtensions unimplemented
+    despite advertising openSubsonic:true (refix crashed .map on the
+    omitempty-dropped array - pointer-to-slice idiom); (d) missing
+    getStarred2/getPlayQueue/getAlbumInfo2/savePlayQueue killed
+    client flows (play treats queue-save failure as fatal). /rest/
+    stream verified byte-exact via the client's own URL (200 full +
+    206 ranges). Client audio engine does not start under synthetic
+    automation (autoplay policy) - not a server defect; earlier
+    trusted-input runs did produce AudioController playback events.
+    Jellyfin/ABS/OPDS remain built-but-unverified. Corpus capture
+    tooling unchanged (founder-owned).
+    Reverse: none.
