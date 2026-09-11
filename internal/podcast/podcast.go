@@ -154,8 +154,9 @@ func (s *Service) applyFeed(ctx context.Context, p *store.Podcast, feed *Feed) e
 
 // DeletePodcast removes the subscription, its episodes and their files
 // (rows + on-disk; an explicit unsubscribe deletes content, unlike retention).
-// Episodes go first so no podcast_episodes row references the file rows
-// being deleted (FK order).
+// DB rows are deleted first so a failure mid-delete never strands rows
+// pointing at already-deleted files; on-disk removal afterwards is
+// best-effort.
 func (s *Service) DeletePodcast(id int64) error {
 	p, err := s.DB.Podcast(id)
 	if err != nil {
@@ -165,11 +166,12 @@ func (s *Service) DeletePodcast(id int64) error {
 	if err != nil {
 		return err
 	}
+	paths := make([]string, 0, len(files))
 	ids := make([]int64, 0, len(files))
 	for _, f := range files {
 		ids = append(ids, f.ID)
 		if s.purgeablePath(f.Path) {
-			osRemove(f.Path)
+			paths = append(paths, f.Path)
 		}
 	}
 	if err := s.DB.DeletePodcast(id); err != nil {
@@ -177,6 +179,9 @@ func (s *Service) DeletePodcast(id int64) error {
 	}
 	if err := s.DB.DeleteFilesByIDs(ids); err != nil {
 		return err
+	}
+	for _, path := range paths {
+		osRemove(path)
 	}
 	if rel := derefStr(p.CoverPath); rel != "" {
 		osRemove(filepath.Join(s.DataDir, "covers", rel))

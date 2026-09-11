@@ -445,6 +445,34 @@ func TestDeletePodcastRemovesFiles(t *testing.T) {
 	}
 }
 
+func TestDeletePodcastKeepsFilesWhenDBFails(t *testing.T) {
+	svc, db := newTestService(t)
+	fs := newFeedServer(t, "Test Cast")
+	p, err := svc.Subscribe(context.Background(), fs.URL+"/feed", true, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := db.FilesForPodcast(p.ID)
+	if err != nil || len(files) != 2 {
+		t.Fatalf("files = %v err = %v, want 2 downloaded", files, err)
+	}
+	if _, err := db.Exec(`CREATE TRIGGER block_ep_delete BEFORE DELETE ON podcast_episodes
+		BEGIN SELECT RAISE(ABORT, 'blocked'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.DeletePodcast(p.ID); err == nil {
+		t.Fatal("DeletePodcast should fail when the DB delete fails")
+	}
+	if _, err := db.Podcast(p.ID); err != nil {
+		t.Fatal("podcast row deleted despite failed unsubscribe")
+	}
+	for _, f := range files {
+		if _, err := os.Stat(f.Path); err != nil {
+			t.Fatalf("file %s removed from disk before DB rows deleted: %v", f.Path, err)
+		}
+	}
+}
+
 func TestNormalizeFeedURL(t *testing.T) {
 	cases := map[string]string{
 		"http://example.com/feed":        "https://example.com/feed",
