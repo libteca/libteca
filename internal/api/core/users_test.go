@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/libteca/libteca/internal/auth"
@@ -157,6 +158,14 @@ func TestUserLifecycle(t *testing.T) {
 		t.Fatalf("non-admin reset other password = %d, want 403", code)
 	}
 	code, _ = callJSON(t, "POST", fmt.Sprintf("%s/users/%d/password", base, aliceID), aliceToken, map[string]any{"password": "ownpass123"})
+	if code != 403 {
+		t.Fatalf("self change without old password = %d, want 403", code)
+	}
+	code, _ = callJSON(t, "POST", fmt.Sprintf("%s/users/%d/password", base, aliceID), aliceToken, map[string]any{"password": "ownpass123", "oldPassword": "wrongpass1"})
+	if code != 403 {
+		t.Fatalf("self change with wrong old password = %d, want 403", code)
+	}
+	code, _ = callJSON(t, "POST", fmt.Sprintf("%s/users/%d/password", base, aliceID), aliceToken, map[string]any{"password": "ownpass123", "oldPassword": "password123"})
 	if code != 200 {
 		t.Fatalf("self password change = %d, want 200", code)
 	}
@@ -299,5 +308,50 @@ func TestCannotDeleteLastAdmin(t *testing.T) {
 	code, _ = callJSON(t, "GET", base+"/me", adminToken, nil)
 	if code != 401 {
 		t.Fatalf("deleted admin token accepted = %d, want 401", code)
+	}
+}
+
+func TestUserChangePasswordSelf(t *testing.T) {
+	e := newPlaylistsEnv(t)
+
+	if _, err := e.db.CreateUser("sally", auth.Hash("firstpass1"), false); err != nil {
+		t.Fatal(err)
+	}
+	token := loginRequest(t, e.base, "sally", "firstpass1")
+
+	do := func(body string) int {
+		req, _ := http.NewRequest(http.MethodPost, e.base+"/users/2/password", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+token)
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		return res.StatusCode
+	}
+
+	if code := do(`{"password":"newpass123"}`); code != http.StatusForbidden {
+		t.Fatalf("self change without old password: %d", code)
+	}
+	if code := do(`{"password":"newpass123","oldPassword":"wrongold1"}`); code != http.StatusForbidden {
+		t.Fatalf("self change with wrong old password: %d", code)
+	}
+	if code := do(`{"password":"newpass123","oldPassword":"firstpass1"}`); code != http.StatusOK {
+		t.Fatalf("self change with correct old password: %d", code)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, e.base+"/me", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("token should be revoked after password change: %d", res.StatusCode)
+	}
+	if lt := loginRequest(t, e.base, "sally", "newpass123"); lt == "" {
+		t.Fatal("login with new password failed")
 	}
 }

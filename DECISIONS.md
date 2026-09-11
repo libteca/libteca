@@ -329,3 +329,13 @@ backup = `libteca backup` (15g); neutron-go published (17).
     keyless. Admin → Provider Keys section with per-row replace/clear.
     Closes the "keys at deploy" gap for self-hosted use.
     Reverse: none.
+
+27. **Self-serve password change (2026-09-11).** User menu → Change
+    password (modal: current + new + confirm for non-admins; admins
+    skip current per admin-reset parity). Server: self-changes by
+    non-admins now require oldPassword (auth.Verify) — closes the
+    stolen-token-rotates-password hole; admins still reset without
+    it. All tokens revoked on success; UI signs the user back in to
+    the login screen. Username rename rejected as unnecessary surface
+    (single-household identity glue).
+    Reverse: none.

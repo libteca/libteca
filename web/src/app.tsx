@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { api, getToken, setToken } from "./api";
-import { HEADER_H, brand, c, center, content, headerBar, headerInner, linkBtn, muted, nav, navLink, page, primaryBtn } from "./styles";
+import { HEADER_H, brand, c, center, content, headerBar, headerInner, input, linkBtn, muted, nav, navLink, page, primaryBtn } from "./styles";
 import { Login } from "./views/login";
 import { Home } from "./views/home";
 import { LibraryView } from "./views/library";
 import { IconBook, IconComic, IconFilm, IconHeadphones, IconMusic, IconSpinner, IconTv } from "./components/svg";
-import { ToastHost } from "./toast";
+import { ToastHost, toast } from "./toast";
 import { isTypingTarget } from "./reader/shared";
 import { focusSearch } from "./views/search";
 import { typeLabel } from "./util";
@@ -220,8 +220,9 @@ function pageTitle(v: View): string {
 export function App() {
   const [ready, setReady] = useState(false);
   const [view, setView] = useState<View>(() => parseHash());
-  const [me, setMe] = useState<{ name: string; isAdmin: boolean } | null>(null);
+  const [me, setMe] = useState<{ id: number; name: string; isAdmin: boolean } | null>(null);
   const [menu, setMenu] = useState(false);
+  const [passOpen, setPassOpen] = useState(false);
   const [bootErr, setBootErr] = useState(false);
   const [navLibs, setNavLibs] = useState<{ id: number; type: string; name: string }[]>([]);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -320,6 +321,12 @@ export function App() {
                 {me.isAdmin && <a href="#/matching" role="menuitem">Matching</a>}
                 <button
                   role="menuitem"
+                  onClick={() => { setMenu(false); setPassOpen(true); }}
+                >
+                  Change password
+                </button>
+                <button
+                  role="menuitem"
                   onClick={() => { localStorage.removeItem("libteca-token"); setToken(""); location.hash = "#/"; location.reload(); }}
                 >
                   Sign out
@@ -340,7 +347,67 @@ export function App() {
         {view.name === "admin" && me.isAdmin && <AdminView />}
         {view.name === "matching" && me.isAdmin && <MatchingView />}
       </div>
+      {passOpen && me && (
+        <ChangePassModal
+          userId={me.id}
+          isAdmin={me.isAdmin}
+          onClose={() => setPassOpen(false)}
+        />
+      )}
       <ToastHost />
+    </div>
+  );
+}
+
+function ChangePassModal(props: { userId: number; isAdmin: boolean; onClose: () => void }) {
+  const [oldPass, setOldPass] = useState("");
+  const [pass, setPass] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const submit = async (e: Event) => {
+    e.preventDefault();
+    setErr("");
+    if (pass.length < 8) { setErr("New password must be at least 8 characters."); return; }
+    if (pass !== confirm) { setErr("New passwords do not match."); return; }
+    setBusy(true);
+    try {
+      const res: { error?: string } = await api(`/users/${props.userId}/password`, {
+        method: "POST",
+        body: JSON.stringify({ password: pass, oldPassword: oldPass }),
+      });
+      if (res.error) { setErr(res.error); return; }
+      toast("Password updated — signing you in again", "success");
+      setTimeout(() => { localStorage.removeItem("libteca-token"); setToken(""); location.hash = "#/"; location.reload(); }, 900);
+    } catch {
+      setErr("Failed to update password.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      onClick={(e) => { if (e.target === e.currentTarget) props.onClose(); }}
+      style={{ position: "fixed", inset: 0, zIndex: 80, background: "rgba(8,9,11,0.72)", display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}
+    >
+      <form
+        onSubmit={submit}
+        style={{ width: "min(22rem, 100%)", background: c.bgRaised, border: `1px solid ${c.line}`, borderRadius: "14px", padding: "1.4rem", display: "flex", flexDirection: "column", gap: "0.8rem", boxShadow: "0 24px 60px rgba(0,0,0,0.5)" }}
+      >
+        <h2 style={{ margin: 0, fontSize: "1.05rem", color: c.text }}>Change password</h2>
+        {!props.isAdmin && (
+          <input style={input} type="password" placeholder="Current password" autoComplete="current-password" value={oldPass} onInput={(e) => setOldPass((e.target as HTMLInputElement).value)} />
+        )}
+        <input style={input} type="password" placeholder="New password (min 8 chars)" autoComplete="new-password" value={pass} onInput={(e) => setPass((e.target as HTMLInputElement).value)} />
+        <input style={input} type="password" placeholder="Confirm new password" autoComplete="new-password" value={confirm} onInput={(e) => setConfirm((e.target as HTMLInputElement).value)} />
+        {err && <p style={{ margin: 0, fontSize: "0.84rem", color: c.danger }}>{err}</p>}
+        <div style={{ display: "flex", gap: "0.6rem", justifyContent: "flex-end" }}>
+          <button className="press" type="button" onClick={props.onClose} style={{ ...linkBtn, color: c.muted }}>Cancel</button>
+          <button className="press" style={primaryBtn} type="submit" disabled={busy}>{busy ? "Updating…" : "Update"}</button>
+        </div>
+      </form>
     </div>
   );
 }

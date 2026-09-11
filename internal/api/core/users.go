@@ -141,10 +141,15 @@ func (a *API) userSetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Password string `json:"password"`
+		Password    string `json:"password"`
+		OldPassword string `json:"oldPassword"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.Password) < minPasswordLen {
 		writeJSON(w, 400, map[string]string{"error": "password must be at least 8 characters"})
+		return
+	}
+	if !cur.IsAdmin && !auth.Verify(body.OldPassword, cur.PasswordHash) {
+		writeJSON(w, 403, map[string]string{"error": "wrong password"})
 		return
 	}
 	if _, err := a.DB.User(id); err != nil {
