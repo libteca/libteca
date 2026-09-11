@@ -10,13 +10,11 @@ if an existing app happens to connect, good. They are not the moat, not the
 critical path, and not a reason to delay the web. Native apps are not in
 scope — PWA now; inherit a TV/phone client later if the web is not enough.
 
-Status: **BUILDING** (repo `Tyler/libteca`, private). All waves through
-2026-09-11 consolidated in DECISIONS 19-23 and SPEC §9. One-line state:
-spine + first-party web + viewers are code-complete for the v1 bar and
-bug-swept (307 Go tests, 16 packages green, five-agent fix waves + live
-verification); protocol faces are built but corpus-unverified (founder
-gate); demo runs real media (full BBB film, three spoken audiobooks,
-illustrated EPUBs, Tenniel CBZ). Completion accounting lives in SPEC §9.
+Status: **CODE-COMPLETE, AWAITING GATE W** (repo `Tyler/libteca`, private).
+All codeable work through 2026-09-11 closed (DECISIONS 19-25, SPEC §9
+~95%). Spine + web + viewers + podcasts + ops done and verified (307+
+Go tests, 16 packages green, CI workflow, Dockerfile); faces built but
+corpus-unverified (founder gate). What remains is human-owned: Gate W
 Remaining to "finished v1": Gate W founder week, CI workflow, and the
 SPEC §9 deferred tail. Server is neutron-go (DECISIONS 9, 17); §2's old
 "no Neutron" line is superseded — it still bars Neutron DB and SSR
@@ -229,8 +227,9 @@ their *exit criteria* (phone, JMP, KOReader) are demoted to Gate F.
   the web player.
 - Face corpus + CI replay remain the method **if** Gate F is invoked.
   Do not block web work on an empty `testcorpus/`.
-- CI: no workflow yet. Module path is unblocked. Add when public or when
-  Gate F needs replay on push.
+- CI: shipped (.github/workflows/ci.yml — go vet/test + web tsc/build).
+  Verify the Forgejo runner picks it up; corpus replay hooks in if Gate
+  F is invoked.
 
 ---
 
