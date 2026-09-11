@@ -159,7 +159,17 @@ func (d *DB) User(id int64) (*User, error) {
 
 // UpsertWork upserts a work; w.Created reports whether a new row was inserted.
 func (d *DB) UpsertWork(w *Work) (int64, error) {
-	return upsertWork(d, w)
+	var id int64
+	err := d.Update(func(tx *Tx) error {
+		var ierr error
+		id, ierr = upsertWork(tx, w)
+		return ierr
+	})
+	return id, err
+}
+
+func (t *Tx) UpsertWork(w *Work) (int64, error) {
+	return upsertWork(t, w)
 }
 
 func upsertWork(q dbtx, w *Work) (int64, error) {
@@ -188,16 +198,30 @@ func upsertWork(q dbtx, w *Work) (int64, error) {
 
 func (d *DB) UpsertEdition(e *Edition) (int64, error) {
 	var id int64
+	err := d.Update(func(tx *Tx) error {
+		var ierr error
+		id, ierr = upsertEdition(tx, e)
+		return ierr
+	})
+	return id, err
+}
+
+func (t *Tx) UpsertEdition(e *Edition) (int64, error) {
+	return upsertEdition(t, e)
+}
+
+func upsertEdition(q dbtx, e *Edition) (int64, error) {
+	var id int64
 	var err error
 	if e.SeasonNum != nil && e.EpisodeNum != nil {
-		err = d.QueryRow(`SELECT id FROM editions WHERE work_id = ? AND season_num = ? AND episode_num = ?`,
+		err = q.QueryRow(`SELECT id FROM editions WHERE work_id = ? AND season_num = ? AND episode_num = ?`,
 			e.WorkID, *e.SeasonNum, *e.EpisodeNum).Scan(&id)
 	} else {
-		err = d.QueryRow(`SELECT id FROM editions WHERE work_id = ? AND format = ? AND lower(title) = lower(?) AND season_num IS NULL`,
+		err = q.QueryRow(`SELECT id FROM editions WHERE work_id = ? AND format = ? AND lower(title) = lower(?) AND season_num IS NULL`,
 			e.WorkID, e.Format, e.Title).Scan(&id)
 	}
 	if errors.Is(err, sql.ErrNoRows) {
-		res, ierr := d.Exec(`INSERT INTO editions (work_id, format, title, language, abridged, duration_secs, position, season_num, episode_num, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		res, ierr := q.Exec(`INSERT INTO editions (work_id, format, title, language, abridged, duration_secs, position, season_num, episode_num, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
 			e.WorkID, e.Format, e.Title, e.Language, e.Abridged, e.DurationSecs, e.Position, e.SeasonNum, e.EpisodeNum, nowMilli())
 		if ierr != nil {
 			return 0, ierr
@@ -207,7 +231,7 @@ func (d *DB) UpsertEdition(e *Edition) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	_, err = d.Exec(`UPDATE editions SET language = ?, abridged = ?, duration_secs = ? WHERE id = ?`,
+	_, err = q.Exec(`UPDATE editions SET language = ?, abridged = ?, duration_secs = ? WHERE id = ?`,
 		e.Language, e.Abridged, e.DurationSecs, id)
 	return id, err
 }
@@ -216,11 +240,21 @@ func (d *DB) UpsertEdition(e *Edition) (int64, error) {
 // A new path with a known hash re-links the existing row when the old path is
 // marked missing or gone from disk (move/rename). Live copies insert a new row.
 func (d *DB) UpsertFile(f *FileRec) error {
+	return d.Update(func(tx *Tx) error {
+		return upsertFile(tx, f)
+	})
+}
+
+func (t *Tx) UpsertFile(f *FileRec) error {
+	return upsertFile(t, f)
+}
+
+func upsertFile(q dbtx, f *FileRec) error {
 	var id int64
-	err := d.QueryRow(`SELECT id FROM files WHERE path = ?`, f.Path).Scan(&id)
+	err := q.QueryRow(`SELECT id FROM files WHERE path = ?`, f.Path).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		if f.Hash != nil && *f.Hash != "" {
-			relinked, rerr := d.relinkFile(*f.Hash, f)
+			relinked, rerr := relinkFile(q, *f.Hash, f)
 			if rerr != nil {
 				return rerr
 			}
@@ -228,7 +262,7 @@ func (d *DB) UpsertFile(f *FileRec) error {
 				return nil
 			}
 		}
-		res, ierr := d.Exec(`INSERT INTO files (edition_id, path, seq, size_bytes, mtime_secs, hash, codec, video_codec, width, height, container, bitrate, channels, sample_rate, duration_secs, chapters, embedded_meta, missing, probed_at)
+		res, ierr := q.Exec(`INSERT INTO files (edition_id, path, seq, size_bytes, mtime_secs, hash, codec, video_codec, width, height, container, bitrate, channels, sample_rate, duration_secs, chapters, embedded_meta, missing, probed_at)
 			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)`,
 			f.EditionID, f.Path, f.Seq, f.SizeBytes, f.MtimeSecs, f.Hash, f.Codec, f.VideoCodec, f.Width, f.Height, f.Container, f.Bitrate, f.Channels, f.SampleRate, f.DurationSecs, f.Chapters, "{}", nowMilli())
 		if ierr != nil {
@@ -242,23 +276,18 @@ func (d *DB) UpsertFile(f *FileRec) error {
 	if err != nil {
 		return err
 	}
-	return updateFileRow(d, id, f)
+	return updateFileRow(q, id, f)
 }
 
-func (d *DB) relinkFile(hash string, f *FileRec) (bool, error) {
-	tx, err := d.Begin()
-	if err != nil {
-		return false, err
-	}
-	defer tx.Rollback()
-	hid, ok, err := relinkableFileID(tx, hash, f.Path)
+func relinkFile(q dbtx, hash string, f *FileRec) (bool, error) {
+	hid, ok, err := relinkableFileID(q, hash, f.Path)
 	if err != nil || !ok {
 		return false, err
 	}
-	if err := updateFileRow(tx, hid, f); err != nil {
+	if err := updateFileRow(q, hid, f); err != nil {
 		return false, err
 	}
-	return true, tx.Commit()
+	return true, nil
 }
 
 func relinkableFileID(q dbtx, hash, newPath string) (int64, bool, error) {
@@ -294,6 +323,12 @@ func updateFileRow(q dbtx, id int64, f *FileRec) error {
 
 func (d *DB) SetWorkCover(workID int64, rel string) error {
 	_, err := d.Exec(`UPDATE works SET cover_path = ?, updated_at = ? WHERE id = ? AND (cover_path IS NULL OR cover_path = '')`,
+		rel, nowMilli(), workID)
+	return err
+}
+
+func (t *Tx) SetWorkCover(workID int64, rel string) error {
+	_, err := t.Exec(`UPDATE works SET cover_path = ?, updated_at = ? WHERE id = ? AND (cover_path IS NULL OR cover_path = '')`,
 		rel, nowMilli(), workID)
 	return err
 }

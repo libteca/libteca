@@ -193,6 +193,7 @@ func (g *Generator) generate(ctx context.Context, itemID, source string, width i
 		filepath.Join(dir, "%d.jpg"),
 	}
 	if out, err := g.run(ctx, g.ffmpeg, args...); err != nil {
+		os.RemoveAll(dir)
 		return fmt.Errorf("trickplay ffmpeg: %w: %s", err, out)
 	}
 	return nil

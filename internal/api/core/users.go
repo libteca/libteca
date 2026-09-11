@@ -3,6 +3,7 @@ package core
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 
 	"github.com/libteca/libteca/internal/auth"
 	"github.com/libteca/libteca/internal/store"
@@ -42,6 +43,11 @@ func (a *API) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
+func (a *API) isAdminRequest(r *http.Request) bool {
+	u, ok := a.currentUser(r)
+	return ok && u.IsAdmin
+}
+
 func userJSON(u *store.User) map[string]any {
 	return map[string]any{"id": u.ID, "name": u.Name, "isAdmin": u.IsAdmin, "createdAtMs": u.CreatedAt}
 }
@@ -59,7 +65,7 @@ func (a *API) usersList(w http.ResponseWriter, r *http.Request) {
 	}
 	users, err := a.DB.Users()
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	out := make([]map[string]any, 0, len(users))
@@ -92,7 +98,7 @@ func (a *API) userCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := a.DB.CreateUser(body.Name, auth.Hash(body.Password), body.IsAdmin)
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	writeJSON(w, 201, map[string]any{"id": id})
@@ -120,7 +126,7 @@ func (a *API) userDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	values, err := a.DB.DeleteUser(id)
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	for _, v := range values {
@@ -157,7 +163,7 @@ func (a *API) userSetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.DB.UpdateUserPassword(id, auth.Hash(body.Password)); err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	if values, err := a.DB.UserTokenValues(id); err == nil {
@@ -167,6 +173,7 @@ func (a *API) userSetPassword(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	a.DB.DeleteSetting("subsonic.pw." + strconv.FormatInt(id, 10))
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
@@ -182,7 +189,7 @@ func (a *API) tokensList(w http.ResponseWriter, r *http.Request) {
 	}
 	toks, err := a.DB.Tokens(uid)
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	out := make([]map[string]any, 0, len(toks))
@@ -235,7 +242,7 @@ func (a *API) tokenRevoke(w http.ResponseWriter, r *http.Request) {
 	}
 	value, err := a.DB.RevokeToken(id)
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	auth.InvalidateToken(value)

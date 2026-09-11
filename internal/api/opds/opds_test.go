@@ -563,6 +563,30 @@ func TestSearch(t *testing.T) {
 	}
 }
 
+func TestFeedEscapesXMLSpecials(t *testing.T) {
+	e := newEnv(t)
+	lib := e.addLibrary(t, "books")
+	now := time.Now().UnixMilli()
+	w := e.addWork(t, lib, `Tom & Jerry <Classics> "Best"`, "A<B & C", now)
+	e.addEdition(t, w, "epub", writeBookFile(t, []byte("x"), "x.epub"), nil, now)
+
+	rec := e.get(t, "/opds/libraries/"+strconv.FormatInt(lib, 10))
+	if rec.Code != 200 {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "Tom &amp; Jerry &lt;Classics&gt; &#34;Best&#34;") {
+		t.Fatalf("title not escaped: %s", body)
+	}
+	if !strings.Contains(body, "A&lt;B &amp; C") {
+		t.Fatalf("author not escaped: %s", body)
+	}
+	f := decodeFeed(t, rec)
+	if len(f.Entries) != 1 || f.Entries[0].Title != `Tom & Jerry <Classics> "Best"` {
+		t.Fatalf("escaped feed does not round-trip: %+v", f.Entries)
+	}
+}
+
 func TestInProgressFeed(t *testing.T) {
 	e := newEnv(t)
 	lib := e.addLibrary(t, "books")

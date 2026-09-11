@@ -20,6 +20,18 @@ type Server struct {
 	Dir     string
 	HWAccel string
 	Core    *core.API
+
+	tm *transcode.Manager
+	jf *jellyfin.API
+}
+
+func (s *Server) Close() {
+	if s.tm != nil {
+		s.tm.CloseAll()
+	}
+	if s.jf != nil {
+		s.jf.CloseSockets()
+	}
 }
 
 // New builds the server with its core API instance. The same instance is
@@ -51,11 +63,14 @@ func (s *Server) Handler() http.Handler {
 
 	c := s.Core
 	c.TC = tm
-	c.MountPublic(r.Group("/api/core"))
-	c.Mount(r.Group("/api/core", authMW))
+	coreBodyLimit := neutron.BodyLimit(4 << 20)
+	c.MountPublic(r.Group("/api/core", coreBodyLimit))
+	c.Mount(r.Group("/api/core", coreBodyLimit, authMW))
 
 	jf := jellyfin.New(s.DB, s.Dir, tm)
 	jf.Mount(r)
+	s.tm = tm
+	s.jf = jf
 
 	a := abs.New(s.DB, s.Dir)
 	r.HandleFunc("GET /s/{sid}/t/{index}", a.SessionTrack)

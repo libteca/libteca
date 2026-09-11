@@ -126,8 +126,8 @@ func (d *DB) SearchWorks(userID int64, q string, limit int) ([]SearchHit, error)
 		) FROM progress p JOIN editions e ON e.id = p.edition_id
 		 WHERE p.user_id = ? AND e.work_id = w.id ORDER BY p.updated_at DESC, p.id DESC LIMIT 1)
 		FROM works w JOIN libraries l ON l.id = w.library_id
-		WHERE w.title_l LIKE ? ESCAPE '\' OR (w.author_l IS NOT NULL AND w.author_l LIKE ? ESCAPE '\')
-		ORDER BY (w.title_l LIKE ? ESCAPE '\') DESC, w.title_l ASC, w.id ASC
+		WHERE coalesce(w.title_l, lower(w.title)) LIKE ? ESCAPE '\' OR (w.author_l IS NOT NULL AND w.author_l LIKE ? ESCAPE '\')
+		ORDER BY (coalesce(w.title_l, lower(w.title)) LIKE ? ESCAPE '\') DESC, coalesce(w.title_l, lower(w.title)) ASC, w.id ASC
 		LIMIT ?`, userID, pat, pat, pat, limit)
 	if err != nil {
 		return nil, err

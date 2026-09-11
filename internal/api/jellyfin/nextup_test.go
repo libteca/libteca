@@ -19,6 +19,7 @@ type testEnv struct {
 	h     http.Handler
 	token string
 	user  int64
+	jf    *API
 }
 
 func newEnv(t *testing.T) *testEnv {
@@ -39,8 +40,9 @@ func newEnv(t *testing.T) *testEnv {
 		t.Fatalf("token: %v", err)
 	}
 	r := neutron.New().Router()
-	New(db, t.TempDir(), nil).Mount(r)
-	return &testEnv{db: db, h: r, token: token, user: uid}
+	jf := New(db, t.TempDir(), nil)
+	jf.Mount(r)
+	return &testEnv{db: db, h: r, token: token, user: uid, jf: jf}
 }
 
 func (e *testEnv) addLibrary(t *testing.T, typ string) int64 {

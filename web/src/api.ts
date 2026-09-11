@@ -68,7 +68,12 @@ export const api = async (path: string, opts: RequestInit = {}) => {
     location.reload();
     throw new Error("unauthorized");
   }
-  return res.json();
+  const text = await res.text();
+  try {
+    return text ? JSON.parse(text) : {};
+  } catch {
+    return { error: res.ok ? "Empty response from server" : `Server error (${res.status})` };
+  }
 };
 
 // Media elements (img/video/audio/track) and EventSource cannot send

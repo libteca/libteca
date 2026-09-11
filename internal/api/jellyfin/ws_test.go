@@ -337,7 +337,6 @@ func (c *testWSClient) readMessage(t *testing.T) (string, json.RawMessage) {
 
 func wsTestStack(t *testing.T) (*httptest.Server, *API, string, int64, string) {
 	t.Helper()
-	socketHub = newHub()
 	dir := t.TempDir()
 	db, err := store.Open(filepath.Join(dir, "ws.db"))
 	if err != nil {

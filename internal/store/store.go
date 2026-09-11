@@ -18,11 +18,14 @@ type DB struct {
 }
 
 func Open(path string) (*DB, error) {
-	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)", path)
+	dsn := fmt.Sprintf("file:%s?_txlock=immediate&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)", path)
 	sdb, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}
+	sdb.SetMaxOpenConns(16)
+	sdb.SetMaxIdleConns(16)
+	sdb.SetConnMaxLifetime(0)
 	goose.SetBaseFS(migrationsFS)
 	if err := goose.SetDialect("sqlite3"); err != nil {
 		return nil, err
@@ -37,36 +40,61 @@ func Open(path string) (*DB, error) {
 	return d, nil
 }
 
-func (d *DB) backfillWorkSearch() error {
-	rows, err := d.Query(`SELECT id, title, author FROM works WHERE title_l IS NULL`)
+// Update runs fn inside a single transaction (all-or-nothing) and commits
+// when fn returns nil. Transactions begin IMMEDIATE via the DSN so
+// read-then-write sequences cannot race across goroutines and never hit
+// SQLITE_BUSY on a deferred-lock upgrade.
+func (d *DB) Update(fn func(tx *Tx) error) error {
+	tx, err := d.Begin()
 	if err != nil {
 		return err
 	}
-	type pending struct {
-		id     int64
-		title  string
-		author *string
-	}
-	var batch []pending
-	for rows.Next() {
-		var p pending
-		if err := rows.Scan(&p.id, &p.title, &p.author); err != nil {
-			rows.Close()
-			return err
-		}
-		batch = append(batch, p)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
+	defer tx.Rollback()
+	if err := fn(&Tx{tx}); err != nil {
 		return err
 	}
-	for _, p := range batch {
-		titleL, authorL := workSearchCols(p.title, p.author)
-		if _, err := d.Exec(`UPDATE works SET title_l = ?, author_l = ? WHERE id = ?`, titleL, authorL, p.id); err != nil {
+	return tx.Commit()
+}
+
+// Tx is a store handle bound to one transaction; it carries the write paths
+// that callers need to compose atomically. Never retained after Update
+// returns.
+type Tx struct {
+	*sql.Tx
+}
+
+func (d *DB) backfillWorkSearch() error {
+	return d.Update(func(tx *Tx) error {
+		rows, err := tx.Query(`SELECT id, title, author FROM works WHERE title_l IS NULL`)
+		if err != nil {
 			return err
 		}
-	}
-	return nil
+		type pending struct {
+			id     int64
+			title  string
+			author *string
+		}
+		var batch []pending
+		for rows.Next() {
+			var p pending
+			if err := rows.Scan(&p.id, &p.title, &p.author); err != nil {
+				rows.Close()
+				return err
+			}
+			batch = append(batch, p)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		for _, p := range batch {
+			titleL, authorL := workSearchCols(p.title, p.author)
+			if _, err := tx.Exec(`UPDATE works SET title_l = ?, author_l = ? WHERE id = ?`, titleL, authorL, p.id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func now() int64 { return time.Now().UnixMilli() }

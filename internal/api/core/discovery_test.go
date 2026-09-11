@@ -197,6 +197,15 @@ func TestLibrariesJSONShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	res, err := db.Exec(`INSERT INTO users (name, password_hash, is_admin, created_at, updated_at) VALUES ('root','x',1,0,0)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminUID, _ := res.LastInsertId()
+	adminToken, err := auth.IssueToken(db, adminUID, "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	resp := authedGet(t, base+"/libraries", token)
 	if resp.StatusCode != 200 {
@@ -210,16 +219,31 @@ func TestLibrariesJSONShape(t *testing.T) {
 		t.Fatalf("len = %d, want 1: %v", len(libs), libs)
 	}
 	got := libs[0]
-	for _, k := range []string{"id", "name", "type", "path"} {
+	for _, k := range []string{"id", "name", "type"} {
 		if _, ok := got[k]; !ok {
 			t.Fatalf("missing key %q: %v", k, got)
 		}
 	}
+	if _, ok := got["path"]; ok {
+		t.Fatalf("non-admin must not see library path: %v", got)
+	}
 	if _, ok := got["ID"]; ok {
 		t.Fatalf("PascalCase leaked: %v", got)
 	}
-	if int64(got["id"].(float64)) != id || got["name"] != "Audio" || got["type"] != "audiobooks" || got["path"] != dir {
+	if int64(got["id"].(float64)) != id || got["name"] != "Audio" || got["type"] != "audiobooks" {
 		t.Fatalf("got %v", got)
+	}
+
+	resp = authedGet(t, base+"/libraries", adminToken)
+	if resp.StatusCode != 200 {
+		t.Fatalf("admin status = %d, want 200", resp.StatusCode)
+	}
+	libs = nil
+	if err := json.Unmarshal([]byte(bodyStr(t, resp)), &libs); err != nil {
+		t.Fatal(err)
+	}
+	if len(libs) != 1 || libs[0]["path"] != dir {
+		t.Fatalf("admin view = %v, want path %s", libs, dir)
 	}
 }
 

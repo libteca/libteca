@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -161,14 +162,19 @@ func (a *API) me(w http.ResponseWriter, r *http.Request) {
 func (a *API) libraries(w http.ResponseWriter, r *http.Request) {
 	libs, err := a.DB.Libraries()
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
+	admin := a.isAdminRequest(r)
 	out := make([]map[string]any, 0, len(libs))
 	for _, l := range libs {
-		out = append(out, map[string]any{
-			"id": l.ID, "name": l.Name, "type": l.Type, "path": l.Path,
-		})
+		item := map[string]any{
+			"id": l.ID, "name": l.Name, "type": l.Type,
+		}
+		if admin {
+			item["path"] = l.Path
+		}
+		out = append(out, item)
 	}
 	writeJSON(w, 200, out)
 }
@@ -200,7 +206,7 @@ func (a *API) addLibrary(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := a.DB.AddLibrary(body.Name, body.Type, abs)
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	writeJSON(w, 201, map[string]any{"id": id})
@@ -245,7 +251,7 @@ func (a *API) scanLibrary(w http.ResponseWriter, r *http.Request) {
 	jobID, err := a.DB.CreateScanJob(id)
 	if err != nil {
 		a.mu.Unlock()
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	run := newScanRun(jobID, id)
@@ -446,12 +452,13 @@ func (a *API) scanJobs(w http.ResponseWriter, r *http.Request) {
 	}
 	jobs, err := a.DB.ListScanJobs(id, limit)
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
+	admin := a.isAdminRequest(r)
 	out := make([]map[string]any, 0, len(jobs))
 	for i := range jobs {
-		out = append(out, jobJSON(&jobs[i]))
+		out = append(out, jobJSON(&jobs[i], admin))
 	}
 	writeJSON(w, 200, out)
 }
@@ -463,16 +470,37 @@ func (a *API) scanJob(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 404, map[string]string{"error": "job not found"})
 		return
 	}
-	writeJSON(w, 200, jobJSON(j))
+	writeJSON(w, 200, jobJSON(j, a.isAdminRequest(r)))
 }
 
-func jobJSON(j *store.ScanJob) map[string]any {
+// jobJSON renders a scan job. The error text can embed server filesystem
+// paths, so it is dropped for non-admin callers.
+func jobJSON(j *store.ScanJob, admin bool) map[string]any {
+	errStr := any(nil)
+	if j.Error != nil {
+		if admin {
+			errStr = *j.Error
+		} else {
+			errStr = "error"
+		}
+	}
 	return map[string]any{
-		"id": j.ID, "libraryId": j.LibraryID, "status": j.Status, "error": j.Error,
+		"id": j.ID, "libraryId": j.LibraryID, "status": j.Status, "error": errStr,
 		"filesSeen": j.FilesSeen, "filesProbed": j.FilesProbed, "filesAdded": j.FilesAdded,
 		"filesUpdated": j.FilesUpdated, "worksChanged": j.WorksChanged,
 		"startedAt": j.StartedAt, "finishedAt": j.FinishedAt, "createdAt": j.CreatedAt,
 	}
+}
+
+// maskScanEvent hides server filesystem details (current file path, error
+// text) from non-admin subscribers; counts and statuses stay intact.
+func maskScanEvent(ev scanEvent, admin bool) scanEvent {
+	if admin {
+		return ev
+	}
+	ev.CurrentPath = ""
+	ev.Error = ""
+	return ev
 }
 
 const sseMinInterval = 250 * time.Millisecond
@@ -492,6 +520,7 @@ func (a *API) scanEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
+	admin := a.isAdminRequest(r)
 
 	// Not scanning: send one baseline event (last job, or idle) and close.
 	// The retry hint spaces EventSource reconnects out.
@@ -502,7 +531,7 @@ func (a *API) scanEvents(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "retry: 5000\n\n")
 		jobs, _ := a.DB.ListScanJobs(id, 1)
 		if len(jobs) > 0 {
-			writeSSE(w, fl, jobEvent(&jobs[0]))
+			writeSSE(w, fl, maskScanEvent(jobEvent(&jobs[0]), admin))
 		} else {
 			writeSSE(w, fl, scanEvent{LibraryID: id, Status: "idle"})
 		}
@@ -514,14 +543,14 @@ func (a *API) scanEvents(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "retry: 5000\n\n")
 		jobs, _ := a.DB.ListScanJobs(id, 1)
 		if len(jobs) > 0 {
-			writeSSE(w, fl, jobEvent(&jobs[0]))
+			writeSSE(w, fl, maskScanEvent(jobEvent(&jobs[0]), admin))
 		}
 		return
 	}
 	defer run.unsubscribe(ch)
 
 	lastSent := time.Now()
-	writeSSE(w, fl, snap)
+	writeSSE(w, fl, maskScanEvent(snap, admin))
 	heartbeat := time.NewTicker(15 * time.Second)
 	defer heartbeat.Stop()
 	for {
@@ -535,21 +564,21 @@ func (a *API) scanEvents(w http.ResponseWriter, r *http.Request) {
 			fl.Flush()
 		case ev := <-ch:
 			if ev.Status != "running" {
-				writeSSE(w, fl, ev)
+				writeSSE(w, fl, maskScanEvent(ev, admin))
 				return
 			}
 			if time.Since(lastSent) < sseMinInterval {
 				continue
 			}
 			lastSent = time.Now()
-			if !writeSSE(w, fl, ev) {
+			if !writeSSE(w, fl, maskScanEvent(ev, admin)) {
 				return
 			}
 		case <-run.done:
 			run.mu.Lock()
 			final := run.final
 			run.mu.Unlock()
-			writeSSE(w, fl, final)
+			writeSSE(w, fl, maskScanEvent(final, admin))
 			return
 		}
 	}
@@ -625,7 +654,7 @@ func (a *API) works(w http.ResponseWriter, r *http.Request) {
 	}
 	works, err := a.DB.WorksInLibraryFiltered(id, auth.UserID(r), sort, dir, filter, limit, offset)
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	out := make([]map[string]any, 0, len(works))
@@ -661,7 +690,7 @@ func (a *API) work(w http.ResponseWriter, r *http.Request) {
 	lib, _ := a.DB.Library(wv.LibraryID)
 	works, err := a.DB.WorksInLibrary(wv.LibraryID)
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	for _, full := range works {
@@ -821,7 +850,7 @@ func (a *API) setProgress(w http.ResponseWriter, r *http.Request) {
 		Page: body.Page, Percent: body.Percent, Locator: body.Locator,
 	}
 	if err := a.DB.SetReadingProgress(p); err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})
@@ -839,8 +868,12 @@ func (a *API) stream(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) cover(w http.ResponseWriter, r *http.Request) {
 	name := filepath.Base(r.PathValue("cover"))
+	if name == "." || name == ".." || strings.ContainsAny(name, `/\`) {
+		writeJSON(w, 404, map[string]string{"error": "no cover"})
+		return
+	}
 	path := filepath.Join(a.DataDir, "covers", name)
-	if _, err := os.Stat(path); err != nil {
+	if fi, err := os.Stat(path); err != nil || fi.IsDir() {
 		writeJSON(w, 404, map[string]string{"error": "no cover"})
 		return
 	}

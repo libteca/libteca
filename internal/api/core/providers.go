@@ -184,7 +184,7 @@ func (a *API) applyEpisodes(w http.ResponseWriter, r *http.Request) {
 	}
 	lib, err := a.DB.Library(wv.LibraryID)
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	if kindForLibrary(lib.Type) != "tv" {
@@ -262,7 +262,7 @@ func (a *API) matchWork(w http.ResponseWriter, r *http.Request) {
 	}
 	lib, err := a.DB.Library(wv.LibraryID)
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	q := meta.Query{Kind: kindForLibrary(lib.Type), Title: wv.Title}
@@ -315,7 +315,7 @@ func (a *API) applyMatch(w http.ResponseWriter, r *http.Request) {
 	}
 	lib, err := a.DB.Library(wv.LibraryID)
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	res, err := a.fetchResult(r.Context(), body.Provider, body.ID)
@@ -325,7 +325,7 @@ func (a *API) applyMatch(w http.ResponseWriter, r *http.Request) {
 	}
 	summary, err := a.applyResult(r.Context(), wv, lib.Type, res)
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "apply": summary})
@@ -543,7 +543,7 @@ func (a *API) skipWork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.DB.PutCached(skipProvider, strconv.FormatInt(id, 10), "{}"); err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})
@@ -556,9 +556,12 @@ func (a *API) matchingInbox(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
+	if limit > 1000 {
+		limit = 1000
+	}
 	works, err := a.DB.MatchingInbox(0, limit)
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	out := make([]map[string]any, 0, len(works))
@@ -742,7 +745,7 @@ func (a *API) refreshMetaEvents(w http.ResponseWriter, r *http.Request) {
 func (a *API) runRefreshMeta(ctx context.Context, libID int64, run *metaRun) {
 	inbox, err := a.DB.MatchingInbox(libID, 0)
 	if err != nil {
-		run.finish(metaSnap{Status: "error", Error: err.Error()})
+		run.finish(metaSnap{Status: "error", Error: "internal error"})
 		return
 	}
 	total := len(inbox)

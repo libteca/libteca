@@ -43,9 +43,9 @@ func (a *API) MountPodcasts(g *neutron.Router) {
 }
 
 func (a *API) podcastItems(w http.ResponseWriter, r *http.Request) {
-	parent := r.URL.Query().Get("ParentId")
-	limit, _ := strconv.Atoi(r.URL.Query().Get("Limit"))
-	start, _ := strconv.Atoi(r.URL.Query().Get("StartIndex"))
+	parent := qget(r, "ParentId")
+	limit, _ := strconv.Atoi(qget(r, "Limit"))
+	start, _ := strconv.Atoi(qget(r, "StartIndex"))
 	items := []map[string]any{}
 
 	if m := reLibItem.FindStringSubmatch(parent); m != nil {
@@ -145,7 +145,7 @@ func (a *API) podcastEpisodeItem(p *store.Podcast, e *store.PodcastEpisode, r *h
 	if e.FileID != nil {
 		if path, err := a.DB.FilePath(*e.FileID); err == nil {
 			url := "/Audio/podcast/" + epID + "/stream"
-			if key := r.URL.Query().Get("api_key"); key != "" {
+			if key := qget(r, "api_key"); key != "" {
 				url += "?api_key=" + key
 			}
 			it["MediaSources"] = []any{map[string]any{

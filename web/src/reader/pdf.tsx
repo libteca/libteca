@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { api, media } from "../api";
 import { c, ghostBtn } from "../styles";
+import { toast } from "../toast";
 import { IconCheckSmall, IconDownload, isTypingTarget, pagePercent, readerOverlay, TopBar, type ProgressPost, type ReadingProgress } from "./shared";
 
 export function PdfReader(props: { editionId: number; title: string; isFinished: boolean; onBack: () => void }) {
@@ -23,7 +24,7 @@ export function PdfReader(props: { editionId: number; title: string; isFinished:
   };
 
   const postPage = (n: number) => {
-    void api(`/progress/${props.editionId}`, { method: "POST", body: JSON.stringify(bodyFor(n)) });
+    void api(`/progress/${props.editionId}`, { method: "POST", body: JSON.stringify(bodyFor(n)) }).catch(() => {});
   };
 
   const commit = (raw: string) => {
@@ -85,10 +86,14 @@ export function PdfReader(props: { editionId: number; title: string; isFinished:
   const markFinished = async () => {
     setBusy(true);
     try {
-      await api(`/progress/${props.editionId}`, { method: "POST", body: JSON.stringify({ finished: true }) });
+      const res = await api(`/progress/${props.editionId}`, { method: "POST", body: JSON.stringify({ finished: true }) });
+      if (res && res.error) { toast(res.error, "error"); return; }
       setFinished(true);
-    } catch { /* surfaced by api redirect/state */ }
-    setBusy(false);
+    } catch {
+      toast("Couldn't reach the server.", "error");
+    } finally {
+      setBusy(false);
+    }
   };
 
   const src = openPage != null && openPage >= 1

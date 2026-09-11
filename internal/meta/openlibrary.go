@@ -185,7 +185,7 @@ func (p *OpenLibrary) getJSON(ctx context.Context, u string, out any) error {
 	if err != nil {
 		return err
 	}
-	req.Header.Set("User-Agent", mbUserAgent)
+	req.Header.Set("User-Agent", userAgent)
 	resp, err := p.http.Do(req)
 	if err != nil {
 		return err

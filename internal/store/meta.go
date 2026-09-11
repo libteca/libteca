@@ -136,9 +136,27 @@ func (d *DB) SetWorkGenres(workID int64, genres []string) error {
 	return err
 }
 
+func (t *Tx) SetWorkGenres(workID int64, genres []string) error {
+	b, err := json.Marshal(genres)
+	if err != nil {
+		return err
+	}
+	_, err = t.Exec(`UPDATE works SET genres = ?, updated_at = ? WHERE id = ?`,
+		string(b), nowMilli(), workID)
+	return err
+}
+
 func (d *DB) WorkGenres(workID int64) []string {
+	return workGenres(d, workID)
+}
+
+func (t *Tx) WorkGenres(workID int64) []string {
+	return workGenres(t, workID)
+}
+
+func workGenres(q dbtx, workID int64) []string {
 	var raw string
-	if err := d.QueryRow(`SELECT genres FROM works WHERE id = ?`, workID).Scan(&raw); err != nil {
+	if err := q.QueryRow(`SELECT genres FROM works WHERE id = ?`, workID).Scan(&raw); err != nil {
 		return nil
 	}
 	var genres []string
@@ -180,6 +198,11 @@ func (d *DB) WorkEpisodes(workID int64) ([]EpisodeEdition, error) {
 
 func (d *DB) SetEpisodeTitle(editionID int64, title string) error {
 	_, err := d.Exec(`UPDATE editions SET title = ? WHERE id = ?`, title, editionID)
+	return err
+}
+
+func (t *Tx) SetEpisodeTitle(editionID int64, title string) error {
+	_, err := t.Exec(`UPDATE editions SET title = ? WHERE id = ?`, title, editionID)
 	return err
 }
 

@@ -216,7 +216,7 @@ func (a *API) hlsFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ed, err := a.DB.EditionByID(eid)
-	if err != nil {
+	if err != nil || len(ed.Files) == 0 {
 		writeJSON(w, 404, map[string]string{"error": "edition not found"})
 		return
 	}
@@ -233,11 +233,18 @@ func (a *API) hlsFile(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.HasSuffix(file, ".m3u8") {
 		s.Prebuffer(r.Context(), 2, 10*time.Second)
+		wait := time.NewTicker(200 * time.Millisecond)
+		defer wait.Stop()
 		for i := 0; i < 100; i++ {
 			if fi, err := os.Stat(s.Playlist()); err == nil && fi.Size() > 0 {
 				break
 			}
-			time.Sleep(200 * time.Millisecond)
+			select {
+			case <-r.Context().Done():
+				writeJSON(w, 499, map[string]string{"error": "client closed request"})
+				return
+			case <-wait.C:
+			}
 		}
 		data, err := os.ReadFile(s.Playlist())
 		if err != nil {

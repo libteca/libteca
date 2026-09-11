@@ -81,10 +81,24 @@ type EditionPages struct {
 
 func (d *DB) UpsertEditionPages(e *EditionPages) (int64, error) {
 	var id int64
-	err := d.QueryRow(`SELECT id FROM editions WHERE work_id = ? AND format = ? AND lower(title) = lower(?) AND season_num IS NULL`,
+	err := d.Update(func(tx *Tx) error {
+		var ierr error
+		id, ierr = upsertEditionPages(tx, e)
+		return ierr
+	})
+	return id, err
+}
+
+func (t *Tx) UpsertEditionPages(e *EditionPages) (int64, error) {
+	return upsertEditionPages(t, e)
+}
+
+func upsertEditionPages(q dbtx, e *EditionPages) (int64, error) {
+	var id int64
+	err := q.QueryRow(`SELECT id FROM editions WHERE work_id = ? AND format = ? AND lower(title) = lower(?) AND season_num IS NULL`,
 		e.WorkID, e.Format, e.Title).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
-		res, ierr := d.Exec(`INSERT INTO editions (work_id, format, title, language, abridged, duration_secs, position, season_num, episode_num, page_count, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		res, ierr := q.Exec(`INSERT INTO editions (work_id, format, title, language, abridged, duration_secs, position, season_num, episode_num, page_count, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
 			e.WorkID, e.Format, e.Title, e.Language, e.Abridged, e.DurationSecs, e.Position, e.SeasonNum, e.EpisodeNum, e.PageCount, nowMilli())
 		if ierr != nil {
 			return 0, ierr
@@ -94,7 +108,7 @@ func (d *DB) UpsertEditionPages(e *EditionPages) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	_, err = d.Exec(`UPDATE editions SET language = ?, abridged = ?, duration_secs = ?, page_count = ? WHERE id = ?`,
+	_, err = q.Exec(`UPDATE editions SET language = ?, abridged = ?, duration_secs = ?, page_count = ? WHERE id = ?`,
 		e.Language, e.Abridged, e.DurationSecs, e.PageCount, id)
 	return id, err
 }
@@ -102,6 +116,10 @@ func (d *DB) UpsertEditionPages(e *EditionPages) (int64, error) {
 // FindWorkID mirrors the works unique-index lookup used by UpsertWork.
 func (d *DB) FindWorkID(libraryID int64, title string, author *string) (int64, bool) {
 	return findWorkID(d, libraryID, title, author)
+}
+
+func (t *Tx) FindWorkID(libraryID int64, title string, author *string) (int64, bool) {
+	return findWorkID(t, libraryID, title, author)
 }
 
 func findWorkID(q dbtx, libraryID int64, title string, author *string) (int64, bool) {
@@ -169,5 +187,10 @@ func (d *DB) FileStatByPath(path string) (int64, int64, bool, error) {
 
 func (d *DB) SetFileMeta(fileID int64, meta string) error {
 	_, err := d.Exec(`UPDATE files SET embedded_meta = ? WHERE id = ?`, meta, fileID)
+	return err
+}
+
+func (t *Tx) SetFileMeta(fileID int64, meta string) error {
+	_, err := t.Exec(`UPDATE files SET embedded_meta = ? WHERE id = ?`, meta, fileID)
 	return err
 }

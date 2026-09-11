@@ -138,54 +138,60 @@ func storeBook(db *store.DB, lib *store.Library, d *bookDoc, coversDir string, t
 	if d.description != "" {
 		descPtr = &d.description
 	}
-	// Files without their own metadata (cbz/pdf beside an epub) must not
-	// clobber the work metadata a sibling edition already set, so they link
-	// to the existing work without running the unconditional UPDATE.
 	var workID int64
-	if descPtr == nil {
-		if id, ok := db.FindWorkID(lib.ID, d.title, &authorPtr); ok {
-			workID = id
+	err := db.Update(func(tx *store.Tx) error {
+		// Files without their own metadata (cbz/pdf beside an epub) must not
+		// clobber the work metadata a sibling edition already set, so they link
+		// to the existing work without running the unconditional UPDATE.
+		if descPtr == nil {
+			if id, ok := tx.FindWorkID(lib.ID, d.title, &authorPtr); ok {
+				workID = id
+			}
 		}
-	}
-	if workID == 0 {
-		w := &store.Work{LibraryID: lib.ID, Title: d.title, Author: &authorPtr, Description: descPtr}
-		var err error
-		workID, err = db.UpsertWork(w)
+		if workID == 0 {
+			w := &store.Work{LibraryID: lib.ID, Title: d.title, Author: &authorPtr, Description: descPtr}
+			var err error
+			workID, err = tx.UpsertWork(w)
+			if err != nil {
+				return err
+			}
+			if w.Created {
+				tr.work()
+			}
+		}
+
+		var langPtr *string
+		if d.language != "" {
+			langPtr = &d.language
+		}
+		pages := d.pageCount
+		e := &store.EditionPages{Edition: store.Edition{WorkID: workID, Format: d.format, Title: d.title, Language: langPtr}, PageCount: &pages}
+		editionID, err := tx.UpsertEditionPages(e)
 		if err != nil {
 			return err
 		}
-		if w.Created {
-			tr.work()
+
+		hash := hashFile(d.path, d.size)
+		fr := &store.FileRec{
+			EditionID: editionID, Path: d.path, Seq: 1,
+			SizeBytes: d.size, MtimeSecs: d.mtime, Hash: &hash,
+			DurationSecs: 0, Chapters: "[]",
 		}
-	}
-
-	var langPtr *string
-	if d.language != "" {
-		langPtr = &d.language
-	}
-	pages := d.pageCount
-	e := &store.EditionPages{Edition: store.Edition{WorkID: workID, Format: d.format, Title: d.title, Language: langPtr}, PageCount: &pages}
-	editionID, err := db.UpsertEditionPages(e)
-	if err != nil {
-		return err
-	}
-
-	hash := hashFile(d.path, d.size)
-	fr := &store.FileRec{
-		EditionID: editionID, Path: d.path, Seq: 1,
-		SizeBytes: d.size, MtimeSecs: d.mtime, Hash: &hash,
-		DurationSecs: 0, Chapters: "[]",
-	}
-	if err := db.UpsertFile(fr); err != nil {
-		return err
-	}
-	tr.file(fr.Inserted)
-	if len(d.toc) > 0 {
-		if meta, merr := json.Marshal(map[string]any{"toc": d.toc}); merr == nil {
-			if serr := db.SetFileMeta(fr.ID, string(meta)); serr != nil {
-				return serr
+		if err := tx.UpsertFile(fr); err != nil {
+			return err
+		}
+		tr.file(fr.Inserted)
+		if len(d.toc) > 0 {
+			if meta, merr := json.Marshal(map[string]any{"toc": d.toc}); merr == nil {
+				if serr := tx.SetFileMeta(fr.ID, string(meta)); serr != nil {
+					return serr
+				}
 			}
 		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 	return writeBookCover(db, workID, d, coversDir)
 }

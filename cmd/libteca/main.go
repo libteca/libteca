@@ -118,7 +118,12 @@ func main() {
 	}
 	go func() {
 		<-ctx.Done()
-		h.Shutdown(context.Background())
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := h.Shutdown(shutdownCtx); err != nil {
+			fmt.Fprintln(os.Stderr, "libteca: shutdown:", err)
+		}
+		srv.Close()
 	}()
 	fmt.Printf("libteca %s listening on :%d (data: %s)\n", version, *port, abs)
 	if err := h.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

@@ -141,96 +141,107 @@ func (d *DB) DeletePlaylist(id int64) error {
 // a row was inserted. Adding an edition already present is a no-op that
 // returns added=false (UNIQUE(playlist_id, edition_id)).
 func (d *DB) AddPlaylistItem(playlistID, editionID int64) (bool, error) {
-	var one int
-	if err := d.QueryRow(`SELECT 1 FROM editions WHERE id = ?`, editionID).Scan(&one); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return false, ErrNotFound
+	added := false
+	err := d.Update(func(tx *Tx) error {
+		var one int
+		if err := tx.QueryRow(`SELECT 1 FROM editions WHERE id = ?`, editionID).Scan(&one); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
 		}
-		return false, err
-	}
-	res, err := d.Exec(`INSERT INTO playlist_items (playlist_id, edition_id, position, added_at)
-		VALUES (?,?,coalesce((SELECT max(position) + 1 FROM playlist_items WHERE playlist_id = ?), 1), ?)
-		ON CONFLICT(playlist_id, edition_id) DO NOTHING`,
-		playlistID, editionID, playlistID, nowMilli())
-	if err != nil {
-		return false, err
-	}
-	n, _ := res.RowsAffected()
-	if n > 0 {
-		_, err = d.Exec(`UPDATE playlists SET updated_at = ? WHERE id = ?`, nowMilli(), playlistID)
-	}
-	return n > 0, err
+		res, err := tx.Exec(`INSERT INTO playlist_items (playlist_id, edition_id, position, added_at)
+			VALUES (?,?,coalesce((SELECT max(position) + 1 FROM playlist_items WHERE playlist_id = ?), 1), ?)
+			ON CONFLICT(playlist_id, edition_id) DO NOTHING`,
+			playlistID, editionID, playlistID, nowMilli())
+		if err != nil {
+			return err
+		}
+		n, _ := res.RowsAffected()
+		added = n > 0
+		if added {
+			_, err = tx.Exec(`UPDATE playlists SET updated_at = ? WHERE id = ?`, nowMilli(), playlistID)
+		}
+		return err
+	})
+	return added, err
 }
 
 func (d *DB) RemovePlaylistItem(playlistID, editionID int64) error {
-	res, err := d.Exec(`DELETE FROM playlist_items WHERE playlist_id = ? AND edition_id = ?`, playlistID, editionID)
-	if err != nil {
+	return d.Update(func(tx *Tx) error {
+		res, err := tx.Exec(`DELETE FROM playlist_items WHERE playlist_id = ? AND edition_id = ?`, playlistID, editionID)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return ErrNotFound
+		}
+		if err := compactPlaylistItems(tx, playlistID); err != nil {
+			return err
+		}
+		_, err = tx.Exec(`UPDATE playlists SET updated_at = ? WHERE id = ?`, nowMilli(), playlistID)
 		return err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrNotFound
-	}
-	if err := d.compactPlaylistItems(playlistID); err != nil {
-		return err
-	}
-	_, err = d.Exec(`UPDATE playlists SET updated_at = ? WHERE id = ?`, nowMilli(), playlistID)
-	return err
+	})
 }
 
 // ClearPlaylistItems removes every item, keeping the playlist row.
 func (d *DB) ClearPlaylistItems(playlistID int64) error {
-	if _, err := d.Exec(`DELETE FROM playlist_items WHERE playlist_id = ?`, playlistID); err != nil {
+	return d.Update(func(tx *Tx) error {
+		if _, err := tx.Exec(`DELETE FROM playlist_items WHERE playlist_id = ?`, playlistID); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`UPDATE playlists SET updated_at = ? WHERE id = ?`, nowMilli(), playlistID)
 		return err
-	}
-	_, err := d.Exec(`UPDATE playlists SET updated_at = ? WHERE id = ?`, nowMilli(), playlistID)
-	return err
+	})
 }
 
 // ReorderPlaylistItem moves an item to newPosition (1-based, clamped to the
 // item count); positions are compacted back to a contiguous 1..n sequence.
 func (d *DB) ReorderPlaylistItem(playlistID, editionID int64, newPosition int) error {
-	var old sql.NullInt64
-	var count int64
-	if err := d.QueryRow(`SELECT
+	return d.Update(func(tx *Tx) error {
+		var old sql.NullInt64
+		var count int64
+		if err := tx.QueryRow(`SELECT
 			(SELECT position FROM playlist_items WHERE playlist_id = ? AND edition_id = ?),
 			(SELECT count(*) FROM playlist_items WHERE playlist_id = ?)`,
-		playlistID, editionID, playlistID).Scan(&old, &count); err != nil {
-		return err
-	}
-	if !old.Valid || count == 0 {
-		return ErrNotFound
-	}
-	nw := int64(newPosition)
-	if nw < 1 {
-		nw = 1
-	}
-	if nw > count {
-		nw = count
-	}
-	if nw == old.Int64 {
-		return nil
-	}
-	if _, err := d.Exec(`UPDATE playlist_items SET position = CASE
+			playlistID, editionID, playlistID).Scan(&old, &count); err != nil {
+			return err
+		}
+		if !old.Valid || count == 0 {
+			return ErrNotFound
+		}
+		nw := int64(newPosition)
+		if nw < 1 {
+			nw = 1
+		}
+		if nw > count {
+			nw = count
+		}
+		if nw == old.Int64 {
+			return nil
+		}
+		if _, err := tx.Exec(`UPDATE playlist_items SET position = CASE
 			WHEN edition_id = ? THEN ?
 			WHEN ? > ? AND position > ? AND position <= ? THEN position - 1
 			WHEN ? < ? AND position >= ? AND position < ? THEN position + 1
 			ELSE position
 		END WHERE playlist_id = ?`,
-		editionID, nw,
-		nw, old.Int64, old.Int64, nw,
-		nw, old.Int64, nw, old.Int64,
-		playlistID); err != nil {
+			editionID, nw,
+			nw, old.Int64, old.Int64, nw,
+			nw, old.Int64, nw, old.Int64,
+			playlistID); err != nil {
+			return err
+		}
+		if err := compactPlaylistItems(tx, playlistID); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`UPDATE playlists SET updated_at = ? WHERE id = ?`, nowMilli(), playlistID)
 		return err
-	}
-	if err := d.compactPlaylistItems(playlistID); err != nil {
-		return err
-	}
-	_, err := d.Exec(`UPDATE playlists SET updated_at = ? WHERE id = ?`, nowMilli(), playlistID)
-	return err
+	})
 }
 
-func (d *DB) compactPlaylistItems(playlistID int64) error {
-	_, err := d.Exec(`UPDATE playlist_items SET position = (
+func compactPlaylistItems(q dbtx, playlistID int64) error {
+	_, err := q.Exec(`UPDATE playlist_items SET position = (
 			SELECT rn FROM (
 				SELECT id, ROW_NUMBER() OVER (ORDER BY position, id) AS rn
 				FROM playlist_items WHERE playlist_id = ?

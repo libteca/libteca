@@ -56,7 +56,7 @@ func hasCover(p *string) bool {
 func (a *API) resume(w http.ResponseWriter, r *http.Request) {
 	items, err := a.DB.ResumeItems(auth.UserID(r), 20)
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	out := make([]resumeItem, 0, len(items))
@@ -77,7 +77,7 @@ func (a *API) search(w http.ResponseWriter, r *http.Request) {
 	if utf8.RuneCountInString(q) >= 2 {
 		hits, err := a.DB.SearchWorks(auth.UserID(r), q, 30)
 		if err != nil {
-			writeJSON(w, 500, map[string]string{"error": err.Error()})
+			writeJSON(w, 500, map[string]string{"error": "internal error"})
 			return
 		}
 		results = make([]searchResult, 0, len(hits))
@@ -95,7 +95,7 @@ func (a *API) search(w http.ResponseWriter, r *http.Request) {
 func (a *API) nextUp(w http.ResponseWriter, r *http.Request) {
 	items, err := a.DB.NextUp(auth.UserID(r), 0, true)
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	if len(items) > 12 {
@@ -125,7 +125,7 @@ func (a *API) recent(w http.ResponseWriter, r *http.Request) {
 	}
 	works, err := a.DB.RecentWorks(limit)
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	out := make([]recentItem, 0, len(works))

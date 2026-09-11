@@ -19,25 +19,33 @@ import { PlaylistsView } from "./views/playlists";
 
 type View = { name: string; id?: number; q?: string; lib?: number; type?: string; edition?: number; format?: string };
 
+const ROUTE_NAMES = ["home", "library", "work", "read", "search", "podcasts", "playlists", "admin", "matching"];
+
+function routeNum(v: string | null): number | undefined {
+  if (v == null) return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : undefined;
+}
+
 function parseHash(): View {
   const h = (typeof location === "undefined" ? "" : location.hash).replace(/^#\//, "");
   const [name, qs] = h.split("?");
   const params = new URLSearchParams(qs || "");
-  const id = params.get("id");
+  const id = routeNum(params.get("id"));
   const q = params.get("q");
-  const lib = params.get("lib");
-  const edition = params.get("edition");
+  const lib = routeNum(params.get("lib"));
+  const edition = routeNum(params.get("edition"));
   const format = params.get("format");
-  if (name === "read" && edition) return { name: "read", edition: Number(edition), id: id ? Number(id) : undefined, format: format || undefined };
-  if (name === "work" && id) return { name: "work", id: Number(id) };
+  if (name === "read" && edition) return { name: "read", edition, id, format: format || undefined };
+  if (name === "work" && id) return { name: "work", id };
   if (name === "admin") return { name: "admin" };
   if (name === "matching") return { name: "matching" };
   if (name === "search") return { name: "search", q: q || "" };
   if (name === "podcasts") return { name: "podcasts" };
-  if (name === "playlists") return { name: "playlists", id: id ? Number(id) : undefined };
+  if (name === "playlists") return { name: "playlists", id };
   if (name === "home") return { name: "home" };
   const typ = params.get("type");
-  if (name === "library") return { name: "library", lib: lib ? Number(lib) : undefined, type: typ || undefined };
+  if (name === "library") return { name: "library", lib, type: typ || undefined };
   return { name: "home" };
 }
 
@@ -229,7 +237,10 @@ export function App() {
 
   const loadMe = () => {
     api("/libraries").then((l) => { if (Array.isArray(l)) setNavLibs(l); }).catch(() => {});
-    api("/me").then((u) => { setMe(u); setBootErr(false); setReady(true); }).catch(() => {
+    api("/me").then((u) => {
+      if (u && typeof u.id === "number") { setMe(u); setBootErr(false); setReady(true); }
+      else { setBootErr(true); setReady(true); }
+    }).catch(() => {
       if (getToken()) setBootErr(true);
       setReady(true);
     });
@@ -237,6 +248,10 @@ export function App() {
 
   useEffect(() => {
     setToken(localStorage.getItem("libteca-token") || "");
+    if (location.hash) {
+      const h = location.hash.replace(/^#\/?/, "").split("?")[0];
+      if (!ROUTE_NAMES.includes(h)) history.replaceState(null, "", "#/home");
+    }
     if (!getToken()) { setReady(true); return; }
     loadMe();
     const onHash = () => { setView(parseHash()); setMenu(false); };
@@ -245,9 +260,12 @@ export function App() {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenu(false);
     };
     document.addEventListener("mousedown", onDoc);
+    const onMenuKey = (e: KeyboardEvent) => { if (e.key === "Escape") setMenu(false); };
+    addEventListener("keydown", onMenuKey);
     return () => {
       removeEventListener("hashchange", onHash);
       document.removeEventListener("mousedown", onDoc);
+      removeEventListener("keydown", onMenuKey);
     };
   }, []);
 
@@ -365,6 +383,34 @@ function ChangePassModal(props: { userId: number; isAdmin: boolean; onClose: () 
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const formRef = useRef<HTMLFormElement | null>(null);
+
+  const closeRef = useRef(props.onClose);
+  closeRef.current = props.onClose;
+
+  useEffect(() => {
+    const prev = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const focusables = (): HTMLElement[] => {
+      const all = formRef.current?.querySelectorAll<HTMLElement>("input, button");
+      return all ? [...Array.from(all)].filter((el) => !(el as HTMLButtonElement | HTMLInputElement).disabled) : [];
+    };
+    focusables()[0]?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { e.preventDefault(); closeRef.current(); return; }
+      if (e.key !== "Tab") return;
+      const els = focusables();
+      if (els.length === 0) return;
+      const first = els[0];
+      const last = els[els.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    };
+    addEventListener("keydown", onKey);
+    return () => {
+      removeEventListener("keydown", onKey);
+      prev?.focus();
+    };
+  }, []);
 
   const submit = async (e: Event) => {
     e.preventDefault();
@@ -393,7 +439,11 @@ function ChangePassModal(props: { userId: number; isAdmin: boolean; onClose: () 
       style={{ position: "fixed", inset: 0, zIndex: 80, background: "rgba(8,9,11,0.72)", display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}
     >
       <form
+        ref={formRef}
         onSubmit={submit}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Change password"
         style={{ width: "min(22rem, 100%)", background: c.bgRaised, border: `1px solid ${c.line}`, borderRadius: "14px", padding: "1.4rem", display: "flex", flexDirection: "column", gap: "0.8rem", boxShadow: "0 24px 60px rgba(0,0,0,0.5)" }}
       >
         <h2 style={{ margin: 0, fontSize: "1.05rem", color: c.text }}>Change password</h2>

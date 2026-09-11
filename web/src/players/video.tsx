@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import { api, media, type PlaybackInfo, type WorkDetail } from "../api";
+import { api, media, type EditionDetail, type PlaybackInfo, type WorkDetail } from "../api";
 import { fmtClock } from "../util";
-import { c } from "../styles";
+import { c, ghostBtn, muted } from "../styles";
 import {
   IconBack30, IconCC, IconChevronLeft, IconChevronRight, IconFwd30, IconFullscreen,
   IconPause, IconPlay, IconSpinner, IconVolume, IconVolumeOff,
@@ -31,7 +31,8 @@ export function VideoPlayer(props: {
   onClose: () => void;
   onSelectEdition: (id: number) => void;
 }) {
-  const ed = props.w.editions.find((e) => e.id === props.editionId)!;
+  const found = props.w.editions.find((e) => e.id === props.editionId);
+  const ed: EditionDetail = found ?? { id: props.editionId, format: "video", title: props.w.title, duration: 0, files: [], chapters: [] };
   const ref = useRef<HTMLVideoElement | null>(null);
   const saved = useRef(0);
   const edRef = useRef(ed);
@@ -56,9 +57,10 @@ export function VideoPlayer(props: {
   const [hoverT, setHoverT] = useState<number | null>(null);
   const [waiting, setWaiting] = useState(false);
   const [thumbs, setThumbs] = useState<Thumbs | null>(null);
+  const [fatal, setFatal] = useState("");
   const [pip, setPip] = useState(false);
   const pipOK = typeof document !== "undefined" && document.pictureInPictureEnabled;
-  const fileId = ed.files[0].id;
+  const fileId = ed.files[0]?.id ?? 0;
 
   const total = dur || ed.duration || 0;
   const chapters = (ed.chapters || []).filter((ch) => ch.end > ch.start && ch.start < total);
@@ -124,7 +126,7 @@ export function VideoPlayer(props: {
 
   useEffect(() => {
     setThumbs(null);
-    if (!ed.files[0].videoCodec) return;
+    if (!ed.files[0]?.videoCodec) return;
     let alive = true;
     api(`/editions/${props.editionId}/thumbs`)
       .then((m) => { if (alive && m && m.TileCount > 0 && m.Width > 0 && m.Height > 0 && m.Interval > 0) setThumbs(m as Thumbs); })
@@ -155,8 +157,13 @@ export function VideoPlayer(props: {
 
   useEffect(() => {
     const t = window.setInterval(() => { if (ref.current) saved.current = ref.current.currentTime; }, 1000);
+    const p = window.setInterval(() => {
+      const v = ref.current;
+      if (v && !v.paused && v.currentTime > 0) void save(v.currentTime);
+    }, 15000);
     return () => {
       clearInterval(t);
+      clearInterval(p);
       const pos = ref.current?.currentTime || saved.current;
       if (pos > 0) void save(pos);
     };
@@ -168,7 +175,9 @@ export function VideoPlayer(props: {
     if (lastSave.current.fin === finished && Math.abs(lastSave.current.pos - pos) < 0.5) return;
     lastSave.current = { pos, fin: finished };
     const cur = edRef.current;
-    await api(`/progress/${cur.id}`, { method: "POST", body: JSON.stringify({ position: pos, duration: cur.duration, finished }) });
+    try {
+      await api(`/progress/${cur.id}`, { method: "POST", body: JSON.stringify({ position: pos, duration: cur.duration, finished }) });
+    } catch { /* offline; last write wins when reconnecting */ }
   };
 
   const showUI = () => {
@@ -317,6 +326,15 @@ export function VideoPlayer(props: {
   const scrubPct = total > 0 ? Math.min(1, time / total) : 0;
   const bufPct = total > 0 ? Math.min(1, buffered / total) : 0;
 
+  if (fatal || !found || fileId === 0) {
+    return (
+      <div style={{ position: "fixed", inset: 0, zIndex: 35, background: "#000", display: "flex", flexDirection: "column", gap: "0.9rem", alignItems: "center", justifyContent: "center", padding: "1rem" }}>
+        <p style={{ ...muted, margin: 0, fontSize: "0.95rem" }}>{fatal || "This edition is no longer available."}</p>
+        <button className="press" style={ghostBtn} onClick={props.onClose}>Back</button>
+      </div>
+    );
+  }
+
   const scrubHover = (e: PointerEvent) => {
     const el = e.currentTarget as HTMLElement;
     const r = el.getBoundingClientRect();
@@ -425,7 +443,11 @@ export function VideoPlayer(props: {
           onWaiting={() => setWaiting(true)}
           onPlaying={() => setWaiting(false)}
           onCanPlay={() => setWaiting(false)}
-          onError={() => { setWaiting(false); setPlaying(false); }}
+          onError={() => {
+            setWaiting(false);
+            setPlaying(false);
+            if (src) setFatal("Playback failed — the stream could not be loaded.");
+          }}
           onPlay={() => { setPlaying(true); setWaiting(false); showUI(); if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "playing"; }}
           onPause={() => { setPlaying(false); setUiVis(true); void save(saved.current); if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "paused"; }}
           onEnded={() => { setPlaying(false); setUiVis(true); void save(total, true); if (next) props.onSelectEdition(next.id); else props.onClose(); }}

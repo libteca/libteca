@@ -35,6 +35,7 @@ export function LibraryView(props: { lib?: number; type?: string }) {
   const [dir, setDir] = useState("asc");
   const [filter, setFilter] = useState("all");
   const [loaded, setLoaded] = useState(false);
+  const [loadErr, setLoadErr] = useState(false);
 
   const scan = useScan(() => { refreshWorks(); });
   const meta = useRefreshMeta(() => { refreshWorks(); });
@@ -46,12 +47,12 @@ export function LibraryView(props: { lib?: number; type?: string }) {
       return;
     }
     api(`/libraries/${lib}/works?sort=${sort}&dir=${dir}&filter=${filter}`)
-      .then((d) => setWorks(Array.isArray(d) ? d : []))
-      .catch(() => setWorks([]))
+      .then((d) => { setWorks(Array.isArray(d) ? d : []); setLoadErr(!Array.isArray(d)); })
+      .catch(() => { setWorks([]); setLoadErr(true); })
       .finally(() => setLoaded(true));
   };
 
-  useEffect(() => { api("/libraries").then(setLibs).catch(() => setLibs([])); }, [props.lib]);
+  useEffect(() => { api("/libraries").then((r) => { if (Array.isArray(r)) setLibs(r); }).catch(() => setLibs([])); }, [props.lib]);
   useEffect(() => {
     if (!libs.length || lib) return;
     for (const t of TYPE_ORDER) {
@@ -160,11 +161,15 @@ export function LibraryView(props: { lib?: number; type?: string }) {
         </p>
       )}
       {works.length === 0
-        ? loaded
-          ? <EmptyState title={filter === "all" ? "No works yet" : "Nothing matches this filter"}
-              icon={<TypeIcon type={activeLib?.type || ""} size={22} />}
-              hint={filter === "all" ? "Add a library in Admin and scan." : "Try a different filter."} />
-          : <SkeletonGrid square={ratio === "square"} />
+        ? loadErr && loaded
+          ? <EmptyState title="Couldn't reach the server" hint="The library failed to load.">
+              <button style={ghostBtn} onClick={refreshWorks}>Retry</button>
+            </EmptyState>
+          : loaded
+            ? <EmptyState title={filter === "all" ? "No works yet" : "Nothing matches this filter"}
+                icon={<TypeIcon type={activeLib?.type || ""} size={22} />}
+                hint={filter === "all" ? "Add a library in Admin and scan." : "Try a different filter."} />
+            : <SkeletonGrid square={ratio === "square"} />
         : <div style={gridFor(activeLib?.type)}>
             {works.map((w) => {
               const meta = w.author || w.subtitle;

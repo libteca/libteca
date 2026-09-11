@@ -177,8 +177,6 @@ type hub struct {
 	seq      uint64
 }
 
-var socketHub = newHub()
-
 func newHub() *hub {
 	return &hub{conns: map[wsClient]bool{}, sessions: map[string]*liveSession{}}
 }
@@ -366,7 +364,7 @@ func (c *socketConn) writeLoop() {
 
 func (c *socketConn) readLoop(a *API) {
 	defer func() {
-		socketHub.unregister(c)
+		a.hubv().unregister(c)
 		c.shutdown()
 	}()
 	for {
@@ -380,7 +378,7 @@ func (c *socketConn) readLoop(a *API) {
 		}
 		switch op {
 		case opText:
-			c.handleText(a, payload)
+			a.handleText(c, payload)
 		case opPing:
 			select {
 			case c.pong <- payload:
@@ -400,7 +398,7 @@ func (c *socketConn) readLoop(a *API) {
 	}
 }
 
-func (c *socketConn) handleText(a *API, payload []byte) {
+func (a *API) handleText(c *socketConn, payload []byte) {
 	var msg struct {
 		MessageType string          `json:"MessageType"`
 		Data        json.RawMessage `json:"Data"` // corpus: envelope shape {MessageType, Data} unverified against 10.10 traffic
@@ -412,10 +410,10 @@ func (c *socketConn) handleText(a *API, payload []byte) {
 	switch msg.MessageType {
 	case "KeepAlive":
 	case "SessionsStart":
-		socketHub.subscribe(c)
-		socketHub.push(c, a.sessionsMessage())
+		a.hubv().subscribe(c)
+		a.hubv().push(c, a.sessionsMessage())
 	case "SessionsStop": // corpus: message name unverified
-		socketHub.unsubscribe(c)
+		a.hubv().unsubscribe(c)
 	case "Play", "Playstate":
 		a.forwardCommand(c, msg.MessageType, msg.Data)
 	default:
@@ -434,7 +432,7 @@ func (a *API) forwardCommand(from wsClient, typ string, raw json.RawMessage) {
 	json.Unmarshal(raw, &t)
 	device := t.DeviceId
 	if device == "" && t.PlaySessionId != "" {
-		device = socketHub.deviceForPlaySession(t.PlaySessionId)
+		device = a.hubv().deviceForPlaySession(t.PlaySessionId)
 	}
 	if device == "" || device == from.device() {
 		return
@@ -446,7 +444,7 @@ func (a *API) forwardCommand(from wsClient, typ string, raw json.RawMessage) {
 	if err != nil {
 		return
 	}
-	socketHub.sendTo(device, out)
+	a.hubv().sendTo(device, out)
 }
 
 type wsPlayState struct {
@@ -466,7 +464,7 @@ type wsSessionDTO struct {
 } // corpus: session DTO field set trimmed vs real 10.10 /Sessions shape
 
 func (a *API) sessionDTOs() []wsSessionDTO {
-	sessions := socketHub.snapshot()
+	sessions := a.hubv().snapshot()
 	dtos := make([]wsSessionDTO, 0, len(sessions))
 	for _, s := range sessions {
 		dto := wsSessionDTO{
@@ -541,9 +539,9 @@ func clientInfo(r *http.Request) wsClientInfo {
 func (a *API) ReportPlayback(r *http.Request, itemID, playSessionID string, posTicks int64, paused bool) {
 	info := clientInfo(r)
 	if strings.HasSuffix(r.URL.Path, "Stopped") {
-		socketHub.remove(info.deviceID)
+		a.hubv().remove(info.deviceID)
 	} else {
-		socketHub.update(&liveSession{
+		a.hubv().update(&liveSession{
 			DeviceID:      info.deviceID,
 			PlaySessionID: playSessionID,
 			ItemID:        itemID,
@@ -554,12 +552,12 @@ func (a *API) ReportPlayback(r *http.Request, itemID, playSessionID string, posT
 			DeviceName:    info.deviceName,
 		})
 	}
-	socketHub.broadcast(a.sessionsMessage())
+	a.hubv().broadcast(a.sessionsMessage())
 }
 
 // CloseSockets drops every live /socket connection (graceful shutdown hook).
 func (a *API) CloseSockets() {
-	socketHub.closeAll()
+	a.hubv().closeAll()
 }
 
 func headerHasToken(v, token string) bool {
@@ -649,7 +647,7 @@ func (a *API) handleSocket(w http.ResponseWriter, r *http.Request) {
 		closeReq: make(chan []byte, 1),
 		done:     make(chan struct{}),
 	}
-	socketHub.register(c)
+	a.hubv().register(c)
 	force, _ := json.Marshal(struct {
 		MessageType string `json:"MessageType"`
 		Data        any    `json:"Data"`

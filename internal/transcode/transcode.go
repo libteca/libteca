@@ -20,6 +20,8 @@ const (
 	DefaultPrebufferTimeout  = 10 * time.Second
 	DefaultSegmentTimeout    = 10 * time.Second
 	pollInterval             = 150 * time.Millisecond
+	MaxSessions              = 8
+	idleSessionTTL           = 90 * time.Second
 )
 
 // A hardware-accelerated ffmpeg dying within fallbackWindow of start is
@@ -95,6 +97,7 @@ func New(dataDir string) *Manager {
 		out, err := exec.Command("ffmpeg", argv...).Output()
 		return string(out), err
 	}
+	os.RemoveAll(filepath.Join(dataDir, "transcode"))
 	go m.reaper()
 	return m
 }
@@ -108,6 +111,21 @@ func (m *Manager) Get(sessionID string, edition int64, source string, startSecs 
 			return s, nil
 		}
 		s.kill()
+		delete(m.sessions, sessionID)
+	}
+	for len(m.sessions) >= MaxSessions {
+		var oldestID string
+		var oldest time.Time
+		for id, s := range m.sessions {
+			hit := s.lastHit
+			if oldestID == "" || hit.Before(oldest) {
+				oldestID, oldest = id, hit
+			}
+		}
+		if s, ok := m.sessions[oldestID]; ok {
+			s.kill()
+		}
+		delete(m.sessions, oldestID)
 	}
 	dir := filepath.Join(m.DataDir, "transcode", sessionID)
 	os.MkdirAll(dir, 0o700)
@@ -121,7 +139,12 @@ func (m *Manager) Get(sessionID string, edition int64, source string, startSecs 
 		lastHit: time.Now(),
 	}
 	m.sessions[sessionID] = s
-	return s, s.start(startSecs)
+	if err := s.start(startSecs); err != nil {
+		delete(m.sessions, sessionID)
+		os.RemoveAll(dir)
+		return nil, err
+	}
+	return s, nil
 }
 
 func (s *Session) start(startSecs float64) error {
@@ -152,6 +175,10 @@ func (s *Session) launch(startSecs float64, accel string) error {
 		return err
 	}
 	done := make(chan struct{})
+	go func() {
+		p.wait()
+		close(done)
+	}()
 	s.mu.Lock()
 	if s.killed {
 		s.mu.Unlock()
@@ -161,10 +188,6 @@ func (s *Session) launch(startSecs float64, accel string) error {
 	s.proc = p
 	s.done = done
 	s.mu.Unlock()
-	go func() {
-		p.wait()
-		close(done)
-	}()
 	return nil
 }
 
@@ -227,12 +250,22 @@ func (m *Manager) reaper() {
 		time.Sleep(15 * time.Second)
 		m.mu.Lock()
 		for id, s := range m.sessions {
-			if time.Since(s.lastHit) > 90*time.Second {
+			if time.Since(s.lastHit) > idleSessionTTL {
 				s.kill()
 				delete(m.sessions, id)
 			}
 		}
 		m.mu.Unlock()
+	}
+}
+
+// CloseAll kills every session and drops its segments (graceful shutdown).
+func (m *Manager) CloseAll() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, s := range m.sessions {
+		s.kill()
+		delete(m.sessions, id)
 	}
 }
 

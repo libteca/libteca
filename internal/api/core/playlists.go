@@ -71,7 +71,7 @@ func (a *API) playlistsList(w http.ResponseWriter, r *http.Request) {
 	}
 	list, err := a.DB.ListPlaylists(uid)
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	out := make([]map[string]any, 0, len(list))
@@ -97,7 +97,7 @@ func (a *API) playlistCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := a.DB.CreatePlaylist(u.ID, body.Name)
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	for _, eid := range body.EditionIDs {
@@ -106,7 +106,7 @@ func (a *API) playlistCreate(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, 404, map[string]string{"error": "edition not found"})
 				return
 			}
-			writeJSON(w, 500, map[string]string{"error": err.Error()})
+			writeJSON(w, 500, map[string]string{"error": "internal error"})
 			return
 		}
 	}
@@ -120,7 +120,7 @@ func (a *API) playlistGet(w http.ResponseWriter, r *http.Request) {
 	}
 	items, err := a.DB.PlaylistItems(p.ID)
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	out := playlistJSON(p)
@@ -145,7 +145,7 @@ func (a *API) playlistPatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.DB.RenamePlaylist(p.ID, body.Name); err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})
@@ -157,7 +157,7 @@ func (a *API) playlistDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.DB.DeletePlaylist(p.ID); err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})
@@ -181,7 +181,7 @@ func (a *API) playlistItemAdd(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 404, map[string]string{"error": "edition not found"})
 			return
 		}
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	writeJSON(w, 201, map[string]any{"ok": true, "added": added})
@@ -202,7 +202,7 @@ func (a *API) playlistItemRemove(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 404, map[string]string{"error": "item not found"})
 			return
 		}
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})
@@ -228,7 +228,7 @@ func (a *API) playlistItemReorder(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 404, map[string]string{"error": "item not found"})
 			return
 		}
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})

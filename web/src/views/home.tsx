@@ -45,7 +45,7 @@ export function Home() {
       api("/resume").then((d) => setResume(d.items || [])),
       api("/recent?limit=12").then((d) => setRecent(d.items || [])),
       api("/nextup").then((d) => setNextUp(d.items || [])),
-      api("/libraries").then(setLibs),
+      api("/libraries").then((d) => { if (Array.isArray(d)) setLibs(d); }),
     ]).then(() => setLoaded(true));
   }, []);
 

@@ -2,6 +2,7 @@ package transcode
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -119,6 +120,103 @@ func TestWaitForSegmentFileValidation(t *testing.T) {
 	m.mu.Lock()
 	m.sessions["s1"].lastHit = time.Now()
 	m.mu.Unlock()
+}
+
+func TestNewClearsOrphanSegments(t *testing.T) {
+	data := t.TempDir()
+	orphan := filepath.Join(data, "transcode", "stale-session")
+	writeFile(t, filepath.Join(orphan, "seg00000.ts"), "x")
+	New(data)
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Fatalf("orphan session dir survived restart: %v", err)
+	}
+}
+
+type startFailProcess struct{}
+
+func (startFailProcess) start() error { return errStartFail }
+func (startFailProcess) wait() error  { return nil }
+func (startFailProcess) kill()        {}
+
+var errStartFail = os.ErrInvalid
+
+func TestGetStartFailureCleansSession(t *testing.T) {
+	m := New(t.TempDir())
+	m.probeRun = func([]string) (string, error) { return "", errStartFail }
+	m.spawn = func([]string) process { return startFailProcess{} }
+	if _, err := m.Get("boom", 1, "src", 0); err == nil {
+		t.Fatal("Get must fail when ffmpeg cannot start")
+	}
+	if _, err := os.Stat(filepath.Join(m.DataDir, "transcode", "boom")); !os.IsNotExist(err) {
+		t.Fatal("failed session dir must be removed")
+	}
+	m.mu.Lock()
+	n := len(m.sessions)
+	m.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("failed session must not linger in the map: %d", n)
+	}
+}
+
+type sleepProcess struct{ killed chan struct{} }
+
+func newSleepProcess() *sleepProcess {
+	return &sleepProcess{killed: make(chan struct{})}
+}
+func (p *sleepProcess) start() error { return nil }
+func (p *sleepProcess) wait() error  {
+	<-p.killed
+	return nil
+}
+func (p *sleepProcess) kill() {
+	select {
+	case <-p.killed:
+	default:
+		close(p.killed)
+	}
+}
+
+func TestMaxSessionsEvictsOldest(t *testing.T) {
+	m := New(t.TempDir())
+	m.probeRun = func([]string) (string, error) { return "", errStartFail }
+	procs := map[string]*sleepProcess{}
+	m.spawn = func(argv []string) process {
+		p := newSleepProcess()
+		procs[filepath.Base(filepath.Dir(argv[len(argv)-1]))] = p
+		return p
+	}
+	first := ""
+	for i := 0; i < MaxSessions; i++ {
+		id := fmt.Sprintf("s%d", i)
+		if i == 0 {
+			first = id
+		}
+		if _, err := m.Get(id, int64(i+1), "src", 0); err != nil {
+			t.Fatalf("Get(%s): %v", id, err)
+		}
+	}
+	m.mu.Lock()
+	m.sessions[first].lastHit = time.Now().Add(-time.Hour)
+	m.mu.Unlock()
+	if _, err := m.Get("overflow", 99, "src", 0); err != nil {
+		t.Fatalf("Get(overflow): %v", err)
+	}
+	m.mu.Lock()
+	count := len(m.sessions)
+	_, oldestAlive := m.sessions[first]
+	m.mu.Unlock()
+	if count != MaxSessions {
+		t.Fatalf("sessions = %d, want cap %d", count, MaxSessions)
+	}
+	if oldestAlive {
+		t.Fatal("least recently touched session must be evicted at cap")
+	}
+	select {
+	case <-procs[first].killed:
+	default:
+		t.Fatal("evicted session's ffmpeg must be killed")
+	}
+	m.CloseAll()
 }
 
 func TestPrebufferIntegrationFFmpeg(t *testing.T) {

@@ -41,7 +41,17 @@ func editionRow(q dbtx, id int64) (*Edition, error) {
 // rewrites an existing work's metadata, so linking into an existing work
 // keeps its subtitle/description/cover intact.
 func (d *DB) EnsureWorkInLibrary(w *Work) (int64, error) {
-	return ensureWorkInLibrary(d, w)
+	var id int64
+	err := d.Update(func(tx *Tx) error {
+		var ierr error
+		id, ierr = ensureWorkInLibrary(tx, w)
+		return ierr
+	})
+	return id, err
+}
+
+func (t *Tx) EnsureWorkInLibrary(w *Work) (int64, error) {
+	return ensureWorkInLibrary(t, w)
 }
 
 func ensureWorkInLibrary(q dbtx, w *Work) (int64, error) {

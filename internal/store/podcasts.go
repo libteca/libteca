@@ -64,14 +64,17 @@ func scanEpisode(row interface{ Scan(...any) error }) (*PodcastEpisode, error) {
 
 func (d *DB) EnsurePodcastsLibrary(path string) (int64, error) {
 	var id int64
-	err := d.QueryRow(`SELECT id FROM libraries WHERE type = 'podcasts' ORDER BY id LIMIT 1`).Scan(&id)
-	if errors.Is(err, sql.ErrNoRows) {
-		res, ierr := d.Exec(`INSERT INTO libraries (name, type, path, created_at) VALUES ('Podcasts','podcasts',?,?)`, path, nowMilli())
-		if ierr != nil {
-			return 0, ierr
+	err := d.Update(func(tx *Tx) error {
+		err := tx.QueryRow(`SELECT id FROM libraries WHERE type = 'podcasts' ORDER BY id LIMIT 1`).Scan(&id)
+		if errors.Is(err, sql.ErrNoRows) {
+			res, ierr := tx.Exec(`INSERT INTO libraries (name, type, path, created_at) VALUES ('Podcasts','podcasts',?,?)`, path, nowMilli())
+			if ierr != nil {
+				return ierr
+			}
+			id, err = res.LastInsertId()
 		}
-		return res.LastInsertId()
-	}
+		return err
+	})
 	return id, err
 }
 
@@ -174,21 +177,23 @@ func (d *DB) SetPodcastCover(id int64, rel string) error {
 }
 
 func (d *DB) UpdatePodcastSettings(id int64, autoDownload *bool, maxEpisodes *int) error {
-	if autoDownload != nil {
-		v := 0
-		if *autoDownload {
-			v = 1
+	return d.Update(func(tx *Tx) error {
+		if autoDownload != nil {
+			v := 0
+			if *autoDownload {
+				v = 1
+			}
+			if _, err := tx.Exec(`UPDATE podcasts SET auto_download = ? WHERE id = ?`, v, id); err != nil {
+				return err
+			}
 		}
-		if _, err := d.Exec(`UPDATE podcasts SET auto_download = ? WHERE id = ?`, v, id); err != nil {
-			return err
+		if maxEpisodes != nil {
+			if _, err := tx.Exec(`UPDATE podcasts SET max_episodes = ? WHERE id = ?`, *maxEpisodes, id); err != nil {
+				return err
+			}
 		}
-	}
-	if maxEpisodes != nil {
-		if _, err := d.Exec(`UPDATE podcasts SET max_episodes = ? WHERE id = ?`, *maxEpisodes, id); err != nil {
-			return err
-		}
-	}
-	return nil
+		return nil
+	})
 }
 
 // PodcastFileRow is a podcast-side view of a files row; unlike FileRec it
@@ -251,33 +256,40 @@ func (d *DB) DeleteFilesByIDs(ids []int64) error {
 }
 
 func (d *DB) DeletePodcast(id int64) error {
-	if _, err := d.Exec(`DELETE FROM podcast_episodes WHERE podcast_id = ?`, id); err != nil {
+	return d.Update(func(tx *Tx) error {
+		if _, err := tx.Exec(`DELETE FROM podcast_episodes WHERE podcast_id = ?`, id); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`DELETE FROM podcasts WHERE id = ?`, id)
 		return err
-	}
-	_, err := d.Exec(`DELETE FROM podcasts WHERE id = ?`, id)
-	return err
+	})
 }
 
 func (d *DB) UpsertPodcastEpisode(e *PodcastEpisode) (bool, error) {
-	var id int64
-	err := d.QueryRow(`SELECT id FROM podcast_episodes WHERE podcast_id = ? AND guid = ?`, e.PodcastID, e.GUID).Scan(&id)
-	if errors.Is(err, sql.ErrNoRows) {
-		res, ierr := d.Exec(`INSERT INTO podcast_episodes (podcast_id, guid, title, description, pub_date, duration_secs, enclosure_url, enclosure_bytes, created_at)
-			VALUES (?,?,?,?,?,?,?,?,?)`,
-			e.PodcastID, e.GUID, e.Title, e.Description, e.PubDate, e.DurationSecs, e.EnclosureURL, e.EnclosureBytes, nowMilli())
-		if ierr != nil {
-			return false, ierr
+	added := false
+	err := d.Update(func(tx *Tx) error {
+		var id int64
+		err := tx.QueryRow(`SELECT id FROM podcast_episodes WHERE podcast_id = ? AND guid = ?`, e.PodcastID, e.GUID).Scan(&id)
+		if errors.Is(err, sql.ErrNoRows) {
+			res, ierr := tx.Exec(`INSERT INTO podcast_episodes (podcast_id, guid, title, description, pub_date, duration_secs, enclosure_url, enclosure_bytes, created_at)
+				VALUES (?,?,?,?,?,?,?,?,?)`,
+				e.PodcastID, e.GUID, e.Title, e.Description, e.PubDate, e.DurationSecs, e.EnclosureURL, e.EnclosureBytes, nowMilli())
+			if ierr != nil {
+				return ierr
+			}
+			e.ID, _ = res.LastInsertId()
+			added = true
+			return nil
 		}
-		e.ID, _ = res.LastInsertId()
-		return true, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	e.ID = id
-	_, err = d.Exec(`UPDATE podcast_episodes SET title = ?, description = ?, pub_date = ?, duration_secs = ?, enclosure_url = ?, enclosure_bytes = ? WHERE id = ?`,
-		e.Title, e.Description, e.PubDate, e.DurationSecs, e.EnclosureURL, e.EnclosureBytes, id)
-	return false, err
+		if err != nil {
+			return err
+		}
+		e.ID = id
+		_, err = tx.Exec(`UPDATE podcast_episodes SET title = ?, description = ?, pub_date = ?, duration_secs = ?, enclosure_url = ?, enclosure_bytes = ? WHERE id = ?`,
+			e.Title, e.Description, e.PubDate, e.DurationSecs, e.EnclosureURL, e.EnclosureBytes, id)
+		return err
+	})
+	return added, err
 }
 
 // PodcastEpisodes lists newest first (NULL pub_date last) for display.
@@ -368,21 +380,25 @@ func (d *DB) EpisodeUsingFilePath(path string) (int64, error) {
 // a files row with a NULL edition_id — podcast episodes are not editions.
 func (d *DB) InsertPodcastFile(path string, sizeBytes, mtimeSecs int64, hash string, durationSecs float64, container string) (int64, error) {
 	var id int64
-	err := d.QueryRow(`SELECT id FROM files WHERE path = ?`, path).Scan(&id)
-	if errors.Is(err, sql.ErrNoRows) {
-		res, ierr := d.Exec(`INSERT INTO files (edition_id, path, seq, size_bytes, mtime_secs, hash, container, duration_secs, chapters, embedded_meta, missing, probed_at)
-			VALUES (NULL,?,1,?,?,?,?,?,'[]','{}',0,?)`,
-			path, sizeBytes, mtimeSecs, hash, container, durationSecs, nowMilli())
-		if ierr != nil {
-			return 0, ierr
+	err := d.Update(func(tx *Tx) error {
+		err := tx.QueryRow(`SELECT id FROM files WHERE path = ?`, path).Scan(&id)
+		if errors.Is(err, sql.ErrNoRows) {
+			res, ierr := tx.Exec(`INSERT INTO files (edition_id, path, seq, size_bytes, mtime_secs, hash, container, duration_secs, chapters, embedded_meta, missing, probed_at)
+				VALUES (NULL,?,1,?,?,?,?,?,'[]','{}',0,?)`,
+				path, sizeBytes, mtimeSecs, hash, container, durationSecs, nowMilli())
+			if ierr != nil {
+				return ierr
+			}
+			id, err = res.LastInsertId()
+			return nil
 		}
-		return res.LastInsertId()
-	}
-	if err != nil {
-		return 0, err
-	}
-	_, err = d.Exec(`UPDATE files SET size_bytes = ?, mtime_secs = ?, hash = ?, container = ?, duration_secs = ?, missing = 0, probed_at = ? WHERE id = ?`,
-		sizeBytes, mtimeSecs, hash, container, durationSecs, nowMilli(), id)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(`UPDATE files SET size_bytes = ?, mtime_secs = ?, hash = ?, container = ?, duration_secs = ?, missing = 0, probed_at = ? WHERE id = ?`,
+			sizeBytes, mtimeSecs, hash, container, durationSecs, nowMilli(), id)
+		return err
+	})
 	return id, err
 }
 

@@ -14,9 +14,14 @@ export function Login(props: { onLogin: () => void }) {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username: name, password: pass }),
       });
-      const data = await res.json();
-      if (!data.token) { setErr("Invalid credentials."); return; }
-      localStorage.setItem("libteca-token", data.token);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.token) { setErr(data.error || (res.ok ? "Invalid credentials." : `Login failed (${res.status}).`)); return; }
+      try {
+        localStorage.setItem("libteca-token", data.token);
+      } catch {
+        setErr("Couldn't save the session — storage is unavailable.");
+        return;
+      }
       props.onLogin();
     } catch {
       setErr("Login failed — couldn't reach the server.");

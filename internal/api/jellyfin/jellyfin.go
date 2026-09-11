@@ -31,10 +31,18 @@ type API struct {
 
 	tpOnce sync.Once
 	tp     *trickplay.Generator
+	hub    *hub
 }
 
 func New(db *store.DB, dataDir string, tc *transcode.Manager) *API {
-	return &API{DB: db, Dir: dataDir, TC: tc}
+	return &API{DB: db, Dir: dataDir, TC: tc, hub: newHub()}
+}
+
+func (a *API) hubv() *hub {
+	if a.hub == nil {
+		a.hub = newHub()
+	}
+	return a.hub
 }
 
 func (a *API) trickplayer() *trickplay.Generator {
@@ -44,9 +52,11 @@ func (a *API) trickplayer() *trickplay.Generator {
 
 func (a *API) Mount(r *neutron.Router) {
 	r.HandleFunc("GET /System/Info/Public", a.systemInfoPublic)
+	r.HandleFunc("GET /System/Ping", a.systemPing)
 	r.HandleFunc("GET /socket", a.handleSocket)
 	r.HandleFunc("POST /Users/AuthenticateByName", a.authenticate)
 	g := r.Group("", jfAuth(a.DB))
+	g.HandleFunc("GET /System/Info", a.systemInfo)
 	g.HandleFunc("GET /System/Configuration", a.configStub)
 	g.HandleFunc("GET /branding/configuration", a.brandingStub)
 	g.HandleFunc("GET /Users/{uid}/Views", a.views)
@@ -89,7 +99,7 @@ func jfAuth(db *store.DB) func(http.Handler) http.Handler {
 				}
 			}
 			if token == "" {
-				token = r.URL.Query().Get("api_key")
+				token = qget(r, "api_key")
 			}
 			if token == "" || r.URL.Path == "/System/Info/Public" {
 				if r.URL.Path == "/System/Info/Public" {
@@ -126,6 +136,22 @@ func uid(r *http.Request) int64 {
 	return 0
 }
 
+// qget returns the first query param matching name case-insensitively.
+// Real Jellyfin servers bind query params case-insensitively (ASP.NET), and
+// clients send a mix of ParentId/parentId, StartIndex/startIndex, etc.
+func qget(r *http.Request, name string) string {
+	q := r.URL.Query()
+	if vs, ok := q[name]; ok && len(vs) > 0 {
+		return vs[0]
+	}
+	for k, vs := range q {
+		if strings.EqualFold(k, name) && len(vs) > 0 {
+			return vs[0]
+		}
+	}
+	return ""
+}
+
 func write(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -140,6 +166,20 @@ func (a *API) systemInfoPublic(w http.ResponseWriter, r *http.Request) {
 		"LocalAddress": "", "ServerName": "libteca", "Version": "10.10.0",
 		"ProductName": "libteca", "OperatingSystem": "linux", "Id": "libteca-server",
 		"StartupWizardCompleted": true,
+	})
+}
+
+func (a *API) systemPing(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain")
+	w.Write([]byte("Jellyfin Server"))
+}
+
+func (a *API) systemInfo(w http.ResponseWriter, r *http.Request) {
+	write(w, 200, map[string]any{
+		"LocalAddress": "", "ServerName": "libteca", "Version": "10.10.0",
+		"ProductName": "libteca", "OperatingSystem": "linux", "Id": "libteca-server",
+		"StartupWizardCompleted": true, "HasUpdateAvailable": false,
+		"FailedPluginAssemblies": []string{},
 	})
 }
 
@@ -232,15 +272,23 @@ func (a *API) itemPayload(uid int64, wv *store.WorkView, ed *store.EditionView, 
 }
 
 func (a *API) userItems(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	parent := q.Get("ParentId")
-	types := strings.ToLower(q.Get("IncludeItemTypes"))
-	sortBy := strings.ToLower(q.Get("SortBy"))
-	limit, _ := strconv.Atoi(q.Get("Limit"))
-	start, _ := strconv.Atoi(q.Get("StartIndex"))
+	parent := qget(r, "ParentId")
+	types := strings.ToLower(qget(r, "IncludeItemTypes"))
+	sortBy := strings.ToLower(qget(r, "SortBy"))
+	limit, _ := strconv.Atoi(qget(r, "Limit"))
+	start, _ := strconv.Atoi(qget(r, "StartIndex"))
 
 	items := []map[string]any{}
 	userID := uid(r)
+
+	if m := reSeasonItem.FindStringSubmatch(parent); m != nil {
+		a.respondItems(w, a.seasonItems(auth.Atoi64(m[1]), auth.Atoi64(m[2]), types, userID), sortBy, limit, start)
+		return
+	}
+	if m := reWorkItem.FindStringSubmatch(parent); m != nil {
+		a.respondItems(w, a.seriesItems(auth.Atoi64(m[1]), types, userID), sortBy, limit, start)
+		return
+	}
 
 	if m := reLibItem.FindStringSubmatch(parent); m != nil {
 		lib, err := a.DB.Library(auth.Atoi64(m[1]))
@@ -279,6 +327,10 @@ func (a *API) userItems(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	a.respondItems(w, items, sortBy, limit, start)
+}
+
+func (a *API) respondItems(w http.ResponseWriter, items []map[string]any, sortBy string, limit, start int) {
 	if sortBy == "runtime" {
 	} else if strings.Contains(sortBy, "date") || strings.Contains(sortBy, "created") {
 		sort.SliceStable(items, func(i, j int) bool {
@@ -305,6 +357,65 @@ func (a *API) userItems(w http.ResponseWriter, r *http.Request) {
 		delete(it, "__created")
 	}
 	write(w, 200, map[string]any{"Items": items[start:end], "TotalRecordCount": total})
+}
+
+// seasonItems lists a season's episodes (ParentId=s{work}-{season}).
+func (a *API) seasonItems(workID, season int64, types string, userID int64) []map[string]any {
+	wv, err := a.DB.WorkByID(workID)
+	if err != nil {
+		return nil
+	}
+	works, _ := a.DB.WorksInLibrary(wv.LibraryID)
+	items := []map[string]any{}
+	for i := range works {
+		if works[i].ID != workID {
+			continue
+		}
+		for j := range works[i].Editions {
+			ed := &works[i].Editions[j]
+			if ed.SeasonNum == nil || *ed.SeasonNum != int(season) {
+				continue
+			}
+			items = append(items, a.episodeItem(userID, &works[i], ed))
+		}
+	}
+	return items
+}
+
+// seriesItems lists a series' children (ParentId=w{work}): seasons by
+// default, episodes when IncludeItemTypes asks for them.
+func (a *API) seriesItems(workID int64, types string, userID int64) []map[string]any {
+	wv, err := a.DB.WorkByID(workID)
+	if err != nil {
+		return nil
+	}
+	works, _ := a.DB.WorksInLibrary(wv.LibraryID)
+	items := []map[string]any{}
+	for i := range works {
+		if works[i].ID != workID {
+			continue
+		}
+		if strings.Contains(types, "episode") {
+			for j := range works[i].Editions {
+				items = append(items, a.episodeItem(userID, &works[i], &works[i].Editions[j]))
+			}
+			continue
+		}
+		seen := map[int]bool{}
+		for j := range works[i].Editions {
+			if works[i].Editions[j].SeasonNum != nil {
+				s := *works[i].Editions[j].SeasonNum
+				if !seen[s] {
+					seen[s] = true
+					it := a.seasonItem(&works[i], s)
+					it["__sort"] = fmt.Sprintf("s%03d", s)
+					it["__created"] = works[i].CreatedAt
+					items = append(items, it)
+				}
+			}
+		}
+	}
+	return items
 }
 
 func (a *API) coverTags(wv *store.WorkView) map[string]any {
@@ -538,7 +649,7 @@ func (a *API) episodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	seasonFilter := 0
-	if sid := r.URL.Query().Get("seasonId"); sid != "" {
+	if sid := qget(r, "SeasonId"); sid != "" {
 		if m := reSeasonItem.FindStringSubmatch(sid); m != nil {
 			seasonFilter, _ = strconv.Atoi(m[2])
 		}
@@ -585,20 +696,19 @@ func (a *API) resume(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) nextUp(w http.ResponseWriter, r *http.Request) {
 	userID := uid(r)
-	q := r.URL.Query()
 	var seriesID int64
-	if s := q.Get("SeriesId"); s != "" {
+	if s := qget(r, "SeriesId"); s != "" {
 		seriesID = auth.Atoi64(strings.TrimPrefix(s, "w"))
 	}
 	limit := 20
-	if v, err := strconv.Atoi(q.Get("Limit")); err == nil && v > 0 {
+	if v, err := strconv.Atoi(qget(r, "Limit")); err == nil && v > 0 {
 		limit = v
 	}
 	start := 0
-	if v, err := strconv.Atoi(q.Get("StartIndex")); err == nil && v > 0 {
+	if v, err := strconv.Atoi(qget(r, "StartIndex")); err == nil && v > 0 {
 		start = v
 	}
-	rows, err := a.DB.NextUp(userID, seriesID, q.Get("DisableFirstEpisode") == "true")
+	rows, err := a.DB.NextUp(userID, seriesID, qget(r, "DisableFirstEpisode") == "true")
 	items := []map[string]any{}
 	if err == nil {
 		for _, row := range rows {
@@ -625,10 +735,6 @@ func (a *API) ancestors(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) sessionsList(w http.ResponseWriter, r *http.Request) {
-	if socketHub == nil {
-		write(w, 200, []any{})
-		return
-	}
 	write(w, 200, a.sessionDTOs())
 }
 
@@ -673,13 +779,24 @@ func (a *API) resolvePlayable(id string) (*store.EditionView, error) {
 		works, _ := a.DB.WorksInLibrary(wv.LibraryID)
 		for i := range works {
 			if works[i].ID == wv.ID && len(works[i].Editions) > 0 {
-				return &works[i].Editions[0], nil
+				for j := range works[i].Editions {
+					if len(works[i].Editions[j].Files) > 0 {
+						return &works[i].Editions[j], nil
+					}
+				}
 			}
 		}
 		return nil, store.ErrNotFound
 	}
 	if m := reEdItem.FindStringSubmatch(id); m != nil {
-		return a.DB.EditionByID(auth.Atoi64(m[1]))
+		ed, err := a.DB.EditionByID(auth.Atoi64(m[1]))
+		if err != nil {
+			return nil, err
+		}
+		if len(ed.Files) == 0 {
+			return nil, store.ErrNotFound
+		}
+		return ed, nil
 	}
 	return nil, store.ErrNotFound
 }
@@ -735,7 +852,7 @@ func (a *API) playbackInfo(w http.ResponseWriter, r *http.Request) {
 		mediaSource["SupportsDirectStream"] = true
 	} else {
 		mediaSource["TranscodingUrl"] = fmt.Sprintf("/videos/e%d/main.m3u8?MediaSourceId=%s&VideoCodec=h264&AudioCodec=aac&PlaySessionId=%s&api_key=%s",
-			ed.ID, fid, playSession, r.URL.Query().Get("api_key"))
+			ed.ID, fid, playSession, qget(r, "api_key"))
 	}
 	write(w, 200, map[string]any{
 		"MediaSources":  []any{mediaSource},
@@ -802,12 +919,16 @@ func (a *API) hlsMaster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	start := 0.0
-	if t := r.URL.Query().Get("startTimeTicks"); t != "" {
+	if t := qget(r, "StartTimeTicks"); t != "" {
 		start = fromTicks(auth.Atoi64(t))
 	}
-	sessionID := r.URL.Query().Get("PlaySessionId")
+	sessionID := qget(r, "PlaySessionId")
 	if sessionID == "" {
 		sessionID = fmt.Sprintf("t%d-%d", ed.ID, time.Now().UnixMilli())
+	}
+	if a.TC == nil {
+		http.Error(w, "transcode unavailable", 503)
+		return
 	}
 	s, err := a.TC.Get(sessionID, ed.ID, ed.Files[0].Path, start)
 	if err != nil {
@@ -828,10 +949,14 @@ func (a *API) hlsMaster(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Touch()
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-	w.Write(rewriteHLSPlaylist(data, r.PathValue("id"), sessionID, r.URL.Query().Get("api_key")))
+	w.Write(rewriteHLSPlaylist(data, r.PathValue("id"), sessionID, qget(r, "api_key")))
 }
 
-var reHLSURI = regexp.MustCompile(`^(seg\d+\.ts|index\.m3u8)$`)
+var (
+	reHLSURI         = regexp.MustCompile(`^(seg\d+\.ts|index\.m3u8)$`)
+	reHLSSessionID   = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+	reHLSSegmentFile = regexp.MustCompile(`^(seg\d+\.ts|index\.m3u8)$`)
+)
 
 func rewriteHLSPlaylist(playlist []byte, itemID, sessionID, apiKey string) []byte {
 	prefix := "/videos/" + itemID + "/hls/" + sessionID + "/"
@@ -856,11 +981,11 @@ func rewriteHLSPlaylist(playlist []byte, itemID, sessionID, apiKey string) []byt
 func (a *API) hlsSegment(w http.ResponseWriter, r *http.Request) {
 	sid := r.PathValue("sid")
 	file := r.PathValue("file")
-	if !regexp.MustCompile(`^[A-Za-z0-9._-]+$`).MatchString(sid) {
+	if !reHLSSessionID.MatchString(sid) {
 		http.Error(w, "bad", 400)
 		return
 	}
-	if !regexp.MustCompile(`^seg\d+\.ts$|^index\.m3u8$`).MatchString(file) {
+	if !reHLSSegmentFile.MatchString(file) {
 		http.Error(w, "bad", 400)
 		return
 	}
@@ -882,7 +1007,7 @@ func (a *API) hlsSegment(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-		w.Write(rewriteHLSPlaylist(data, r.PathValue("id"), sid, r.URL.Query().Get("api_key")))
+		w.Write(rewriteHLSPlaylist(data, r.PathValue("id"), sid, qget(r, "api_key")))
 		return
 	}
 	fi, _ := f.Stat()
@@ -923,7 +1048,7 @@ func (a *API) sessionProgress(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) sessionStopped(w http.ResponseWriter, r *http.Request) {
 	sid := a.saveFromSession(w, r)
-	if q := r.URL.Query().Get("PlaySessionId"); q != "" {
+	if q := qget(r, "PlaySessionId"); q != "" {
 		sid = q
 	}
 	if a.TC != nil && sid != "" {

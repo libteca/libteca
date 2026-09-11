@@ -64,13 +64,16 @@ export function AdminView() {
   const [path, setPath] = useState("");
   const [msg, setMsg] = useState("");
   const [users, setUsers] = useState<AdminUser[]>([]);
+  const [busy, setBusy] = useState(false);
 
-  const refresh = () => api("/libraries").then(setLibs).catch(() => setLibs([]));
+  const refresh = () => api("/libraries").then((r) => { if (Array.isArray(r)) setLibs(r); }).catch(() => setLibs([]));
   const refreshUsers = () => api("/users").then((r: AdminUser[]) => setUsers(Array.isArray(r) ? r : [])).catch(() => setUsers([]));
   useEffect(() => { refresh(); refreshUsers(); }, []);
 
   const add = async (e: Event) => {
     e.preventDefault();
+    if (busy) return;
+    setBusy(true);
     setMsg("");
     try {
       const res = await api("/libraries", { method: "POST", body: JSON.stringify({ name, type, path }) });
@@ -90,6 +93,8 @@ export function AdminView() {
     } catch {
       setMsg("Failed to add library.");
       toast("Failed to add library.", "error");
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -120,7 +125,7 @@ export function AdminView() {
           <Field label="Path">
             <input style={input} placeholder="/path/to/media" value={path} onInput={(e) => setPath((e.target as HTMLInputElement).value)} />
           </Field>
-          <button style={primaryBtn} type="submit">Add & scan</button>
+          <button style={primaryBtn} type="submit" disabled={busy}>{busy ? "Adding…" : "Add & scan"}</button>
           {msg && <p style={addOk ? formNote : formNoteErr}>{msg}</p>}
         </form>
       </section>
@@ -138,12 +143,15 @@ export function AdminView() {
 function AdminLibRow(props: { lib: Library; onRemoved: () => void }) {
   const scan = useScan(() => {});
   const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
   const line = scan.event && (scan.scanning
     ? `Scanning… ${scan.event.filesSeen} files${scan.event.currentPath ? ` · ${truncPath(scan.event.currentPath)}` : ""}`
     : scan.event.status === "error" ? `Failed${scan.event.error ? `: ${scan.event.error}` : ""}`
     : scan.event.filesAdded ? `Done · ${scan.event.filesAdded} added` : "");
   const remove = async () => {
     if (!window.confirm(`Remove ${props.lib.name}?`)) return;
+    if (busy) return;
+    setBusy(true);
     setErr("");
     try {
       const res: { error?: string } = await api(`/libraries/${props.lib.id}`, { method: "DELETE" });
@@ -152,6 +160,8 @@ function AdminLibRow(props: { lib: Library; onRemoved: () => void }) {
       setErr("Failed to remove library.");
       toast("Failed to remove library.", "error");
       return;
+    } finally {
+      setBusy(false);
     }
     toast(`Library "${props.lib.name}" removed`);
     props.onRemoved();
@@ -168,7 +178,7 @@ function AdminLibRow(props: { lib: Library; onRemoved: () => void }) {
           <IconScan size={13} />
           {scan.scanning ? "Scanning…" : "Scan"}
         </button>
-        <button className="press" style={{ ...ghostBtn, color: c.danger }} disabled={scan.scanning} onClick={remove}>Remove</button>
+        <button className="press" style={{ ...ghostBtn, color: c.danger }} disabled={scan.scanning || busy} onClick={remove}>Remove</button>
       </span>
     </div>
   );

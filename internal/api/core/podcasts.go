@@ -76,7 +76,7 @@ func (a *API) podcastSubscribe(svc *podcast.Service, w http.ResponseWriter, r *h
 		return
 	}
 	if err != nil {
-		writeJSON(w, 502, map[string]string{"error": err.Error()})
+		writeJSON(w, 502, map[string]string{"error": "feed subscribe failed"})
 		return
 	}
 	a.writePodcastDetail(w, r, 201, p)
@@ -85,7 +85,7 @@ func (a *API) podcastSubscribe(svc *podcast.Service, w http.ResponseWriter, r *h
 func (a *API) podcastList(w http.ResponseWriter, r *http.Request) {
 	podcasts, err := a.DB.PodcastsWithCounts()
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	out := make([]map[string]any, 0, len(podcasts))
@@ -102,7 +102,7 @@ func (a *API) podcastDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	a.writePodcastDetail(w, r, 200, p)
@@ -115,7 +115,7 @@ func (a *API) writePodcastDetail(w http.ResponseWriter, r *http.Request, status 
 func (a *API) podcastDetailBody(p *store.Podcast, userID int64) map[string]any {
 	eps, err := a.DB.PodcastEpisodes(p.ID)
 	if err != nil {
-		return map[string]any{"error": err.Error()}
+		return map[string]any{"error": "internal error"}
 	}
 	progs, _ := a.DB.EpisodeProgressByPodcast(userID, p.ID)
 	downloaded := 0
@@ -145,7 +145,7 @@ func (a *API) podcastRefresh(svc *podcast.Service, w http.ResponseWriter, r *htt
 		return
 	}
 	if err != nil {
-		writeJSON(w, 502, map[string]string{"error": err.Error()})
+		writeJSON(w, 502, map[string]string{"error": "feed refresh failed"})
 		return
 	}
 	body := a.podcastDetailBody(p, auth.UserID(r))
@@ -175,12 +175,12 @@ func (a *API) podcastPatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.DB.UpdatePodcastSettings(id, body.AutoDownload, body.MaxEpisodes); err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	p, err := a.DB.Podcast(id)
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	a.writePodcastDetail(w, r, 200, p)
@@ -196,7 +196,7 @@ func (a *API) podcastDelete(svc *podcast.Service, w http.ResponseWriter, r *http
 		return
 	}
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
@@ -304,12 +304,12 @@ func (a *API) runOPMLImport(ctx context.Context, run *opmlRun, urls []string) {
 func (a *API) podcastExportOPML(w http.ResponseWriter, r *http.Request) {
 	podcasts, err := a.DB.Podcasts()
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	data, err := podcast.BuildOPML("libteca podcasts", podcasts)
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	w.Header().Set("Content-Type", "text/xml; charset=utf-8")
@@ -330,7 +330,7 @@ func (a *API) podcastEpisodeStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	if ep.FileID == nil {
@@ -355,7 +355,7 @@ func (a *API) podcastEpisodeProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	var body struct {
@@ -365,6 +365,10 @@ func (a *API) podcastEpisodeProgress(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, 400, map[string]string{"error": "invalid body"})
+		return
+	}
+	if body.Position < 0 {
+		writeJSON(w, 400, map[string]string{"error": "position must be >= 0"})
 		return
 	}
 	p := &store.EpisodeProgress{
@@ -383,7 +387,7 @@ func (a *API) podcastEpisodeProgress(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := a.DB.SetEpisodeProgress(p); err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	pct, pos, fin := episodeProgressView(ep, p)

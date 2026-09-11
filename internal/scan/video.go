@@ -140,16 +140,12 @@ func scanVideoLibrary(db *store.DB, lib *store.Library, coversDir string, tv boo
 				w.Description = &d
 			}
 		}
-		workID, err := db.UpsertWork(w)
-		if err != nil {
-			return count, err
+		type probedVid struct {
+			f        *vidFile
+			edTitle  string
+			rawTitle string
 		}
-		if w.Created {
-			tr.work()
-		}
-		if err := applyNFO(db, workID, nfo); err != nil {
-			fmt.Fprintf(os.Stderr, "libteca: skip nfo %s: %v\n", top, err)
-		}
+		var probed []probedVid
 		for i := range group {
 			f := &group[i]
 			if skip[i] {
@@ -170,32 +166,54 @@ func scanVideoLibrary(db *store.DB, lib *store.Library, coversDir string, tv boo
 			}
 			rawTitle := edTitle
 			edTitle = episodeTitleFromNFO(f.path, edTitle)
-			dur := f.duration
-			e := &store.Edition{WorkID: workID, Format: "video", Title: edTitle, DurationSecs: &dur}
-			if tv {
-				s, ep := f.season, f.episode
-				e.SeasonNum, e.EpisodeNum = &s, &ep
-				e.Position = int64(ep)
-			}
-			editionID, err := db.UpsertEdition(e)
+			probed = append(probed, probedVid{f: f, edTitle: edTitle, rawTitle: rawTitle})
+		}
+		var workID int64
+		err := db.Update(func(tx *store.Tx) error {
+			var err error
+			workID, err = tx.UpsertWork(w)
 			if err != nil {
-				return count, err
+				return err
 			}
-			if edTitle != rawTitle || (tv && f.epTitle != "") {
-				_ = db.SetEpisodeTitle(editionID, edTitle)
+			if w.Created {
+				tr.work()
 			}
-			c, ct, vc, w_, h, br := f.codec, f.container, f.vcodec, f.width, f.height, f.bitrate
-			fr := &store.FileRec{
-				EditionID: editionID, Path: f.path, Seq: 1,
-				SizeBytes: f.size, MtimeSecs: f.mtime, Hash: &f.hash,
-				Codec: &c, VideoCodec: &vc, Width: &w_, Height: &h, Container: &ct,
-				Bitrate: &br, DurationSecs: f.duration, Chapters: "[]",
+			if err := applyNFO(tx, workID, nfo); err != nil {
+				fmt.Fprintf(os.Stderr, "libteca: skip nfo %s: %v\n", top, err)
 			}
-			if err := db.UpsertFile(fr); err != nil {
-				return count, err
+			for _, pv := range probed {
+				f := pv.f
+				dur := f.duration
+				e := &store.Edition{WorkID: workID, Format: "video", Title: pv.edTitle, DurationSecs: &dur}
+				if tv {
+					s, ep := f.season, f.episode
+					e.SeasonNum, e.EpisodeNum = &s, &ep
+					e.Position = int64(ep)
+				}
+				editionID, err := tx.UpsertEdition(e)
+				if err != nil {
+					return err
+				}
+				if pv.edTitle != pv.rawTitle || (tv && f.epTitle != "") {
+					_ = tx.SetEpisodeTitle(editionID, pv.edTitle)
+				}
+				c, ct, vc, w_, h, br := f.codec, f.container, f.vcodec, f.width, f.height, f.bitrate
+				fr := &store.FileRec{
+					EditionID: editionID, Path: f.path, Seq: 1,
+					SizeBytes: f.size, MtimeSecs: f.mtime, Hash: &f.hash,
+					Codec: &c, VideoCodec: &vc, Width: &w_, Height: &h, Container: &ct,
+					Bitrate: &br, DurationSecs: f.duration, Chapters: "[]",
+				}
+				if err := tx.UpsertFile(fr); err != nil {
+					return err
+				}
+				tr.file(fr.Inserted)
+				count++
 			}
-			tr.file(fr.Inserted)
-			count++
+			return nil
+		})
+		if err != nil {
+			return count, err
 		}
 		if err := ensureCoverVideo(db, workID, top, group[0].path, coversDir); err != nil {
 			return count, err
@@ -356,14 +374,15 @@ func scanMusicLibrary(db *store.DB, lib *store.Library, coversDir string, tr *tr
 		}
 		artistPtr := nullable(artist)
 		w := &store.Work{LibraryID: lib.ID, Title: title, Author: &artistPtr}
-		workID, err := db.UpsertWork(w)
-		if err != nil {
-			return count, err
+		type probedTrack struct {
+			t     *track
+			title string
+			info  *audio.Info
+			hash  string
 		}
-		if w.Created {
-			tr.work()
-		}
-		for i, t := range group {
+		var probedTracks []probedTrack
+		for i := range group {
+			t := &group[i]
 			if skip[i] {
 				continue
 			}
@@ -376,24 +395,42 @@ func scanMusicLibrary(db *store.DB, lib *store.Library, coversDir string, tr *tr
 			if v := info.Meta["title"]; v != "" {
 				trackTitle = v
 			}
-			dur := info.Duration
-			e := &store.Edition{WorkID: workID, Format: "audio", Title: trackTitle, DurationSecs: &dur, Position: int64(i + 1)}
-			editionID, err := db.UpsertEdition(e)
+			probedTracks = append(probedTracks, probedTrack{t: t, title: trackTitle, info: info, hash: hashFile(t.path, t.size)})
+		}
+		var workID int64
+		err := db.Update(func(tx *store.Tx) error {
+			var err error
+			workID, err = tx.UpsertWork(w)
 			if err != nil {
-				return count, err
+				return err
 			}
-			c, ct, br := info.Codec, info.Container, info.Bitrate
-			hash := hashFile(t.path, t.size)
-			fr := &store.FileRec{
-				EditionID: editionID, Path: t.path, Seq: 1, SizeBytes: t.size, MtimeSecs: t.mtime,
-				Hash: &hash, Codec: &c, Container: &ct, Bitrate: &br,
-				DurationSecs: info.Duration, Chapters: "[]",
+			if w.Created {
+				tr.work()
 			}
-			if err := db.UpsertFile(fr); err != nil {
-				return count, err
+			for i, pt := range probedTracks {
+				dur := pt.info.Duration
+				e := &store.Edition{WorkID: workID, Format: "audio", Title: pt.title, DurationSecs: &dur, Position: int64(i + 1)}
+				editionID, err := tx.UpsertEdition(e)
+				if err != nil {
+					return err
+				}
+				c, ct, br := pt.info.Codec, pt.info.Container, pt.info.Bitrate
+				hash := pt.hash
+				fr := &store.FileRec{
+					EditionID: editionID, Path: pt.t.path, Seq: 1, SizeBytes: pt.t.size, MtimeSecs: pt.t.mtime,
+					Hash: &hash, Codec: &c, Container: &ct, Bitrate: &br,
+					DurationSecs: pt.info.Duration, Chapters: "[]",
+				}
+				if err := tx.UpsertFile(fr); err != nil {
+					return err
+				}
+				tr.file(fr.Inserted)
+				count++
 			}
-			tr.file(fr.Inserted)
-			count++
+			return nil
+		})
+		if err != nil {
+			return count, err
 		}
 		if err := ensureCoverVideo(db, workID, top, group[0].path, coversDir); err != nil {
 			return count, err

@@ -473,6 +473,11 @@ func TestPodcastEpisodeProgressPersistence(t *testing.T) {
 		t.Fatalf("finished post = %d %v", code, body)
 	}
 
+	// negative position bounces
+	if code, _ = doPodcastReq(t, srv, "POST", "/api/core/podcasts/episodes/"+epID+"/progress", token, map[string]any{"position": -5}); code != 400 {
+		t.Fatalf("negative position = %d, want 400", code)
+	}
+
 	// unknown episode
 	if code, _ = doPodcastReq(t, srv, "POST", "/api/core/podcasts/episodes/999999/progress", token, map[string]any{"position": 1}); code != 404 {
 		t.Fatalf("unknown episode progress = %d, want 404", code)

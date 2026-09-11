@@ -171,6 +171,7 @@ export function PodcastsView() {
 
 function PodcastShow(props: { id: number; onBack: () => void; onChanged: () => void }) {
   const [pod, setPod] = useState<PodcastDetailBody | null>(null);
+  const [loadErr, setLoadErr] = useState(false);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   const [confirmDel, setConfirmDel] = useState(false);
@@ -187,8 +188,8 @@ function PodcastShow(props: { id: number; onBack: () => void; onChanged: () => v
   playingRef.current = playing;
 
   const load = () => api(`/podcasts/${props.id}`)
-    .then((r: PodcastDetailBody) => { setPod(r); setMaxEp(String(r.maxEpisodes)); })
-    .catch(() => setPod(null));
+    .then((r: PodcastDetailBody) => { setPod(r); setMaxEp(String(r.maxEpisodes)); setLoadErr(false); })
+    .catch(() => { setPod(null); setLoadErr(true); });
   useEffect(() => { setPlaying(null); load(); }, [props.id]);
 
   const saveProgress = (epId: number, pos: number, finished = false) => {
@@ -221,26 +222,46 @@ function PodcastShow(props: { id: number; onBack: () => void; onChanged: () => v
 
   const refreshFeed = async () => {
     setErr(""); setMsg(""); setBusy(true);
-    const res: PodcastDetailBody | { error: string } = await api(`/podcasts/${props.id}/refresh`, { method: "POST" });
-    setBusy(false);
-    if ("error" in res) { setErr(res.error); return; }
-    setPod(res);
-    setMsg(res.changed ? "New episodes found" : "Up to date");
+    try {
+      const res: PodcastDetailBody | { error: string } = await api(`/podcasts/${props.id}/refresh`, { method: "POST" });
+      if ("error" in res) { setErr(res.error); return; }
+      setPod(res);
+      setMsg(res.changed ? "New episodes found" : "Up to date");
+    } catch {
+      setErr("Couldn't reach the server.");
+    } finally {
+      setBusy(false);
+    }
   };
 
   const patch = async (body: object) => {
-    setErr(""); setMsg("");
-    const res: PodcastDetailBody | { error: string } = await api(`/podcasts/${props.id}`, { method: "PATCH", body: JSON.stringify(body) });
-    if ("error" in res) { setErr(res.error); return; }
-    setPod(res);
-    setMaxEp(String(res.maxEpisodes));
-    props.onChanged();
+    setErr(""); setMsg(""); setBusy(true);
+    try {
+      const res: PodcastDetailBody | { error: string } = await api(`/podcasts/${props.id}`, { method: "PATCH", body: JSON.stringify(body) });
+      if ("error" in res) { setErr(res.error); return; }
+      setPod(res);
+      setMaxEp(String(res.maxEpisodes));
+      props.onChanged();
+    } catch {
+      setErr("Couldn't reach the server.");
+    } finally {
+      setBusy(false);
+    }
   };
 
   const del = async () => {
-    setErr("");
-    const res: { error?: string } = await api(`/podcasts/${props.id}`, { method: "DELETE" });
-    if (res.error) { setErr(res.error); setConfirmDel(false); return; }
+    if (busy) return;
+    setErr(""); setBusy(true);
+    try {
+      const res: { error?: string } = await api(`/podcasts/${props.id}`, { method: "DELETE" });
+      if (res.error) { setErr(res.error); setConfirmDel(false); return; }
+    } catch {
+      setErr("Couldn't reach the server.");
+      setConfirmDel(false);
+      return;
+    } finally {
+      setBusy(false);
+    }
     props.onBack();
     props.onChanged();
   };
@@ -266,7 +287,11 @@ function PodcastShow(props: { id: number; onBack: () => void; onChanged: () => v
   return (
     <div style={{ paddingBottom: playing != null ? "5.2rem" : 0 }}>
       <button className="press" style={backLink} onClick={props.onBack}><IconChevronLeft size={16} /> Podcasts</button>
-      {pod ? (
+      {loadErr && !pod ? (
+        <EmptyState title="Couldn't load this podcast">
+          <button style={primaryBtn} type="button" onClick={load}>Retry</button>
+        </EmptyState>
+      ) : pod ? (
         <div style={{ display: "flex", gap: "2rem", alignItems: "flex-start", flexWrap: "wrap" }}>
           <PodcastCover pod={pod} size="12rem" />
           <div style={{ display: "flex", flexDirection: "column", gap: "0.65rem", alignItems: "flex-start", minWidth: 0, flex: 1 }}>
@@ -298,7 +323,7 @@ function PodcastShow(props: { id: number; onBack: () => void; onChanged: () => v
               </button>
               {confirmDel ? (
                 <span style={{ display: "inline-flex", gap: "0.45rem", alignItems: "center" }}>
-                  <button style={{ ...ghostBtn, color: c.danger, borderColor: c.danger }} type="button" onClick={del}>Confirm delete</button>
+                  <button style={{ ...ghostBtn, color: c.danger, borderColor: c.danger }} type="button" disabled={busy} onClick={del}>Confirm delete</button>
                   <button style={ghostBtn} type="button" onClick={() => setConfirmDel(false)}>Cancel</button>
                 </span>
               ) : (

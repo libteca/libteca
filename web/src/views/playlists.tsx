@@ -173,7 +173,7 @@ function PlaylistList() {
   const [renaming, setRenaming] = useState<number | null>(null);
   const [renameVal, setRenameVal] = useState("");
 
-  const refresh = () => api("/playlists").then((r: Playlist[]) => setLists(Array.isArray(r) ? r : [])).catch(() => setLists([]));
+  const refresh = () => api("/playlists").then((r: Playlist[]) => { if (Array.isArray(r)) setLists(r); }).catch(() => setLists([]));
   useEffect(() => { refresh(); }, []);
 
   const create = async (e: Event) => {
@@ -257,16 +257,17 @@ function PlaylistList() {
 function PlaylistDetail(props: { id: number }) {
   const [p, setP] = useState<PlaylistDetail | null>(null);
   const [notFound, setNotFound] = useState(false);
+  const [loadErr, setLoadErr] = useState(false);
   const [err, setErr] = useState("");
   const [playing, setPlaying] = useState(false);
   const [moving, setMoving] = useState(false);
 
   const refresh = () => api(`/playlists/${props.id}`)
     .then((r: PlaylistDetail & { error?: string }) => {
-      if (r && !r.error) setP(r);
+      if (r && !r.error) { setP(r); setNotFound(false); setLoadErr(false); }
       else setNotFound(true);
     })
-    .catch(() => setNotFound(true));
+    .catch(() => setLoadErr(true));
   useEffect(() => { refresh(); }, [props.id]);
 
   const removeItem = async (editionId: number) => {
@@ -300,6 +301,16 @@ function PlaylistDetail(props: { id: number }) {
         <button className="press" style={backLink} onClick={() => { location.hash = "#/playlists"; }}><IconChevronLeft size={16} /> Playlists</button>
         <EmptyState title="Playlist not found" hint="It may have been deleted.">
           <a style={linkBtn} href="#/playlists">Back to playlists</a>
+        </EmptyState>
+      </div>
+    );
+  }
+  if (loadErr && !p) {
+    return (
+      <div>
+        <button className="press" style={backLink} onClick={() => { location.hash = "#/playlists"; }}><IconChevronLeft size={16} /> Playlists</button>
+        <EmptyState title="Couldn't reach the server" hint="The playlist failed to load.">
+          <button style={primaryBtn} onClick={refresh}>Retry</button>
         </EmptyState>
       </div>
     );

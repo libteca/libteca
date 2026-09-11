@@ -26,9 +26,11 @@ export function ReadView(props: { edition: number; work?: number; format?: strin
     setRetryable(false);
     (async () => {
       let editionInfo: EditionInfo | null = null;
+      let workLoaded = false;
       try {
         if (props.work) {
           const w: WorkDetail = await api(`/works/${props.work}`);
+          workLoaded = !!w;
           const ed = w?.editions?.find((e) => e.id === props.edition);
           if (ed) {
             editionInfo = { id: ed.id, format: ed.format.toLowerCase(), title: ed.title || w.title, isFinished: ed.isFinished };
@@ -39,6 +41,9 @@ export function ReadView(props: { edition: number; work?: number; format?: strin
       } catch { /* fall through to error state */ }
       if (!alive) return;
       if (!editionInfo) {
+        if (workLoaded) {
+          try { localStorage.removeItem(`libteca-epub-loc-${props.edition}`); } catch { /* storage unavailable */ }
+        }
         setError(props.format ? "Edition not found." : "Missing work reference. Open this edition from its work page.");
         setLoaded(true);
         return;

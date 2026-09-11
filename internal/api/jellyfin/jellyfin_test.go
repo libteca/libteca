@@ -56,8 +56,6 @@ func TestJFAuthXEmbyAuthorizationToken(t *testing.T) {
 
 func TestSessionsListLiveHub(t *testing.T) {
 	e := newEnv(t)
-	socketHub = newHub()
-	t.Cleanup(func() { socketHub = newHub() })
 
 	rec := e.get(t, "/Sessions", nil)
 	if rec.Code != 200 {
@@ -67,7 +65,7 @@ func TestSessionsListLiveHub(t *testing.T) {
 		t.Fatalf("empty hub = %s", rec.Body.String())
 	}
 
-	socketHub.update(&liveSession{
+	e.jf.hub.update(&liveSession{
 		DeviceID: "tv-dev", PlaySessionID: "ps-1", UserID: e.user,
 		Client: "JMP", DeviceName: "Living Room", PosTicks: 42, Paused: true,
 	})
@@ -109,8 +107,12 @@ func TestSessionStoppedWritesOnceAndClosesTranscode(t *testing.T) {
 	}
 	tc := transcode.New(dir)
 	sid := "ps-42"
-	if _, err := tc.Get(sid, 1, filepath.Join(dir, "missing.mkv"), 0); err != nil {
-		t.Log(err)
+	_, getErr := tc.Get(sid, 1, filepath.Join(dir, "missing.mkv"), 0)
+	if getErr != nil {
+		if _, err := os.Stat(filepath.Join(dir, "transcode", sid)); !os.IsNotExist(err) {
+			t.Fatalf("failed session dir must be cleaned: %v", err)
+		}
+		return
 	}
 	sessDir := filepath.Join(dir, "transcode", sid)
 	if _, err := os.Stat(sessDir); err != nil {
@@ -226,6 +228,103 @@ func TestLibraryItemTypes(t *testing.T) {
 		if len(dto.Items) != 1 || dto.Items[0].Type != tc.want {
 			t.Fatalf("%s items = %+v, want Type %s", tc.libType, dto.Items, tc.want)
 		}
+	}
+}
+
+func TestUserItemsParentCasingAndSeasonBrowse(t *testing.T) {
+	e := newEnv(t)
+	lib := e.addLibrary(t, "tv")
+	work := e.addSeries(t, lib, "Show", 2, 2)
+
+	rec := e.get(t, fmt.Sprintf("/Users/%d/Items?parentId=lib%d", e.user, lib), nil)
+	if rec.Code != 200 {
+		t.Fatalf("lowercase parentId status %d: %s", rec.Code, rec.Body.String())
+	}
+	var dto struct {
+		Items []struct {
+			Id   string `json:"Id"`
+			Type string `json:"Type"`
+		} `json:"Items"`
+		Total int `json:"TotalRecordCount"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &dto); err != nil {
+		t.Fatal(err)
+	}
+	if dto.Total != 1 || len(dto.Items) != 1 || dto.Items[0].Type != "Series" {
+		t.Fatalf("series browse via lowercase parentId = %+v", dto)
+	}
+
+	rec = e.get(t, fmt.Sprintf("/Users/%d/Items?PARENTID=w%d", e.user, work), nil)
+	if err := json.Unmarshal(rec.Body.Bytes(), &dto); err != nil {
+		t.Fatal(err)
+	}
+	if dto.Total != 2 || len(dto.Items) != 2 || dto.Items[0].Type != "Season" {
+		t.Fatalf("series children = %+v", dto)
+	}
+
+	rec = e.get(t, fmt.Sprintf("/Users/%d/Items?ParentId=s%d-2&includeitemtypes=Episode", e.user, work), nil)
+	if err := json.Unmarshal(rec.Body.Bytes(), &dto); err != nil {
+		t.Fatal(err)
+	}
+	if dto.Total != 2 || len(dto.Items) != 2 || dto.Items[0].Type != "Episode" {
+		t.Fatalf("season children = %+v", dto)
+	}
+
+	rec = e.get(t, fmt.Sprintf("/Users/%d/Items?ParentId=w%d&IncludeItemTypes=Episode", e.user, work), nil)
+	if err := json.Unmarshal(rec.Body.Bytes(), &dto); err != nil {
+		t.Fatal(err)
+	}
+	if dto.Total != 4 || len(dto.Items) != 4 {
+		t.Fatalf("all episodes under series = %+v", dto)
+	}
+}
+
+func TestPlayableWithNoFilesIs404(t *testing.T) {
+	e := newEnv(t)
+	lib := e.addLibrary(t, "movies")
+	work := e.addWork(t, lib, "Gone")
+	now := time.Now().UnixMilli()
+	res, err := e.db.Exec(`INSERT INTO editions (work_id, format, title, created_at) VALUES (?,?,?,?)`,
+		work, "video", "Gone", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edID, _ := res.LastInsertId()
+	for _, path := range []string{
+		fmt.Sprintf("/Videos/e%d/stream", edID),
+		fmt.Sprintf("/Audio/e%d/universal", edID),
+		fmt.Sprintf("/Videos/e%d/Trickplay/320/manifest.json", edID),
+	} {
+		rec := e.get(t, path, nil)
+		if rec.Code != 404 {
+			t.Fatalf("%s = %d, want 404 (no panic)", path, rec.Code)
+		}
+	}
+	req := httptest.NewRequest("POST", fmt.Sprintf("/Items/e%d/PlaybackInfo", edID), nil)
+	req.Header.Set("X-Emby-Token", e.token)
+	rec := httptest.NewRecorder()
+	e.h.ServeHTTP(rec, req)
+	if rec.Code != 404 {
+		t.Fatalf("PlaybackInfo = %d, want 404 (no panic)", rec.Code)
+	}
+}
+
+func TestSystemPingAndInfo(t *testing.T) {
+	e := newEnv(t)
+	rec := e.get(t, "/System/Ping", nil)
+	if rec.Code != 200 || strings.TrimSpace(rec.Body.String()) == "" {
+		t.Fatalf("ping = %d %q", rec.Code, rec.Body.String())
+	}
+	rec = e.get(t, "/System/Info", nil)
+	if rec.Code != 200 {
+		t.Fatalf("info status %d: %s", rec.Code, rec.Body.String())
+	}
+	var info map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &info); err != nil {
+		t.Fatal(err)
+	}
+	if info["Id"] != "libteca-server" || info["Version"] != "10.10.0" {
+		t.Fatalf("info = %v", info)
 	}
 }
 

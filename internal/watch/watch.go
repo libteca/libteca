@@ -194,6 +194,13 @@ func (w *Watcher) fire(libID int64) {
 func (w *Watcher) triggerAndWait(ctx context.Context, libID int64) {
 	jobID, err := w.scan.TriggerScan(libID)
 	if err != nil {
+		// A change that arrived while a scan was already running must not be
+		// dropped: its debounce timer fired into the running scan and was
+		// consumed. Re-arm so a fresh scan catches it once the current one
+		// finishes; persistent failures (library gone) do not re-arm.
+		if w.scanInFlight(libID) {
+			w.markDirty(libID)
+		}
 		fmt.Fprintf(os.Stderr, "libteca: watch: scan for library %d skipped: %v\n", libID, err)
 		return
 	}
@@ -201,6 +208,11 @@ func (w *Watcher) triggerAndWait(ctx context.Context, libID int64) {
 	if ctx.Err() == nil {
 		w.reconcileMissing(libID)
 	}
+}
+
+func (w *Watcher) scanInFlight(libID int64) bool {
+	jobs, err := w.db.ListScanJobs(libID, 1)
+	return err == nil && len(jobs) > 0 && jobs[0].Status == "running"
 }
 
 func (w *Watcher) waitForJob(ctx context.Context, jobID int64) {

@@ -49,7 +49,7 @@ func (a *API) editionMove(w http.ResponseWriter, r *http.Request) {
 	}
 	src, err := a.DB.WorkByID(e.WorkID)
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 
@@ -76,7 +76,7 @@ func (a *API) editionMove(w http.ResponseWriter, r *http.Request) {
 		nw := &store.Work{LibraryID: targetLib, Title: strings.TrimSpace(body.NewTitle), Author: body.NewAuthor}
 		id, err := a.DB.EnsureWorkInLibrary(nw)
 		if err != nil {
-			writeJSON(w, 500, map[string]string{"error": err.Error()})
+			writeJSON(w, 500, map[string]string{"error": "internal error"})
 			return
 		}
 		targetID = id
@@ -91,7 +91,7 @@ func (a *API) editionMove(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 404, map[string]string{"error": "edition not found"})
 			return
 		}
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	resp := map[string]any{
@@ -127,7 +127,7 @@ func (a *API) editionSplit(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 404, map[string]string{"error": "edition not found"})
 			return
 		}
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	writeJSON(w, 200, map[string]any{
@@ -164,7 +164,7 @@ func (a *API) workMerge(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 400, map[string]string{"error": "cannot merge a work into itself"})
 			return
 		}
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "intoWorkId": body.IntoWorkID})

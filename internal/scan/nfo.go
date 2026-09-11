@@ -2,6 +2,7 @@ package scan
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/xml"
 	"fmt"
 	"os"
@@ -12,6 +13,15 @@ import (
 
 	"github.com/libteca/libteca/internal/store"
 )
+
+// workDB is the work-mutation surface applyNFO needs; satisfied by both
+// *store.DB and *store.Tx so it composes inside scan batch transactions.
+type workDB interface {
+	WorkByID(id int64) (*store.Work, error)
+	WorkGenres(workID int64) []string
+	SetWorkGenres(workID int64, genres []string) error
+	Exec(query string, args ...any) (sql.Result, error)
+}
 
 // NFO is the common Kodi/Jellyfin sidecar subset: movie, tvshow,
 // episodedetails, season. Unknown child tags are ignored.
@@ -226,7 +236,7 @@ func episodeTitleFromNFO(mediaPath, current string) string {
 // applyNFO overlays sidecar title/plot onto the work (NFO wins when present)
 // and writes genres only when the work has none. Author is left to the caller
 // (video stores year there; audio stores the person).
-func applyNFO(db *store.DB, workID int64, n *NFO) error {
+func applyNFO(db workDB, workID int64, n *NFO) error {
 	if n == nil {
 		return nil
 	}
@@ -242,8 +252,8 @@ func applyNFO(db *store.DB, workID int64, n *NFO) error {
 	if d := n.Description(); d != "" {
 		desc = &d
 	}
-	if _, err := db.Exec(`UPDATE works SET title = ?, title_l = lower(title), description = ?, updated_at = ? WHERE id = ?`,
-		title, desc, time.Now().UnixMilli(), workID); err != nil {
+	if _, err := db.Exec(`UPDATE works SET title = ?, title_l = ?, description = ?, updated_at = ? WHERE id = ?`,
+		title, strings.ToLower(title), desc, time.Now().UnixMilli(), workID); err != nil {
 		return err
 	}
 	if len(n.Genres) > 0 && len(db.WorkGenres(workID)) == 0 {

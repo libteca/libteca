@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { media } from "../api";
 import { fmtClock } from "../util";
 import { c, mono, playerBar } from "../styles";
+import { toast } from "../toast";
 import { IconBack30, IconFwd30, IconMoon, IconPause, IconPlay } from "../components/svg";
 
 export type PlayerFile = { id: number; title: string; duration: number };
@@ -73,7 +74,7 @@ export function AudioPlayer(props: {
 
   useEffect(() => {
     if (audioRef.current) audioRef.current.playbackRate = rate;
-    localStorage.setItem("libteca-rate", String(rate));
+    try { localStorage.setItem("libteca-rate", String(rate)); } catch { /* storage unavailable */ }
   }, [rate]);
 
   useEffect(() => {
@@ -211,6 +212,7 @@ export function AudioPlayer(props: {
           pendingOffset.current = 0;
         }}
         onPlay={() => { queueEnded.current = false; setPlaying(true); if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "playing"; }}
+        onError={() => { setPlaying(false); toast("Playback failed — the audio could not be loaded", "error"); }}
         onPause={() => {
           setPlaying(false);
           if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "paused";

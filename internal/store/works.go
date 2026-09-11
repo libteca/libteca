@@ -164,6 +164,10 @@ func (d *DB) WorkByID(id int64) (*Work, error) {
 	return workRow(d, id)
 }
 
+func (t *Tx) WorkByID(id int64) (*Work, error) {
+	return workRow(t, id)
+}
+
 func workRow(q dbtx, id int64) (*Work, error) {
 	var w Work
 	err := q.QueryRow(`SELECT id, library_id, title, subtitle, author, description, cover_path, created_at, updated_at FROM works WHERE id = ?`, id).

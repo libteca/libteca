@@ -59,13 +59,15 @@ export function WorkView(props: { id: number }) {
   const [videoEdition, setVideoEdition] = useState<number | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [missing, setMissing] = useState(false);
+  const [loadErr, setLoadErr] = useState(false);
 
   const reload = () => {
     setMissing(false);
+    setLoadErr(false);
     api(`/works/${props.id}`).then((d: WorkDetail) => {
       if (!d || !Array.isArray(d.editions)) { setW(null); setMissing(true); return; }
       setW(d);
-    }).catch(() => { setW(null); setMissing(true); });
+    }).catch(() => { setW(null); setLoadErr(true); });
   };
   useEffect(() => { setVideoEdition(null); reload(); }, [props.id]);
   useEffect(() => {
@@ -80,6 +82,13 @@ export function WorkView(props: { id: number }) {
   }, [w]);
 
   if (missing) return <EmptyState title="Not found" hint="This work is gone, or the link is stale." />;
+  if (loadErr) {
+    return (
+      <EmptyState title="Couldn't reach the server" hint="The work failed to load.">
+        <button style={primaryBtn} onClick={reload}>Retry</button>
+      </EmptyState>
+    );
+  }
   if (!w) return <SkeletonWork />;
   const first = w.editions[0];
   const isTV = w.editions.some((e) => e.seasonNum !== undefined);
@@ -154,7 +163,7 @@ function Wash(props: { id: number; has: boolean; fanart?: boolean; children: Com
 
 function BackButton() {
   return (
-    <button className="press" style={backLink} onClick={() => history.back()}>
+    <button className="press" style={backLink} onClick={() => { location.hash = "#/library"; }}>
       <IconChevronLeft size={16} /> Library
     </button>
   );
@@ -222,7 +231,9 @@ function TrackList(props: { w: WorkDetail }) {
   const saveTrack = async (i: number, position: number, finished = false) => {
     const t = tracks[i];
     if (!t || position <= 1) return;
-    await api(`/progress/${t.id}`, { method: "POST", body: JSON.stringify({ position, duration: t.duration, finished }) });
+    try {
+      await api(`/progress/${t.id}`, { method: "POST", body: JSON.stringify({ position, duration: t.duration, finished }) });
+    } catch { /* offline; next tick retries */ }
   };
 
   const trackAt = (abs: number) => {
@@ -316,7 +327,9 @@ function EditionsView(props: { w: WorkDetail; editionId: number; setEdition: (id
   const save = async (position: number, finished = false) => {
     if (!ed) return;
     if (position <= 1 && !finished) return;
-    await api(`/progress/${ed.id}`, { method: "POST", body: JSON.stringify({ position, duration: ed.duration, finished }) });
+    try {
+      await api(`/progress/${ed.id}`, { method: "POST", body: JSON.stringify({ position, duration: ed.duration, finished }) });
+    } catch { /* offline; next tick retries */ }
   };
 
   const resumeOrPlay = () => {
@@ -526,6 +539,7 @@ function AddToPlaylist(props: { editionId: number; compact?: boolean }) {
   const [added, setAdded] = useState("");
   const [newName, setNewName] = useState("");
   const [err, setErr] = useState("");
+  const wrapRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -533,22 +547,39 @@ function AddToPlaylist(props: { editionId: number; compact?: boolean }) {
     api("/playlists").then((r: PlaylistLite[]) => setLists(Array.isArray(r) ? r : [])).catch(() => setLists([]));
   }, [open]);
 
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    const onDown = (e: Event) => { if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false); };
+    addEventListener("keydown", onKey);
+    document.addEventListener("pointerdown", onDown);
+    return () => { removeEventListener("keydown", onKey); document.removeEventListener("pointerdown", onDown); };
+  }, [open]);
+
   const addTo = async (pl: PlaylistLite) => {
-    const res = await api(`/playlists/${pl.id}/items`, { method: "POST", body: JSON.stringify({ editionId: props.editionId }) });
-    if (res.error) { setErr(res.error); toast(res.error, "error"); return; }
-    const msg = res.added === false ? `Already in ${pl.name}` : `Added to ${pl.name}`;
-    toast(msg);
-    setAdded(msg);
-    setTimeout(() => setOpen(false), 700);
+    try {
+      const res = await api(`/playlists/${pl.id}/items`, { method: "POST", body: JSON.stringify({ editionId: props.editionId }) });
+      if (res.error) { setErr(res.error); toast(res.error, "error"); return; }
+      const msg = res.added === false ? `Already in ${pl.name}` : `Added to ${pl.name}`;
+      toast(msg);
+      setAdded(msg);
+      setTimeout(() => setOpen(false), 700);
+    } catch {
+      setErr("Couldn't reach the server.");
+    }
   };
 
   const createAndAdd = async () => {
     if (!newName.trim()) return;
     setErr("");
-    const res = await api("/playlists", { method: "POST", body: JSON.stringify({ name: newName.trim(), editionIds: [props.editionId] }) });
-    if (res.error) { setErr(res.error); toast(res.error, "error"); return; }
-    toast(`Playlist "${newName.trim()}" created`, "success");
-    setOpen(false);
+    try {
+      const res = await api("/playlists", { method: "POST", body: JSON.stringify({ name: newName.trim(), editionIds: [props.editionId] }) });
+      if (res.error) { setErr(res.error); toast(res.error, "error"); return; }
+      toast(`Playlist "${newName.trim()}" created`, "success");
+      setOpen(false);
+    } catch {
+      setErr("Couldn't reach the server.");
+    }
   };
 
   const btnStyle: preact.JSX.CSSProperties = props.compact
@@ -561,7 +592,7 @@ function AddToPlaylist(props: { editionId: number; compact?: boolean }) {
     );
   }
   return (
-    <div style={{ position: "relative" }}>
+    <div ref={wrapRef} style={{ position: "relative" }}>
       <button type="button" style={{ ...btnStyle, borderColor: c.accent }} onClick={() => setOpen(false)}>+ Playlist</button>
       <div style={{ ...menuCard, left: "auto", right: 0 }}>
         {added ? (
@@ -590,14 +621,31 @@ function EditionMenu(props: { w: WorkDetail; edition: { id: number; title: strin
   const [mergeTarget, setMergeTarget] = useState<WorkLite | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
+    const onDown = (e: Event) => { if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) close(); };
+    addEventListener("keydown", onKey);
+    document.addEventListener("pointerdown", onDown);
+    return () => { removeEventListener("keydown", onKey); document.removeEventListener("pointerdown", onDown); };
+  }, [open]);
 
   const post = async (path: string, body: unknown) => {
     setBusy(true);
     setErr("");
-    const res = await api(path, { method: "POST", body: JSON.stringify(body) });
+    let res: { workId?: number; sourceWorkId?: number; sourceDeleted?: boolean; error?: string } | null = null;
+    try {
+      res = await api(path, { method: "POST", body: JSON.stringify(body) });
+    } catch {
+      setErr("Couldn't reach the server.");
+      setBusy(false);
+      return null;
+    }
     setBusy(false);
     if (res && res.error) { setErr(res.error); return null; }
-    return res as { workId?: number; sourceWorkId?: number; sourceDeleted?: boolean } | null;
+    return res;
   };
 
   const close = () => { setOpen(false); setMode(""); setMergeTarget(null); setErr(""); };
@@ -633,8 +681,8 @@ function EditionMenu(props: { w: WorkDetail; edition: { id: number; title: strin
   }
 
   return (
-    <div style={{ position: "relative" }}>
-      <button type="button" style={{ ...ghostBtn, display: "inline-flex", alignItems: "center", gap: "0.4rem", borderColor: c.accent }} onClick={close}>
+    <div ref={wrapRef} style={{ position: "relative" }}>
+      <button type="button" style={{ ...ghostBtn, display: "inline-flex", alignItems: "center", gap: "0.4rem" }} onClick={close}>
         <IconDots /> Manage
       </button>
       <div style={menuCard}>

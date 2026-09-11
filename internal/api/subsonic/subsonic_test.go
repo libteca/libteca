@@ -274,6 +274,34 @@ func TestTokenAuthNeedsCapture(t *testing.T) {
 	}
 }
 
+func TestTokenAuthRejectsStaleSecret(t *testing.T) {
+	e := newEnv(t)
+	if rec := e.get(t, "/rest/ping.view?"+plainAuth+"&f=json"); decode(t, rec)["status"] != "ok" {
+		t.Fatalf("plain login failed: %s", rec.Body.String())
+	}
+	salt := "pepper"
+	oldToken := fmt.Sprintf("%x", md5.Sum([]byte("secret"+salt)))
+	rec := e.get(t, "/rest/ping.view?u=tyler&t="+oldToken+"&s="+salt+"&f=json")
+	if decode(t, rec)["status"] != "ok" {
+		t.Fatalf("token auth before password change failed: %s", rec.Body.String())
+	}
+	if _, err := e.db.Exec(`UPDATE users SET password_hash = ? WHERE id = ?`, auth.Hash("rotated"), e.user); err != nil {
+		t.Fatal(err)
+	}
+	rec = e.get(t, "/rest/ping.view?u=tyler&t="+oldToken+"&s="+salt+"&f=json")
+	if subMap(t, decode(t, rec), "error")["code"].(float64) != 40 {
+		t.Fatal("token minted from the old password must fail after a password change")
+	}
+	if _, has := e.db.GetSetting(subsonicSecretKey(e.user)); has {
+		t.Fatal("stale subsonic secret must be dropped after rejection")
+	}
+	newToken := fmt.Sprintf("%x", md5.Sum([]byte("rotated"+salt)))
+	rec = e.get(t, "/rest/ping.view?u=tyler&t="+newToken+"&s="+salt+"&f=json")
+	if subMap(t, decode(t, rec), "error")["code"].(float64) != 40 {
+		t.Fatal("secret for the new password must require a fresh plain login")
+	}
+}
+
 func TestGetArtistsShape(t *testing.T) {
 	e := newEnv(t)
 	wywh, _, kob, wall := seedMusic(t, e)

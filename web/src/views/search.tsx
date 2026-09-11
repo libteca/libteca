@@ -115,24 +115,33 @@ export function SearchBox() {
 export function SearchPage(props: { q: string }) {
   const [items, setItems] = useState<SearchItem[]>([]);
   const [done, setDone] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [retry, setRetry] = useState(0);
 
   useEffect(() => {
     setDone(false);
+    setFailed(false);
     api(`/search?q=${encodeURIComponent(props.q)}`)
-      .then((d) => setItems(d.results || []))
-      .catch(() => setItems([]))
-      .finally(() => setDone(true));
-  }, [props.q]);
+      .then((d) => {
+        if (d && d.error) { setItems([]); setFailed(true); setDone(true); return; }
+        setItems(d.results || []);
+        setDone(true);
+      })
+      .catch(() => { setItems([]); setFailed(true); setDone(true); });
+  }, [props.q, retry]);
 
   return (
     <div>
       <h2 style={sectionTitle}>{props.q}</h2>
       <p style={{ ...muted, marginBottom: "1.4rem" }}>
-        {items.length > 0
-          ? `${items.length} result${items.length === 1 ? "" : "s"}`
-          : done
-            ? (props.q.trim().length < 2 ? "Keep typing — search needs at least 2 characters." : "Nothing found.")
-            : ""}
+        {failed
+          ? "Search failed."
+          : items.length > 0
+            ? `${items.length} result${items.length === 1 ? "" : "s"}`
+            : done
+              ? (props.q.trim().length < 2 ? "Keep typing — search needs at least 2 characters." : "Nothing found.")
+              : ""}
+        {failed && <button onClick={() => setRetry((n) => n + 1)} style={{ ...muted, background: "none", border: "none", cursor: "pointer", textDecoration: "underline", padding: 0, marginLeft: "0.5rem", font: "inherit" }}>Retry</button>}
       </p>
       {!done && items.length === 0 && <QuietLoad />}
       {group(items).map(([type, list]) => (

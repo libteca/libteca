@@ -170,6 +170,25 @@ func TestManifestFromFakeSheets(t *testing.T) {
 	}
 }
 
+func TestGenerateFailureClearsPartialTiles(t *testing.T) {
+	g := newTestGen(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		dir := filepath.Dir(args[len(args)-1])
+		os.MkdirAll(dir, 0o700)
+		os.WriteFile(filepath.Join(dir, "0.jpg"), []byte("partial"), 0o644)
+		return nil, errors.New("ffmpeg died mid-encode")
+	})
+	if _, err := g.Tile(context.Background(), "e9", "src.mkv", 320, 1); err == nil {
+		t.Fatal("Tile must fail when ffmpeg fails")
+	}
+	if _, err := os.Stat(g.widthDir("e9", 320)); !os.IsNotExist(err) {
+		t.Fatal("partial tile dir must be removed after a failed generation")
+	}
+	g.run = fakeGen(t)
+	if _, err := g.Tile(context.Background(), "e9", "src.mkv", 320, 1); err != nil {
+		t.Fatalf("Tile after cleanup-retry: %v", err)
+	}
+}
+
 func TestFFmpegIntegration(t *testing.T) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		t.Skip("ffmpeg not in PATH")

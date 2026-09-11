@@ -203,51 +203,59 @@ func scanBook(db *store.DB, lib *store.Library, top string, group []bookFile, co
 			w.Description = &d
 		}
 	}
-	workID, err := db.UpsertWork(w)
-	if err != nil {
-		return err
-	}
-	if w.Created {
-		tr.work()
-	}
-	if err := applyNFO(db, workID, nfo); err != nil {
-		fmt.Fprintf(os.Stderr, "libteca: skip nfo %s: %v\n", top, err)
-	}
-
-	var total float64
-	for _, f := range group {
-		total += f.info.Duration
-	}
-	e := &store.Edition{WorkID: workID, Format: format, Title: title, DurationSecs: &total}
-	editionID, err := db.UpsertEdition(e)
-	if err != nil {
-		return err
-	}
-
-	for seq, f := range group {
-		c := f.info.Codec
-		ct := f.info.Container
-		br := f.info.Bitrate
-		ch := f.info.Channels
-		sr := f.info.SampleRate
-		chap, _ := marshalChapters(f.info.Chapters)
-		if format == "mp3" && len(f.info.Chapters) == 0 {
-			chTitle := metaGet(f.info, "title")
-			if chTitle == "" {
-				chTitle = strings.TrimSuffix(f.name, filepath.Ext(f.name))
-			}
-			chap, _ = marshalChapters([]audio.Chapter{{ID: int64(seq), Start: 0, End: f.info.Duration, Title: chTitle}})
-		}
-		fr := &store.FileRec{
-			EditionID: editionID, Path: f.path, Seq: seq + 1,
-			SizeBytes: f.size, MtimeSecs: f.mtime, Hash: &f.hash,
-			Codec: &c, Container: &ct, Bitrate: &br, Channels: &ch, SampleRate: &sr,
-			DurationSecs: f.info.Duration, Chapters: chap,
-		}
-		if err := db.UpsertFile(fr); err != nil {
+	var workID int64
+	txErr := db.Update(func(tx *store.Tx) error {
+		var err error
+		workID, err = tx.UpsertWork(w)
+		if err != nil {
 			return err
 		}
-		tr.file(fr.Inserted)
+		if w.Created {
+			tr.work()
+		}
+		if err := applyNFO(tx, workID, nfo); err != nil {
+			fmt.Fprintf(os.Stderr, "libteca: skip nfo %s: %v\n", top, err)
+		}
+
+		var total float64
+		for _, f := range group {
+			total += f.info.Duration
+		}
+		e := &store.Edition{WorkID: workID, Format: format, Title: title, DurationSecs: &total}
+		editionID, err := tx.UpsertEdition(e)
+		if err != nil {
+			return err
+		}
+
+		for seq, f := range group {
+			c := f.info.Codec
+			ct := f.info.Container
+			br := f.info.Bitrate
+			ch := f.info.Channels
+			sr := f.info.SampleRate
+			chap, _ := marshalChapters(f.info.Chapters)
+			if format == "mp3" && len(f.info.Chapters) == 0 {
+				chTitle := metaGet(f.info, "title")
+				if chTitle == "" {
+					chTitle = strings.TrimSuffix(f.name, filepath.Ext(f.name))
+				}
+				chap, _ = marshalChapters([]audio.Chapter{{ID: int64(seq), Start: 0, End: f.info.Duration, Title: chTitle}})
+			}
+			fr := &store.FileRec{
+				EditionID: editionID, Path: f.path, Seq: seq + 1,
+				SizeBytes: f.size, MtimeSecs: f.mtime, Hash: &f.hash,
+				Codec: &c, Container: &ct, Bitrate: &br, Channels: &ch, SampleRate: &sr,
+				DurationSecs: f.info.Duration, Chapters: chap,
+			}
+			if err := tx.UpsertFile(fr); err != nil {
+				return err
+			}
+			tr.file(fr.Inserted)
+		}
+		return nil
+	})
+	if txErr != nil {
+		return txErr
 	}
 
 	return ensureCover(db, workID, top, group, coversDir)

@@ -125,6 +125,10 @@ func (a *API) authenticate(r *http.Request) (int64, bool) {
 		if subtle.ConstantTimeCompare([]byte(hex.EncodeToString(sum[:])), []byte(strings.ToLower(token))) != 1 {
 			return 0, false
 		}
+		if !auth.Verify(secret, u.PasswordHash) {
+			a.DB.DeleteSetting(subsonicSecretKey(u.ID))
+			return 0, false
+		}
 		return u.ID, true
 	}
 	pass := r.Form.Get("p")
