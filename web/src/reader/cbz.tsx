@@ -5,8 +5,8 @@ import { c } from "../styles";
 import {
   clamp01, IconChevLeft, IconChevRight, IconFitHeight, IconFitWidth, IconPageDouble,
   IconPageSingle, IconRtl, IconWebtoon, isTypingTarget, loadPref, pageImageNames, pagePercent,
-  pairStart, ReaderMessage, readerControls, readerOverlay, readerStage, savePref, stepPage,
-  TopBar, TapZones, toolBtn, toolBtnActive, useProgressSaver,
+  PagePill, pairStart, ReaderMessage, readerControls, readerOverlay, readerStage, savePref, stepPage,
+  TopBar, TapZones, toolBtn, toolBtnActive, toolBtnCls, useProgressSaver,
   type FitMode, type ProgressPost, type ReaderMode, type ReadingProgress,
 } from "./shared";
 
@@ -14,6 +14,7 @@ const MODE_KEY = "libteca-cbz-mode";
 const FIT_KEY = "libteca-cbz-fit";
 const RTL_KEY = "libteca-cbz-rtl";
 const PREFETCH = 3;
+const EVICT_RADIUS = 10;
 
 type ZipEntryLike = { name: string; async(type: "blob"): Promise<Blob> };
 
@@ -58,11 +59,29 @@ class PageStore {
   }
 
   ensureAround(i: number, radius: number): void {
+    this.evictFar(i);
     this.ensure(i, true);
     for (let d = 1; d <= radius; d++) {
       this.ensure(i + d, true);
       this.ensure(i - d, false);
     }
+  }
+
+  private evictFar(i: number): void {
+    let evicted = false;
+    for (let j = 0; j < this.urls.length; j++) {
+      if (Math.abs(j - i) <= EVICT_RADIUS) continue;
+      const u = this.urls[j];
+      if (u === undefined) {
+        const qi = this.queue.indexOf(j);
+        if (qi >= 0) this.queue.splice(qi, 1);
+        continue;
+      }
+      if (typeof u === "string") URL.revokeObjectURL(u);
+      delete this.urls[j];
+      evicted = true;
+    }
+    if (evicted) this.notify();
   }
 
   warmAll(): void {
@@ -205,7 +224,17 @@ export function CbzReader(props: { editionId: number; title: string; progress: R
         }
         else if (vis.delete(i)) changed = true;
       }
-      if (changed && vis.size) setPage(Math.min(...vis));
+      if (changed && vis.size && pendingScroll.current == null) {
+        let best = -1;
+        let bestTop = Infinity;
+        for (const i of vis) {
+          const el = pageEls.current.get(i);
+          if (!el) continue;
+          const top = el.getBoundingClientRect().top;
+          if (top >= 0 && top < bestTop) { bestTop = top; best = i; }
+        }
+        setPage(best >= 0 ? best : Math.min(...vis));
+      }
     }, { root, rootMargin: "60% 0px", threshold: 0 });
     for (const el of pageEls.current.values()) io.observe(el);
     return () => io.disconnect();
@@ -214,7 +243,12 @@ export function CbzReader(props: { editionId: number; title: string; progress: R
   useEffect(() => {
     if (phase !== "ready" || mode !== "webtoon") return;
     const target = pendingScroll.current;
-    if (target == null || target <= 0) { pendingScroll.current = null; return; }
+    if (target == null) return;
+    if (target <= 0) {
+      scrollRef.current?.scrollTo({ top: 0 });
+      pendingScroll.current = null;
+      return;
+    }
     const store = storeRef.current;
     if (store && store.ready(target)) {
       const el = pageEls.current.get(target);
@@ -225,7 +259,7 @@ export function CbzReader(props: { editionId: number; title: string; progress: R
       }
     }
     store?.ensureAround(target, 1);
-  }, [phase, mode, tick]);
+  }, [phase, mode, tick, page]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -264,30 +298,30 @@ export function CbzReader(props: { editionId: number; title: string; progress: R
   const pageUrl = (i: number): string | null => storeRef.current?.url(i) ?? null;
 
   const percent = count > 0 ? clamp01((page + 1) / count) : 0;
-  const meta = phase === "ready" && count > 0 ? `Page ${page + 1} / ${count} · ${Math.round(percent * 100)}%` : "";
+  const pillText = phase === "ready" && count > 0 ? `Page ${page + 1} / ${count} · ${Math.round(percent * 100)}%` : "";
 
   return (
     <div style={readerOverlay}>
-      <TopBar title={props.title} meta={meta} saveState={saver.state} onBack={props.onBack} />
+      <TopBar title={props.title} saveState={saver.state} onBack={props.onBack} />
       <div style={readerControls}>
-        <button style={toolBtnActive(mode === "single")} title="Single page" onClick={() => setModeAndPersist("single")}><IconPageSingle size={15} /></button>
-        <button style={toolBtnActive(mode === "double")} title="Double page spread" onClick={() => setModeAndPersist("double")}><IconPageDouble size={15} /></button>
-        <button style={toolBtnActive(mode === "webtoon")} title="Webtoon (vertical scroll)" onClick={() => setModeAndPersist("webtoon")}><IconWebtoon size={15} /></button>
+        <button className={toolBtnCls} style={toolBtnActive(mode === "single")} aria-label="Single page" title="Single page" onClick={() => setModeAndPersist("single")}><IconPageSingle size={15} /></button>
+        <button className={toolBtnCls} style={toolBtnActive(mode === "double")} aria-label="Double page spread" title="Double page spread" onClick={() => setModeAndPersist("double")}><IconPageDouble size={15} /></button>
+        <button className={toolBtnCls} style={toolBtnActive(mode === "webtoon")} aria-label="Webtoon (vertical scroll)" title="Webtoon (vertical scroll)" onClick={() => setModeAndPersist("webtoon")}><IconWebtoon size={15} /></button>
         <span style={{ width: "1px", height: "1.1rem", background: c.line, margin: "0 0.35rem" }} />
-        <button style={toolBtnActive(rtl)} title="Right-to-left (manga)" onClick={toggleRtl}><IconRtl size={15} /></button>
+        <button className={toolBtnCls} style={toolBtnActive(rtl)} aria-label="Right-to-left (manga)" title="Right-to-left (manga)" onClick={toggleRtl}><IconRtl size={15} /></button>
         <span style={{ width: "1px", height: "1.1rem", background: c.line, margin: "0 0.35rem" }} />
-        <button style={toolBtnActive(fit === "width")} title="Fit width" disabled={mode === "webtoon"} onClick={() => setFitAndPersist("width")}><IconFitWidth size={15} /></button>
-        <button style={toolBtnActive(fit === "height")} title="Fit height" disabled={mode === "webtoon"} onClick={() => setFitAndPersist("height")}><IconFitHeight size={15} /></button>
+        <button className={toolBtnCls} style={toolBtnActive(fit === "width")} aria-label="Fit width" title="Fit width" disabled={mode === "webtoon"} onClick={() => setFitAndPersist("width")}><IconFitWidth size={15} /></button>
+        <button className={toolBtnCls} style={toolBtnActive(fit === "height")} aria-label="Fit height" title="Fit height" disabled={mode === "webtoon"} onClick={() => setFitAndPersist("height")}><IconFitHeight size={15} /></button>
         <span style={{ flex: 1 }} />
-        <span style={{ color: c.muted, fontSize: "0.75rem", fontVariantNumeric: "tabular-nums" }}>{count > 0 ? `${page + 1} / ${count}` : ""}</span>
         <input
           type="range" min={1} max={Math.max(1, count)} value={page + 1} disabled={count <= 1}
           style={{ width: "clamp(6rem, 20vw, 12rem)", accentColor: c.accent }}
-          onInput={(e) => { const v = Number((e.target as HTMLInputElement).value); if (v >= 1) setPage(v - 1); }}
+          onInput={(e) => { const v = Number((e.target as HTMLInputElement).value); if (v >= 1) { if (mode === "webtoon") pendingScroll.current = v - 1; setPage(v - 1); } }}
           aria-label="Page"
         />
       </div>
       <div style={readerStage}>
+        <PagePill text={pillText} watch={page} />
         {phase !== "ready" && <ReaderMessage text={phase === "error" ? error || "Could not open this comic." : "Loading comic…"} onBack={props.onBack} />}
         {phase === "ready" && count === 0 && <ReaderMessage text="No pages found in this archive." onBack={props.onBack} />}
         {phase === "ready" && count > 0 && mode === "webtoon" && (
@@ -315,9 +349,9 @@ export function CbzReader(props: { editionId: number; title: string; progress: R
                 ? (pairStart(page) + 1 < count ? [pairStart(page), pairStart(page) + 1] : [pairStart(page)]).map((i) => <PageImg key={i} i={i} url={pageUrl(i)} style={pageStyle} />)
                 : <PageImg i={page} url={pageUrl(page)} style={pageStyle} />}
             </div>
-            <TapZones onLeft={() => (rtl ? go(1) : go(-1))} onRight={() => (rtl ? go(-1) : go(1))} />
-            <button aria-label="Previous page" style={{ position: "absolute", left: "0.55rem", top: "50%", transform: "translateY(-50%)", zIndex: 6, ...toolBtn, background: "rgba(18,19,22,0.72)", width: "2.3rem", height: "2.3rem" }} onClick={() => (rtl ? go(1) : go(-1))}><IconChevLeft size={18} /></button>
-            <button aria-label="Next page" style={{ position: "absolute", right: "0.55rem", top: "50%", transform: "translateY(-50%)", zIndex: 6, ...toolBtn, background: "rgba(18,19,22,0.72)", width: "2.3rem", height: "2.3rem" }} onClick={() => (rtl ? go(-1) : go(1))}><IconChevRight size={18} /></button>
+            <TapZones onLeft={() => (rtl ? go(1) : go(-1))} onRight={() => (rtl ? go(-1) : go(1))} leftLabel={rtl ? "Next page" : "Previous page"} rightLabel={rtl ? "Previous page" : "Next page"} />
+            <button aria-label={rtl ? "Next page" : "Previous page"} style={{ position: "absolute", left: "0.55rem", top: "50%", transform: "translateY(-50%)", zIndex: 6, ...toolBtn, background: "rgba(12,13,15,0.72)" }} onClick={() => (rtl ? go(1) : go(-1))}><IconChevLeft size={18} /></button>
+            <button aria-label={rtl ? "Previous page" : "Next page"} style={{ position: "absolute", right: "0.55rem", top: "50%", transform: "translateY(-50%)", zIndex: 6, ...toolBtn, background: "rgba(12,13,15,0.72)" }} onClick={() => (rtl ? go(-1) : go(1))}><IconChevRight size={18} /></button>
           </>
         )}
       </div>

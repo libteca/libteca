@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import type { Book, NavItem, Rendition } from "epubjs";
+import type { Book, Contents, NavItem, Rendition } from "epubjs";
 import { media } from "../api";
 import { c } from "../styles";
 import {
   drawerItem, drawerPanel, IconClose, IconContents, IconMinus, IconPlus,
-  isTypingTarget, ReaderMessage, readerOverlay, readerStage, TopBar, TapZones, toolBtn, toolBtnActive,
+  isTypingTarget, PagePill, ReaderMessage, readerOverlay, readerStage, TopBar, TapZones, toolBtn, toolBtnActive, toolBtnCls,
   useProgressSaver, type ProgressPost, type ReadingProgress,
 } from "./shared";
 
@@ -14,6 +14,33 @@ const FONT_STEP = 10;
 const LOC_CHUNK = 1000;
 
 type TocEntry = { label: string; href: string; depth: number };
+
+function cleanHref(h: string): string {
+  const base = h.split("#")[0].split("?")[0];
+  try { return decodeURIComponent(base).replace(/^\.?\//, ""); } catch { return base; }
+}
+
+function chapterLabel(toc: TocEntry[], href: string): string {
+  if (!href) return "";
+  const target = cleanHref(href);
+  for (const t of toc) if (cleanHref(t.href) === target) return t.label;
+  const base = target.slice(target.lastIndexOf("/") + 1);
+  for (const t of toc) {
+    const th = cleanHref(t.href);
+    if (th === base || th.slice(th.lastIndexOf("/") + 1) === base) return t.label;
+  }
+  return "";
+}
+
+function sameChapter(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  const x = cleanHref(a);
+  const y = cleanHref(b);
+  if (x === y) return true;
+  const xb = x.slice(x.lastIndexOf("/") + 1);
+  const yb = y.slice(y.lastIndexOf("/") + 1);
+  return xb !== "" && xb === yb;
+}
 
 export function EpubReader(props: { editionId: number; title: string; progress: ReadingProgress | null; onBack: () => void }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -26,7 +53,9 @@ export function EpubReader(props: { editionId: number; title: string; progress: 
   const [tocOpen, setTocOpen] = useState(false);
   const [fontSize, setFontSize] = useState(100);
   const [percent, setPercent] = useState<number | null>(null);
+  const [sectionHref, setSectionHref] = useState("");
   const saver = useProgressSaver(props.editionId);
+  const keyHandler = useRef<(e: KeyboardEvent) => void>(() => {});
 
   useEffect(() => {
     let destroyed = false;
@@ -39,6 +68,8 @@ export function EpubReader(props: { editionId: number; title: string; progress: 
 
     let book: Book | null = null;
     let rendition: Rendition | null = null;
+    let keyDoc: Document | null = null;
+    const onDocKey = (e: Event) => keyHandler.current(e as KeyboardEvent);
     (async () => {
       try {
         const res = await fetch(media(`/editions/${props.editionId}/download`));
@@ -48,12 +79,17 @@ export function EpubReader(props: { editionId: number; title: string; progress: 
         const epubjs = await import("epubjs");
         book = new epubjs.Book();
         await book.open(data);
-        if (destroyed) return;
+        if (destroyed) { try { book?.destroy(); } catch { /* already gone */ } return; }
         bookRef.current = book;
 
         rendition = new epubjs.Rendition(book, { width: "100%", height: "100%", spread: "auto", flow: "paginated" });
         renditionRef.current = rendition;
         await rendition.attachTo(host);
+        rendition.on("rendered", (_section: unknown, contents: Contents) => {
+          keyDoc?.removeEventListener("keydown", onDocKey);
+          keyDoc = contents?.document || null;
+          keyDoc?.addEventListener("keydown", onDocKey);
+        });
         rendition.themes.default({ body: { color: c.text, background: c.bg } });
         rendition.themes.override("color", c.text, true);
         rendition.themes.override("background", c.bg, true);
@@ -74,8 +110,12 @@ export function EpubReader(props: { editionId: number; title: string; progress: 
           saver.save(body);
         });
 
+        rendition.on("relocated", (loc: { start?: { href?: string } }) => {
+          setSectionHref(loc?.start?.href || "");
+        });
+
         const nav = await book.loaded.navigation.catch(() => null);
-        if (destroyed) return;
+        if (destroyed) { try { book?.destroy(); } catch { /* already gone */ } return; }
         const flat: TocEntry[] = [];
         const walk = (items: NavItem[], depth: number) => {
           for (const it of items) {
@@ -105,7 +145,7 @@ export function EpubReader(props: { editionId: number; title: string; progress: 
         } else if (p && !p.isFinished && p.percent && p.percent > 0 && p.percent < 1 && !haveLocations) {
           setPhase("indexing");
           await book.locations.generate(LOC_CHUNK);
-          if (destroyed) return;
+          if (destroyed) { try { book?.destroy(); } catch { /* already gone */ } return; }
           haveLocations = true;
           locsReadyRef.current = true;
           persistLocations(book);
@@ -116,17 +156,17 @@ export function EpubReader(props: { editionId: number; title: string; progress: 
         } catch {
           await rendition.display();
         }
-        if (destroyed) return;
+        if (destroyed) { try { book?.destroy(); } catch { /* already gone */ } return; }
         setPhase("ready");
 
         if (!haveLocations) {
           await book.locations.generate(LOC_CHUNK);
-          if (destroyed) return;
+          if (destroyed) { try { book?.destroy(); } catch { /* already gone */ } return; }
           locsReadyRef.current = true;
           persistLocations(book);
-          const cur = rendition.currentLocation() as { cfi?: string } | null;
-          if (cur?.cfi) {
-            const v = book.locations.percentageFromCfi(cur.cfi);
+          const cur = rendition.currentLocation() as { start?: { cfi?: string } } | null;
+          if (cur?.start?.cfi) {
+            const v = book.locations.percentageFromCfi(cur.start.cfi);
             if (typeof v === "number" && isFinite(v)) setPercent(v);
           }
         }
@@ -142,6 +182,7 @@ export function EpubReader(props: { editionId: number; title: string; progress: 
       destroyed = true;
       renditionRef.current = null;
       bookRef.current = null;
+      keyDoc?.removeEventListener("keydown", onDocKey);
       try { rendition?.destroy(); } catch { /* already gone */ }
       try { book?.destroy(); } catch { /* already gone */ }
     };
@@ -159,39 +200,43 @@ export function EpubReader(props: { editionId: number; title: string; progress: 
       else if (e.key === "ArrowLeft" && r) { e.preventDefault(); void r.prev(); }
       else if (e.key === "Escape") { if (tocOpen) setTocOpen(false); else props.onBack(); }
     };
+    keyHandler.current = onKey;
     addEventListener("keydown", onKey);
     return () => removeEventListener("keydown", onKey);
   }, [tocOpen, props.onBack]);
 
-  const percentText = phase === "ready" || phase === "indexing"
-    ? (percent != null ? `${Math.round(percent * 100)}% read` : phase === "indexing" ? "indexing…" : "")
-    : "";
+  const chapter = chapterLabel(toc, sectionHref);
+  const pillText = [percent != null ? `${Math.round(percent * 100)}%` : "", chapter].filter(Boolean).join(" · ");
 
   return (
     <div style={readerOverlay}>
-      <TopBar title={props.title} meta={percentText} saveState={saver.state} onBack={props.onBack}>
-        <button style={toolBtn} title="Smaller text" disabled={fontSize <= FONT_MIN} onClick={() => setFontSize((f) => Math.max(FONT_MIN, f - FONT_STEP))}><IconMinus size={15} /></button>
+      <TopBar title={props.title} meta={phase === "indexing" ? "indexing…" : undefined} saveState={saver.state} onBack={props.onBack}>
+        <button className={toolBtnCls} style={toolBtn} aria-label="Smaller text" title="Smaller text" disabled={fontSize <= FONT_MIN} onClick={() => setFontSize((f) => Math.max(FONT_MIN, f - FONT_STEP))}><IconMinus size={15} /></button>
         <span style={{ color: c.muted, fontSize: "0.72rem", minWidth: "2.6rem", textAlign: "center" }}>{fontSize}%</span>
-        <button style={toolBtn} title="Larger text" disabled={fontSize >= FONT_MAX} onClick={() => setFontSize((f) => Math.min(FONT_MAX, f + FONT_STEP))}><IconPlus size={15} /></button>
-        <button style={toolBtnActive(tocOpen)} title="Contents" onClick={() => setTocOpen((v) => !v)}><IconContents size={15} /></button>
+        <button className={toolBtnCls} style={toolBtn} aria-label="Larger text" title="Larger text" disabled={fontSize >= FONT_MAX} onClick={() => setFontSize((f) => Math.min(FONT_MAX, f + FONT_STEP))}><IconPlus size={15} /></button>
+        <button className={toolBtnCls} style={toolBtnActive(tocOpen)} aria-label="Contents" title="Contents" onClick={() => setTocOpen((v) => !v)}><IconContents size={15} /></button>
       </TopBar>
       <div style={readerStage}>
         <div ref={hostRef} style={{ position: "absolute", inset: 0 }} />
         {phase !== "ready" && <ReaderMessage text={phase === "error" ? error || "Could not open this EPUB." : phase === "indexing" ? "Indexing book for progress…" : "Loading book…"} onBack={props.onBack} />}
         {phase === "ready" && <TapZones onLeft={() => void renditionRef.current?.prev()} onRight={() => void renditionRef.current?.next()} />}
+        <PagePill text={pillText} watch={`${percent ?? ""}|${sectionHref}`} />
         {tocOpen && (
           <div>
             <button aria-label="Close contents" style={{ position: "absolute", inset: 0, zIndex: 15, background: "rgba(0,0,0,0.45)", border: "none", padding: 0, cursor: "pointer" }} onClick={() => setTocOpen(false)} />
             <div style={drawerPanel}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.7rem 1rem", borderBottom: `1px solid ${c.line}` }}>
                 <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>Contents</span>
-                <button style={toolBtn} title="Close" onClick={() => setTocOpen(false)}><IconClose size={15} /></button>
+                <button className={toolBtnCls} style={toolBtn} aria-label="Close contents" title="Close" onClick={() => setTocOpen(false)}><IconClose size={15} /></button>
               </div>
               <div style={{ overflowY: "auto", flex: 1 }}>
                 {toc.length === 0 && <p style={{ color: c.muted, fontSize: "0.85rem", padding: "1rem" }}>No table of contents.</p>}
-                {toc.map((t, i) => (
-                  <button key={`${t.href}-${i}`} style={{ ...drawerItem, paddingLeft: `${1 + t.depth * 0.7}rem` }} onClick={() => { setTocOpen(false); void renditionRef.current?.display(t.href); }}>{t.label}</button>
-                ))}
+                {toc.map((t, i) => {
+                  const active = sameChapter(t.href, sectionHref);
+                  return (
+                    <button key={`${t.href}-${i}`} style={{ ...drawerItem, paddingLeft: `${1 + t.depth * 0.7}rem`, ...(active ? { color: c.text, background: c.accentSoft } : {}) }} onClick={() => { setTocOpen(false); void renditionRef.current?.display(t.href); }}>{t.label}</button>
+                  );
+                })}
               </div>
             </div>
           </div>

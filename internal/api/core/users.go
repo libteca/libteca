@@ -155,6 +155,13 @@ func (a *API) userSetPassword(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
 	}
+	if values, err := a.DB.UserTokenValues(id); err == nil {
+		if err := a.DB.RevokeUserTokens(id); err == nil {
+			for _, v := range values {
+				auth.InvalidateToken(v)
+			}
+		}
+	}
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 

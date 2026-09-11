@@ -53,6 +53,19 @@ func progressPercent(pos, dur float64) float64 {
 	return p
 }
 
+func coalesceReadPercent(pos, dur float64, pct sql.NullFloat64, page, pages sql.NullInt64) float64 {
+	if pct.Valid && pct.Float64 > 0 {
+		if pct.Float64 > 1 {
+			return 1
+		}
+		return pct.Float64
+	}
+	if page.Valid && pages.Valid && pages.Int64 > 0 {
+		return progressPercent(float64(page.Int64), float64(pages.Int64))
+	}
+	return progressPercent(pos, dur)
+}
+
 func likeEscape(s string) string {
 	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
 }
@@ -62,7 +75,8 @@ func likeEscape(s string) string {
 // newest first across all libraries.
 func (d *DB) ResumeItems(userID int64, limit int) ([]ResumeItem, error) {
 	rows, err := d.Query(`SELECT w.id, e.id, w.library_id, l.type, w.title, w.author, w.cover_path,
-		p.edition_position_secs, COALESCE(e.duration_secs, p.duration_secs), p.updated_at
+		p.edition_position_secs, COALESCE(e.duration_secs, p.duration_secs), p.updated_at,
+		p.percent, p.page, e.page_count
 		FROM progress p
 		JOIN editions e ON e.id = p.edition_id
 		JOIN works w ON w.id = e.work_id
@@ -83,13 +97,14 @@ func (d *DB) ResumeItems(userID int64, limit int) ([]ResumeItem, error) {
 	var out []ResumeItem
 	for rows.Next() {
 		var it ResumeItem
-		var dur sql.NullFloat64
+		var dur, pct sql.NullFloat64
+		var page, pages sql.NullInt64
 		if err := rows.Scan(&it.WorkID, &it.EditionID, &it.LibraryID, &it.LibraryType, &it.Title,
-			&it.Author, &it.CoverPath, &it.PositionSecs, &dur, &it.UpdatedAt); err != nil {
+			&it.Author, &it.CoverPath, &it.PositionSecs, &dur, &it.UpdatedAt, &pct, &page, &pages); err != nil {
 			return nil, err
 		}
 		it.DurationSecs = dur.Float64
-		it.Percent = progressPercent(it.PositionSecs, it.DurationSecs)
+		it.Percent = coalesceReadPercent(it.PositionSecs, it.DurationSecs, pct, page, pages)
 		out = append(out, it)
 	}
 	return out, rows.Err()
@@ -102,14 +117,18 @@ func (d *DB) ResumeItems(userID int64, limit int) ([]ResumeItem, error) {
 func (d *DB) SearchWorks(userID int64, q string, limit int) ([]SearchHit, error) {
 	pat := "%" + likeEscape(strings.ToLower(q)) + "%"
 	rows, err := d.Query(`SELECT w.id, w.library_id, l.type, w.title, w.author, w.cover_path,
-		(SELECT p.edition_position_secs FROM progress p JOIN editions e ON e.id = p.edition_id
-		 WHERE p.user_id = ? AND e.work_id = w.id ORDER BY p.updated_at DESC, p.id DESC LIMIT 1),
-		(SELECT COALESCE(e.duration_secs, p.duration_secs) FROM progress p JOIN editions e ON e.id = p.edition_id
+		(SELECT COALESCE(
+			p.percent,
+			CASE WHEN e.page_count IS NOT NULL AND e.page_count > 0 AND p.page IS NOT NULL
+				THEN p.page * 1.0 / e.page_count END,
+			CASE WHEN COALESCE(e.duration_secs, p.duration_secs) > 0
+				THEN p.edition_position_secs / COALESCE(e.duration_secs, p.duration_secs) END
+		) FROM progress p JOIN editions e ON e.id = p.edition_id
 		 WHERE p.user_id = ? AND e.work_id = w.id ORDER BY p.updated_at DESC, p.id DESC LIMIT 1)
 		FROM works w JOIN libraries l ON l.id = w.library_id
 		WHERE lower(w.title) LIKE ? ESCAPE '\' OR (w.author IS NOT NULL AND lower(w.author) LIKE ? ESCAPE '\')
 		ORDER BY (lower(w.title) LIKE ? ESCAPE '\') DESC, lower(w.title) ASC, w.id ASC
-		LIMIT ?`, userID, userID, pat, pat, pat, limit)
+		LIMIT ?`, userID, pat, pat, pat, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -117,13 +136,19 @@ func (d *DB) SearchWorks(userID int64, q string, limit int) ([]SearchHit, error)
 	var out []SearchHit
 	for rows.Next() {
 		var h SearchHit
-		var pos, dur sql.NullFloat64
+		var pct sql.NullFloat64
 		if err := rows.Scan(&h.WorkID, &h.LibraryID, &h.LibraryType, &h.Title,
-			&h.Author, &h.CoverPath, &pos, &dur); err != nil {
+			&h.Author, &h.CoverPath, &pct); err != nil {
 			return nil, err
 		}
-		if pos.Valid {
-			p := progressPercent(pos.Float64, dur.Float64)
+		if pct.Valid {
+			p := pct.Float64
+			if p < 0 {
+				p = 0
+			}
+			if p > 1 {
+				p = 1
+			}
 			h.Percent = &p
 		}
 		out = append(out, h)
@@ -244,7 +269,9 @@ func (d *DB) WorksInLibraryFiltered(libID, userID int64, sort, dir, filter strin
 	}
 	erows.Close()
 
-	frows, err := d.Query(`SELECT ` + fileCols + ` FROM files WHERE missing = 0 ORDER BY edition_id, seq`)
+	frows, err := d.Query(`SELECT ` + fileCols + ` FROM files WHERE missing = 0 AND edition_id IN
+		(SELECT id FROM editions WHERE work_id IN (SELECT id FROM works WHERE library_id = ?))
+		ORDER BY edition_id, seq`, libID)
 	if err != nil {
 		return nil, err
 	}
@@ -266,5 +293,49 @@ func (d *DB) WorksInLibraryFiltered(libID, userID int64, sort, dir, filter strin
 		ev.CumDurations = append(ev.CumDurations, cum)
 		ev.Files = append(ev.Files, f)
 	}
-	return out, frows.Err()
+	if err := frows.Err(); err != nil {
+		return nil, err
+	}
+	if err := d.attachWorkPercents(userID, libID, out, index); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (d *DB) attachWorkPercents(userID, libID int64, out []WorkView, index map[int64]int) error {
+	if userID == 0 || len(out) == 0 {
+		return nil
+	}
+	rows, err := d.Query(`SELECT e.work_id, p.edition_position_secs, COALESCE(e.duration_secs, p.duration_secs),
+		p.percent, p.page, e.page_count
+		FROM progress p
+		JOIN editions e ON e.id = p.edition_id
+		JOIN works w ON w.id = e.work_id
+		WHERE p.user_id = ? AND w.library_id = ? AND p.is_finished = 0
+		  AND p.id = (
+			SELECT p2.id FROM progress p2
+			JOIN editions e2 ON e2.id = p2.edition_id
+			WHERE p2.user_id = p.user_id AND p2.is_finished = 0 AND e2.work_id = e.work_id
+			ORDER BY p2.updated_at DESC, p2.id DESC LIMIT 1
+		  )`, userID, libID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var workID int64
+		var pos float64
+		var dur, pct sql.NullFloat64
+		var page, pages sql.NullInt64
+		if err := rows.Scan(&workID, &pos, &dur, &pct, &page, &pages); err != nil {
+			return err
+		}
+		wi, ok := index[workID]
+		if !ok {
+			continue
+		}
+		p := coalesceReadPercent(pos, dur.Float64, pct, page, pages)
+		out[wi].Percent = &p
+	}
+	return rows.Err()
 }

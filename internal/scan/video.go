@@ -18,7 +18,7 @@ var musicExts = map[string]bool{".mp3": true, ".flac": true, ".m4a": true, ".ogg
 
 var (
 	reSxxExx  = regexp.MustCompile(`[Ss](\d{1,2})[Ee](\d{1,3})`)
-	reExx     = regexp.MustCompile(`^(\d{1,2})x(\d{1,3})`)
+	reExx     = regexp.MustCompile(`(\d{1,2})x(\d{1,3})`)
 	reYear    = regexp.MustCompile(`[\(\[\s](19|20)(\d{2})[\)\]\s]?`)
 	reSeasonD = regexp.MustCompile(`(?i)season[ _-]?(\d{1,2})`)
 )
@@ -114,6 +114,13 @@ func scanVideoLibrary(db *store.DB, lib *store.Library, coversDir string, tv boo
 			}
 		}
 		if !anyChanged {
+			title, year := titleYear(filepath.Base(top))
+			authorPtr := nullable(year)
+			if id, ok := db.FindWorkID(lib.ID, title, &authorPtr); ok {
+				if err := ensureCoverVideo(db, id, top, group[0].path, coversDir); err != nil {
+					return count, err
+				}
+			}
 			continue
 		}
 		title, year := titleYear(filepath.Base(top))
@@ -174,7 +181,7 @@ func scanVideoLibrary(db *store.DB, lib *store.Library, coversDir string, tv boo
 			if err != nil {
 				return count, err
 			}
-			if edTitle != rawTitle {
+			if edTitle != rawTitle || (tv && f.epTitle != "") {
 				_ = db.SetEpisodeTitle(editionID, edTitle)
 			}
 			c, ct, vc, w_, h, br := f.codec, f.container, f.vcodec, f.width, f.height, f.bitrate
@@ -190,30 +197,56 @@ func scanVideoLibrary(db *store.DB, lib *store.Library, coversDir string, tv boo
 			tr.file(fr.Inserted)
 			count++
 		}
-		if err := ensureCoverVideo(db, workID, top, coversDir); err != nil {
+		if err := ensureCoverVideo(db, workID, top, group[0].path, coversDir); err != nil {
 			return count, err
 		}
 	}
 	return count, nil
 }
 
-func ensureCoverVideo(db *store.DB, workID int64, top, coversDir string) error {
-	_, err := importSidecarPoster(db, workID, top, coversDir, findWorkNFO(top) != "")
-	return err
+func ensureCoverVideo(db *store.DB, workID int64, top, mediaPath, coversDir string) error {
+	ok, err := importSidecarPoster(db, workID, top, coversDir, findWorkNFO(top) != "")
+	if err != nil || ok {
+		if err == nil {
+			importFanart(workID, top, mediaPath, coversDir)
+		}
+		return err
+	}
+	ok, err = importSuffixArt(db, workID, mediaPath, coversDir)
+	if err != nil || ok {
+		if err == nil {
+			importFanart(workID, top, mediaPath, coversDir)
+		}
+		return err
+	}
+	dst := filepath.Join(coversDir, fmt.Sprintf("%d.jpg", workID))
+	if cmd := extractCmd(mediaPath, dst); cmd != nil && cmd.Run() == nil {
+		_ = db.SetWorkCover(workID, fmt.Sprintf("%d.jpg", workID))
+	}
+	importFanart(workID, top, mediaPath, coversDir)
+	return nil
 }
 
 func parseEpisode(v *vidFile, path, rel string) {
 	base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	trimSeries := func(s string) string {
+		parts := strings.Split(rel, string(filepath.Separator))
+		if len(parts) >= 3 {
+			series := strings.TrimSpace(parts[len(parts)-3])
+			s = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(s), series))
+		}
+		return s
+	}
 	if m := reSxxExx.FindStringSubmatch(base); m != nil {
 		v.season, _ = strconv.Atoi(m[1])
 		v.episode, _ = strconv.Atoi(m[2])
-		v.epTitle = cleanTitle(strings.TrimPrefix(base, m[0]))
+		v.epTitle = cleanTitle(trimSeries(strings.Replace(base, m[0], " ", 1)))
 		return
 	}
 	if m := reExx.FindStringSubmatch(base); m != nil {
 		v.season, _ = strconv.Atoi(m[1])
 		v.episode, _ = strconv.Atoi(m[2])
-		v.epTitle = cleanTitle(strings.TrimPrefix(base, m[0]))
+		v.epTitle = cleanTitle(trimSeries(strings.Replace(base, m[0], " ", 1)))
 		return
 	}
 	dir := filepath.Base(filepath.Dir(path))
@@ -303,6 +336,17 @@ func scanMusicLibrary(db *store.DB, lib *store.Library, coversDir string, tr *tr
 			}
 		}
 		if !anyChanged {
+			base := filepath.Base(top)
+			title, artist := base, ""
+			if i := strings.Index(base, " - "); i > 0 {
+				artist, title = strings.TrimSpace(base[:i]), strings.TrimSpace(base[i+3:])
+			}
+			artistPtr := nullable(artist)
+			if id, ok := db.FindWorkID(lib.ID, title, &artistPtr); ok {
+				if err := ensureCoverVideo(db, id, top, group[0].path, coversDir); err != nil {
+					return count, err
+				}
+			}
 			continue
 		}
 		base := filepath.Base(top)
@@ -351,7 +395,7 @@ func scanMusicLibrary(db *store.DB, lib *store.Library, coversDir string, tr *tr
 			tr.file(fr.Inserted)
 			count++
 		}
-		if err := ensureCoverVideo(db, workID, top, coversDir); err != nil {
+		if err := ensureCoverVideo(db, workID, top, group[0].path, coversDir); err != nil {
 			return count, err
 		}
 	}

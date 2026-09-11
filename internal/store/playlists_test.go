@@ -95,7 +95,7 @@ func TestPlaylistStoreCRUD(t *testing.T) {
 		if it.Position != int64(i+1) {
 			t.Fatalf("item %d position = %d", i, it.Position)
 		}
-		if it.Title != items2title(i) || it.Format != "mp3" || it.WorkTitle != "Album "+items2title(i) || it.WorkAuthor == nil || *it.WorkAuthor != "Artist" {
+		if it.Title != items2title(i) || it.Format != "mp3" || it.WorkID <= 0 || it.WorkTitle != "Album "+items2title(i) || it.WorkAuthor == nil || *it.WorkAuthor != "Artist" {
 			t.Fatalf("item %d join fields = %+v", i, it)
 		}
 	}

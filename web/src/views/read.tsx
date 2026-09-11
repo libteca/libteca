@@ -13,6 +13,8 @@ export function ReadView(props: { edition: number; work?: number; format?: strin
   const [info, setInfo] = useState<EditionInfo | null>(null);
   const [progress, setProgress] = useState<ReadingProgress | null>(null);
   const [error, setError] = useState("");
+  const [retryable, setRetryable] = useState(false);
+  const [retry, setRetry] = useState(0);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
@@ -21,6 +23,7 @@ export function ReadView(props: { edition: number; work?: number; format?: strin
     setInfo(null);
     setProgress(null);
     setError("");
+    setRetryable(false);
     (async () => {
       let editionInfo: EditionInfo | null = null;
       try {
@@ -41,17 +44,25 @@ export function ReadView(props: { edition: number; work?: number; format?: strin
         return;
       }
       setInfo(editionInfo);
-      const p = await api(`/progress/${props.edition}`).catch(() => null);
+      let p: ReadingProgress | null = null;
+      try {
+        p = await api(`/progress/${props.edition}`);
+      } catch {
+        if (!alive) return;
+        setError("Couldn't load reading position");
+        setRetryable(true);
+        setLoaded(true);
+        return;
+      }
       if (!alive) return;
       setProgress(p || null);
       setLoaded(true);
     })();
     return () => { alive = false; };
-  }, [props.edition, props.work, props.format]);
+  }, [props.edition, props.work, props.format, retry]);
 
   const onBack = useCallback(() => {
-    if (history.length > 1) history.back();
-    else location.hash = props.work ? `#/work?id=${props.work}` : "#/home";
+    location.hash = props.work ? `#/work?id=${props.work}` : "#/home";
   }, [props.work]);
 
   if (!loaded) {
@@ -61,7 +72,10 @@ export function ReadView(props: { edition: number; work?: number; format?: strin
     return (
       <div style={paneStyle}>
         <span style={{ color: c.textDim, fontSize: "0.9rem" }}>{error || "Could not open this edition."}</span>
-        <button style={{ ...linkBtn, color: c.textDim, fontSize: "0.9rem" }} onClick={onBack}>back</button>
+        <div style={{ display: "flex", gap: "0.9rem" }}>
+          {retryable && <button style={{ ...linkBtn, color: c.textDim, fontSize: "0.9rem" }} onClick={() => setRetry((n) => n + 1)}>retry</button>}
+          <button style={{ ...linkBtn, color: c.textDim, fontSize: "0.9rem" }} onClick={onBack}>back</button>
+        </div>
       </div>
     );
   }

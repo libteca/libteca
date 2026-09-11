@@ -54,7 +54,7 @@ func playlistItemRow(it store.PlaylistItem) map[string]any {
 	return map[string]any{
 		"editionId": it.EditionID, "position": it.Position, "title": it.Title,
 		"format": it.Format, "durationSecs": it.DurationSecs,
-		"workTitle": it.WorkTitle, "workAuthor": it.WorkAuthor,
+		"workId": it.WorkID, "workTitle": it.WorkTitle, "workAuthor": it.WorkAuthor,
 		"hasCover": it.CoverPath != nil && *it.CoverPath != "",
 	}
 }

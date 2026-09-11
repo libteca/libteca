@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/libteca/libteca/internal/auth"
 	"github.com/libteca/libteca/internal/scan"
 	"github.com/libteca/libteca/internal/store"
 	"github.com/neutron-build/neutron/go/neutron"
@@ -40,6 +41,11 @@ func newTestAPI(t *testing.T, fn ScanFunc) (*API, *store.DB, int64, int64) {
 	}
 	a := New(db, t.TempDir())
 	a.ScanFunc = fn
+	res, err := db.Exec(`INSERT INTO users (name, password_hash, is_admin, created_at, updated_at) VALUES ('admin','x',1,0,0)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testAdminUID, _ = res.LastInsertId()
 	return a, db, libA, libB
 }
 
@@ -56,6 +62,7 @@ func postScan(t *testing.T, a *API, libID int64) (int, scanResp) {
 	t.Helper()
 	req := httptest.NewRequest("POST", "/libraries/"+strconv.FormatInt(libID, 10)+"/scan", nil)
 	req.SetPathValue("id", strconv.FormatInt(libID, 10))
+	req = auth.WithUser(req, testAdminUID)
 	rec := httptest.NewRecorder()
 	a.scanLibrary(rec, req)
 	var body scanResp
@@ -136,10 +143,35 @@ func TestSameLibraryScanConflict(t *testing.T) {
 
 	close(release)
 	waitJobDone(t, db, libA)
-	// Lock is released after finish: a new scan must be accepted.
-	code, _ = postScan(t, a, libA)
-	if code != 202 {
-		t.Fatalf("scan after finish = %d, want 202", code)
+	// In-flight conflict resolved, but the finished job is still inside the
+	// dedup window: the repeat POST 409s with the last job id.
+	code, done := postScan(t, a, libA)
+	if code != 409 || done.Status != "already_done" || done.JobID != first.JobID {
+		t.Fatalf("scan after finish = %d %+v, want 409 already_done with first jobId", code, done)
+	}
+}
+
+func TestScanDedupWindowExpires(t *testing.T) {
+	old := scanDedupWindow
+	scanDedupWindow = 30 * time.Millisecond
+	t.Cleanup(func() { scanDedupWindow = old })
+	a, db, libA, _ := newTestAPI(t, func(db *store.DB, lib *store.Library, coversDir string, onProgress scan.ProgressFn) (int, error) {
+		return 0, nil
+	})
+
+	code, first := postScan(t, a, libA)
+	if code != 202 || first.Status != "scanning" {
+		t.Fatalf("first scan = %d %+v, want 202 scanning", code, first)
+	}
+	waitJobDone(t, db, libA)
+	code, dup := postScan(t, a, libA)
+	if code != 409 || dup.Status != "already_done" || dup.JobID != first.JobID {
+		t.Fatalf("scan inside window = %d %+v, want 409 already_done", code, dup)
+	}
+	time.Sleep(60 * time.Millisecond)
+	code, next := postScan(t, a, libA)
+	if code != 202 || next.Status != "scanning" || next.JobID == first.JobID {
+		t.Fatalf("scan after window = %d %+v, want 202 scanning with new jobId", code, next)
 	}
 	waitJobDone(t, db, libA)
 }

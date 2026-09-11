@@ -290,3 +290,48 @@ func TestParseNFOYearFromPremiered(t *testing.T) {
 		t.Fatalf("year = %q", n.YearValue())
 	}
 }
+
+func TestImportSuffixArtAndFanart(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	libID, _ := db.AddLibrary("m", "movies", t.TempDir())
+	w := &store.Work{LibraryID: libID, Title: "Film"}
+	wid, err := db.UpsertWork(w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	covers := t.TempDir()
+	media := filepath.Join(dir, "Film (2010).mkv")
+	os.WriteFile(media, []byte("x"), 0o644)
+	os.WriteFile(filepath.Join(dir, "Film (2010)-poster.jpg"), []byte("POSTER"), 0o644)
+	os.WriteFile(filepath.Join(dir, "Film (2010)-fanart.jpg"), []byte("FANART"), 0o644)
+
+	ok, err := importSuffixArt(db, wid, media, covers)
+	if err != nil || !ok {
+		t.Fatalf("suffix art = %v %v", ok, err)
+	}
+	b, _ := os.ReadFile(filepath.Join(covers, fmt.Sprintf("%d.jpg", wid)))
+	if string(b) != "POSTER" {
+		t.Fatalf("cover = %q", b)
+	}
+	cp := "1.jpg"
+	if err := db.SetWorkCover(wid, cp); err != nil {
+		t.Fatal(err)
+	}
+	importFanart(wid, dir, media, covers)
+	b, _ = os.ReadFile(filepath.Join(covers, fmt.Sprintf("%d-fanart.jpg", wid)))
+	if string(b) != "FANART" {
+		t.Fatalf("fanart = %q", b)
+	}
+
+	os.WriteFile(filepath.Join(dir, "backdrop.jpg"), []byte("BD"), 0o644)
+	importFanart(wid+1, dir, media, covers)
+	b, _ = os.ReadFile(filepath.Join(covers, fmt.Sprintf("%d-fanart.jpg", wid+1)))
+	if string(b) != "BD" {
+		t.Fatalf("folder backdrop = %q", b)
+	}
+}

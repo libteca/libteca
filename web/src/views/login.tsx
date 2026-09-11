@@ -5,26 +5,35 @@ export function Login(props: { onLogin: () => void }) {
   const [name, setName] = useState("");
   const [pass, setPass] = useState("");
   const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
   const submit = async (e: Event) => {
     e.preventDefault();
-    const res = await fetch("/api/core/login", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: name, password: pass }),
-    });
-    const data = await res.json();
-    if (!data.token) { setErr("Invalid credentials."); return; }
-    localStorage.setItem("libteca-token", data.token);
-    props.onLogin();
+    setBusy(true); setErr("");
+    try {
+      const res = await fetch("/api/core/login", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: name, password: pass }),
+      });
+      const data = await res.json();
+      if (!data.token) { setErr("Invalid credentials."); return; }
+      localStorage.setItem("libteca-token", data.token);
+      props.onLogin();
+    } catch {
+      setErr("Login failed — couldn't reach the server.");
+    } finally {
+      setBusy(false);
+    }
   };
   return (
-    <div style={loginWrap}>
+    <div style={{ ...loginWrap, background: "radial-gradient(1100px 720px at 30% 20%, #141c2c 0%, #0c0d0f 60%)" }}>
       <form style={loginCard} onSubmit={submit}>
-        <h1 style={loginTitle}>libteca</h1>
+        <h1 style={{ ...loginTitle, fontSize: "2.3rem" }}>libteca</h1>
         <p style={loginSub}>Your library.</p>
         <input
           style={{ ...input, minHeight: "42px", background: "transparent", border: "none", borderBottom: `1px solid ${c.line}`, borderRadius: 0, paddingLeft: 0 }}
           placeholder="Username"
           autoComplete="username"
+          autoFocus
           value={name}
           onInput={(e) => setName((e.target as HTMLInputElement).value)}
         />
@@ -37,7 +46,7 @@ export function Login(props: { onLogin: () => void }) {
           onInput={(e) => setPass((e.target as HTMLInputElement).value)}
         />
         {err && <p style={errStyle}>{err}</p>}
-        <button className="press" style={{ ...primaryBtn, marginTop: "0.6rem" }} type="submit">Sign in</button>
+        <button className="press" style={{ ...primaryBtn, width: "100%", alignSelf: "stretch", marginTop: "0.6rem", boxShadow: c.accentGlow }} type="submit" disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
       </form>
     </div>
   );

@@ -465,7 +465,7 @@ type wsSessionDTO struct {
 	PlayState      *wsPlayState   `json:"PlayState,omitempty"`
 } // corpus: session DTO field set trimmed vs real 10.10 /Sessions shape
 
-func (a *API) sessionsMessage() []byte {
+func (a *API) sessionDTOs() []wsSessionDTO {
 	sessions := socketHub.snapshot()
 	dtos := make([]wsSessionDTO, 0, len(sessions))
 	for _, s := range sessions {
@@ -491,10 +491,14 @@ func (a *API) sessionsMessage() []byte {
 		dto.PlayState = &wsPlayState{PositionTicks: s.PosTicks, IsPaused: s.Paused}
 		dtos = append(dtos, dto)
 	}
+	return dtos
+}
+
+func (a *API) sessionsMessage() []byte {
 	out, _ := json.Marshal(struct {
 		MessageType string `json:"MessageType"`
 		Data        any    `json:"Data"`
-	}{"Sessions", dtos})
+	}{"Sessions", a.sessionDTOs()})
 	return out
 }
 
@@ -580,6 +584,11 @@ func (a *API) handleSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	if token == "" {
 		if m := reWSAuthToken.FindStringSubmatch(r.Header.Get("Authorization")); m != nil {
+			token = m[1]
+		}
+	}
+	if token == "" {
+		if m := reWSAuthToken.FindStringSubmatch(r.Header.Get("X-Emby-Authorization")); m != nil {
 			token = m[1]
 		}
 	}

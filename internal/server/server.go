@@ -42,16 +42,18 @@ func (s *Server) Handler() http.Handler {
 	if s.Core == nil {
 		s.Core = core.New(s.DB, s.Dir)
 	}
-	c := s.Core
-	c.MountPublic(r.Group("/api/core"))
-	c.Mount(r.Group("/api/core", authMW))
-
 	tm := transcode.New(s.Dir)
 	if s.HWAccel != "" {
 		if err := tm.SetHwAccel(s.HWAccel); err != nil {
 			slog.Warn("libteca: --hwaccel ignored", "value", s.HWAccel, "err", err)
 		}
 	}
+
+	c := s.Core
+	c.TC = tm
+	c.MountPublic(r.Group("/api/core"))
+	c.Mount(r.Group("/api/core", authMW))
+
 	jf := jellyfin.New(s.DB, s.Dir, tm)
 	jf.Mount(r)
 

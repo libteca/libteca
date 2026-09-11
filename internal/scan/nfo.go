@@ -47,6 +47,10 @@ var sidecarPosters = []string{
 	"poster.jpg", "Poster.jpg", "folder.jpg", "Folder.jpg", "cover.jpg", "Cover.jpg",
 }
 
+var sidecarFanart = []string{
+	"fanart.jpg", "Fanart.jpg", "backdrop.jpg", "Backdrop.jpg",
+}
+
 var reFallbackTitle = regexp.MustCompile(`(?i)^S\d{2}E\d{2,3}$`)
 
 func ParseNFO(data []byte) (*NFO, error) {
@@ -270,4 +274,76 @@ func importSidecarPoster(db *store.DB, workID int64, folder, coversDir string, f
 		return true, db.SetWorkCover(workID, rel)
 	}
 	return false, nil
+}
+
+// fileSuffixArt returns the first existing Kodi/Plex-style per-file artwork
+// sibling: <base>-poster.jpg, <base>.jpg, <base>-thumb.jpg.
+func fileSuffixArt(mediaPath string) string {
+	dir := filepath.Dir(mediaPath)
+	base := strings.TrimSuffix(filepath.Base(mediaPath), filepath.Ext(mediaPath))
+	for _, suffix := range []string{"-poster.jpg", ".jpg", "-thumb.jpg"} {
+		for _, name := range []string{base + suffix, base + strings.ToUpper(suffix)} {
+			if p := filepath.Join(dir, name); fileOKMedia(p) {
+				return p
+			}
+		}
+	}
+	return ""
+}
+
+func fileOKMedia(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && !fi.IsDir() && fi.Size() > 0
+}
+
+// importSuffixArt copies per-file artwork (<base>-poster.jpg etc.) as the
+// work cover when folder-level names found nothing.
+func importSuffixArt(db *store.DB, workID int64, mediaPath, coversDir string) (bool, error) {
+	src := fileSuffixArt(mediaPath)
+	if src == "" {
+		return false, nil
+	}
+	dst := filepath.Join(coversDir, fmt.Sprintf("%d.jpg", workID))
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return false, err
+	}
+	if err := os.WriteFile(dst, data, 0o644); err != nil {
+		return false, err
+	}
+	return true, db.SetWorkCover(workID, fmt.Sprintf("%d.jpg", workID))
+}
+
+// importFanart copies folder fanart/backdrop or <base>-fanart.jpg to
+// covers/{workID}-fanart.jpg. Existence alone marks the work (no column);
+// the work API stats the file.
+func importFanart(workID int64, folder, mediaPath, coversDir string) {
+	dst := filepath.Join(coversDir, fmt.Sprintf("%d-fanart.jpg", workID))
+	if fileOKMedia(dst) {
+		return
+	}
+	var src string
+	for _, name := range sidecarFanart {
+		if p := filepath.Join(folder, name); fileOKMedia(p) {
+			src = p
+			break
+		}
+	}
+	if src == "" {
+		base := strings.TrimSuffix(filepath.Base(mediaPath), filepath.Ext(mediaPath))
+		for _, name := range []string{base + "-fanart.jpg", base + "-Fanart.jpg"} {
+			if p := filepath.Join(filepath.Dir(mediaPath), name); fileOKMedia(p) {
+				src = p
+				break
+			}
+		}
+	}
+	if src == "" {
+		return
+	}
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(dst, data, 0o644)
 }

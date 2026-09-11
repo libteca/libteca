@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { api, getToken, setToken } from "./api";
-import { brand, c, center, content, headerBar, headerInner, linkBtn, nav, navLink, page } from "./styles";
+import { HEADER_H, brand, c, center, content, headerBar, headerInner, linkBtn, muted, nav, navLink, page, primaryBtn } from "./styles";
 import { Login } from "./views/login";
 import { Home } from "./views/home";
 import { LibraryView } from "./views/library";
+import { IconBook, IconComic, IconFilm, IconHeadphones, IconMusic, IconTv } from "./components/svg";
+import { typeLabel } from "./util";
 import { WorkView } from "./views/work";
 import { ReadView } from "./views/read";
 import { SearchBox, SearchPage } from "./views/search";
@@ -13,7 +15,7 @@ import { PodcastsView } from "./views/podcasts";
 import { PlaylistsView } from "./views/playlists";
 import { IconSpinner } from "./components/svg";
 
-type View = { name: string; id?: number; q?: string; lib?: number; edition?: number; format?: string };
+type View = { name: string; id?: number; q?: string; lib?: number; type?: string; edition?: number; format?: string };
 
 function parseHash(): View {
   const h = (typeof location === "undefined" ? "" : location.hash).replace(/^#\//, "");
@@ -32,14 +34,17 @@ function parseHash(): View {
   if (name === "podcasts") return { name: "podcasts" };
   if (name === "playlists") return { name: "playlists", id: id ? Number(id) : undefined };
   if (name === "home") return { name: "home" };
-  if (name === "library") return { name: "library", lib: lib ? Number(lib) : undefined };
+  const typ = params.get("type");
+  if (name === "library") return { name: "library", lib: lib ? Number(lib) : undefined, type: typ || undefined };
   return { name: "home" };
 }
 
 const globalCss = `
-:root { --ease: cubic-bezier(0.22, 1, 0.36, 1); }
-.rail-x, .topbar-x { scrollbar-width: none; }
-.rail-x::-webkit-scrollbar, .topbar-x::-webkit-scrollbar { display: none; }
+:root { --ease: cubic-bezier(0.22, 1, 0.36, 1); color-scheme: dark; }
+html, body { margin: 0; background: #0c0d0f; }
+.rail-x { scrollbar-width: none; }
+.rail-x::-webkit-scrollbar { display: none; }
+.topbar { height: ${HEADER_H}; padding: 0 1.6rem; }
 a { color: inherit; }
 ::selection { background: rgba(10, 132, 255, 0.22); }
 select option { background: #141518; color: #f5f5f7; }
@@ -51,11 +56,15 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   outline-offset: 2px;
 }
 
-.coverimg { transition: transform 0.5s var(--ease); }
-.rail-card:hover .coverimg, .cover-card:hover .coverimg { transform: scale(1.06); }
+.cover-box { transition: transform 0.45s var(--ease), box-shadow 0.45s var(--ease); transform-origin: 50% 80%; }
+.rail-card:hover .cover-box, .cover-card:hover .cover-box {
+  transform: translateY(-4px) scale(1.03);
+  box-shadow: 0 22px 48px rgba(0,0,0,0.55);
+}
 
 .rail-nav { opacity: 0; transition: opacity 180ms ease; }
 section:hover .rail-nav, section:focus-within .rail-nav { opacity: 1; }
+@media (hover: none) { .rail-nav { opacity: 1; } }
 
 .press { transition: opacity 140ms ease; }
 .press:active { opacity: 0.7; }
@@ -140,14 +149,47 @@ input[type="range"].seek::-moz-range-thumb {
 }
 .menu a:hover, .menu button:hover { background: rgba(255,255,255,0.05); color: #f5f5f7; }
 
+.cardwrap { position: relative; }
+.cardover {
+  position: absolute; inset: 0; border-radius: 6px; overflow: hidden;
+  opacity: 0; transition: opacity 200ms ease;
+  background: linear-gradient(to top, rgba(0,0,0,0.82) 0%, rgba(0,0,0,0.25) 45%, transparent 70%);
+  display: flex; align-items: flex-end; padding: 0.7rem;
+}
+.cardplay {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) scale(0.85);
+  width: 46px; height: 46px; border-radius: 50%;
+  background: rgba(10,132,255,0.92); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 10px 30px rgba(10,132,255,0.45);
+  transition: transform 200ms var(--ease);
+}
+.rail-card:hover .cardover, .cover-card:hover .cardover { opacity: 1; }
+.rail-card:hover .cardplay, .cover-card:hover .cardplay { transform: translate(-50%, -50%) scale(1); }
+.navlink {
+  display: inline-flex; align-items: center; gap: 0.45rem;
+  padding: 0.42rem 0.8rem; min-height: 36px; border-radius: 999px;
+  color: #86868b; text-decoration: none; font-size: 0.86rem; font-weight: 500;
+  transition: background 140ms ease, color 140ms ease;
+}
+.navlink:hover { color: #f5f5f7; background: rgba(255,255,255,0.05); }
+.navlink.on { color: #f5f5f7; background: #1c1e22; font-weight: 650; }
+nav a svg { flex-shrink: 0; }
+@media (max-width: 1024px) { .nav-cat { display: none; } nav a { padding: 0.42rem 0.55rem; } }
 @media (max-width: 760px) {
-  .nav-label { display: none; }
+  .topbar { flex-wrap: wrap; height: auto; padding: 0.5rem 1rem; }
+  .topbar nav { flex-grow: 1; }
+  .topbar > div:first-of-type { min-width: 6rem !important; }
   .rail-nav { opacity: 1; }
 }
 
+@media (max-width: 640px) {
+  input.seek { flex-basis: 100% !important; }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .coverimg, .press, .spin, .row-hit, .rail-nav { transition: none; animation: none; }
-  .rail-card:hover .coverimg, .cover-card:hover .coverimg { transform: none; }
+  .cover-box, .press, .spin, .row-hit, .rail-nav { transition: none; animation: none; }
+  .rail-card:hover .cover-box, .cover-card:hover .cover-box { transform: none; }
 }
 `;
 
@@ -156,12 +198,22 @@ export function App() {
   const [view, setView] = useState<View>(() => parseHash());
   const [me, setMe] = useState<{ name: string; isAdmin: boolean } | null>(null);
   const [menu, setMenu] = useState(false);
+  const [bootErr, setBootErr] = useState(false);
+  const [navLibs, setNavLibs] = useState<{ id: number; type: string; name: string }[]>([]);
   const menuRef = useRef<HTMLDivElement | null>(null);
+
+  const loadMe = () => {
+    api("/libraries").then((l) => { if (Array.isArray(l)) setNavLibs(l); }).catch(() => {});
+    api("/me").then((u) => { setMe(u); setBootErr(false); setReady(true); }).catch(() => {
+      if (getToken()) setBootErr(true);
+      setReady(true);
+    });
+  };
 
   useEffect(() => {
     setToken(localStorage.getItem("libteca-token") || "");
     if (!getToken()) { setReady(true); return; }
-    api("/me").then((u) => { setMe(u); setReady(true); }).catch(() => { setReady(true); });
+    loadMe();
     const onHash = () => { setView(parseHash()); setMenu(false); };
     addEventListener("hashchange", onHash);
     const onDoc = (e: MouseEvent) => {
@@ -176,21 +228,40 @@ export function App() {
 
   if (!ready) return <div style={center} role="status" aria-label="Loading"><IconSpinner size={22} /></div>;
   if (!getToken()) return <Login onLogin={() => { setView({ name: "home" }); location.hash = "#/home"; location.reload(); }} />;
-  if (!me) return <div style={center} role="status" aria-label="Loading"><IconSpinner size={22} /></div>;
+  if (!me) {
+    if (bootErr) {
+      return (
+        <div style={{ ...center, flexDirection: "column", gap: "0.9rem" }}>
+          <p style={{ ...muted, margin: 0 }}>Couldn't reach the server.</p>
+          <button className="press" style={primaryBtn} onClick={() => { setBootErr(false); loadMe(); }}>Retry</button>
+        </div>
+      );
+    }
+    return <div style={center} role="status" aria-label="Loading"><IconSpinner size={22} /></div>;
+  }
 
   const navItem = (active: boolean): preact.JSX.CSSProperties => ({
-    ...navLink, color: active ? c.text : c.muted,
+    ...navLink, color: active ? c.text : c.muted, fontWeight: active ? 650 : 400,
   });
 
   return (
     <div style={page}>
       <style>{globalCss}</style>
       <header style={headerBar}>
-        <div className="topbar-x" style={{ ...headerInner, overflowX: "auto" }}>
+        <div className="topbar" style={headerInner}>
           <a href="#/home" style={brand}>libteca</a>
           <nav style={nav}>
             <a href="#/home" style={navItem(view.name === "home")} aria-current={view.name === "home" ? "page" : undefined}>Home</a>
-            <a href="#/library" style={navItem(view.name === "library")} aria-current={view.name === "library" ? "page" : undefined}>Library</a>
+            {navLibs.length > 0 && [...new Set(navLibs.map((l) => l.type))].filter((t) => t !== "podcasts").map((t) => {
+              const icon = { movies: <IconFilm size={13} />, tv: <IconTv size={13} />, music: <IconMusic size={13} />, audiobooks: <IconHeadphones size={13} />, books: <IconBook size={13} />, comics: <IconComic size={13} /> }[t];
+              const on = view.name === "library" && view.type === t;
+              return (
+                <a key={t} href={`#/library?type=${t}`} style={navItem(on)} aria-current={on ? "page" : undefined}>
+                  {icon}<span className="nav-cat">{typeLabel(t)}</span>
+                </a>
+              );
+            })}
+            <a href="#/library" style={navItem(view.name === "library" && !view.type)} aria-current={view.name === "library" && !view.type ? "page" : undefined}>Library</a>
             <a href="#/podcasts" style={navItem(view.name === "podcasts")} aria-current={view.name === "podcasts" ? "page" : undefined}>Podcasts</a>
           </nav>
           <SearchBox />
@@ -222,7 +293,7 @@ export function App() {
       </header>
       <div style={content}>
         {view.name === "home" && <Home />}
-        {view.name === "library" && <LibraryView lib={view.lib} />}
+        {view.name === "library" && <LibraryView lib={view.lib} type={view.type} />}
         {view.name === "work" && view.id != null && <WorkView id={view.id} />}
         {view.name === "read" && view.edition != null && <ReadView edition={view.edition} work={view.id} format={view.format} />}
         {view.name === "search" && <SearchPage q={view.q || ""} />}

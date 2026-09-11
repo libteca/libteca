@@ -27,6 +27,9 @@ func (a *API) MountLinking(r *neutron.Router) {
 // library. Moving to a different library is allowed and applies to ALL
 // editions of the target work (works own the library, editions do not).
 func (a *API) editionMove(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdmin(w, r) {
+		return
+	}
 	eid := auth.Atoi64(r.PathValue("id"))
 	e, err := a.DB.EditionRow(eid)
 	if err != nil {
@@ -101,6 +104,9 @@ func (a *API) editionMove(w http.ResponseWriter, r *http.Request) {
 // to the source work's author). If the source work is left empty it is
 // deleted.
 func (a *API) editionSplit(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdmin(w, r) {
+		return
+	}
 	eid := auth.Atoi64(r.PathValue("id"))
 	var body struct {
 		Title  string  `json:"title"`

@@ -290,9 +290,12 @@ export const readerOverlay: CSSProperties = {
 };
 
 export const readerBar: CSSProperties = {
-  display: "flex", alignItems: "center", gap: "0.7rem", flexWrap: "wrap", rowGap: "0.3rem",
-  padding: "0.4rem 0.9rem", borderBottom: `1px solid ${c.lineSoft}`,
-  background: "rgba(18, 19, 22, 0.92)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)",
+  position: "relative",
+  display: "flex", alignItems: "center", gap: "0.4rem",
+  padding: "0.35rem 0.9rem", minHeight: "3.5rem",
+  background: "rgba(12, 13, 15, 0.78)",
+  backdropFilter: "blur(20px) saturate(160%)", WebkitBackdropFilter: "blur(20px) saturate(160%)",
+  borderBottom: "1px solid rgba(255,255,255,0.06)",
 };
 
 export const readerControls: CSSProperties = {
@@ -305,12 +308,44 @@ export const readerStage: CSSProperties = {
   userSelect: "none", WebkitUserSelect: "none",
 };
 
+export const toolBtnCls = "lt-tool";
+
 export const toolBtn: CSSProperties = {
-  ...iconBtn, width: "2.1rem", height: "2.1rem", borderRadius: "8px",
+  ...iconBtn, width: "2.5rem", height: "2.5rem", borderRadius: "50%",
+  transition: "background 0.15s ease, color 0.15s ease",
 };
 
 export function toolBtnActive(active: boolean): CSSProperties {
   return active ? { ...toolBtn, color: c.accent, background: c.accentSoft } : toolBtn;
+}
+
+export function ReaderChrome() {
+  return (
+    <style>{".lt-tool:not(:disabled):hover{background:rgba(255,255,255,0.08)}.lt-tool:disabled{opacity:0.4;cursor:default}"}</style>
+  );
+}
+
+export function PagePill(props: { text: string; watch: string | number }) {
+  const [lit, setLit] = useState(false);
+  const timer = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    setLit(true);
+    if (timer.current !== undefined) clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => { timer.current = undefined; setLit(false); }, 1600);
+    return () => { if (timer.current !== undefined) { clearTimeout(timer.current); timer.current = undefined; } };
+  }, [props.watch, props.text]);
+  if (!props.text) return null;
+  return (
+    <div style={{
+      position: "absolute", bottom: "1.25rem", left: "50%", transform: "translateX(-50%)", zIndex: 8,
+      background: "rgba(12, 13, 15, 0.78)",
+      backdropFilter: "blur(20px) saturate(160%)", WebkitBackdropFilter: "blur(20px) saturate(160%)",
+      border: "1px solid rgba(255,255,255,0.08)", borderRadius: "999px",
+      padding: "0.45rem 0.9rem", fontSize: "0.78rem", color: c.textDim,
+      fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap", pointerEvents: "none",
+      opacity: lit ? 1 : 0.25, transition: "opacity 0.45s ease",
+    }}>{props.text}</div>
+  );
 }
 
 export const drawerPanel: CSSProperties = {
@@ -337,32 +372,34 @@ export function ReaderMessage(props: { text: string; onBack?: () => void }) {
 export function TopBar(props: { title: string; meta?: string; saveState: SaveState | null; onBack: () => void; children?: ComponentChildren }) {
   return (
     <div style={readerBar}>
-      <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", minWidth: 0, flex: 1 }}>
-        <button style={toolBtn} aria-label="Back" title="Back (Esc)" onClick={props.onBack}><IconArrowLeft size={17} /></button>
-        <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
-          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 600, fontSize: "0.92rem", lineHeight: 1.3 }}>{props.title}</span>
-          {props.meta && <span style={{ color: c.muted, fontSize: "0.72rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", lineHeight: 1.3 }}>{props.meta}</span>}
-        </div>
-      </div>
+      <ReaderChrome />
+      <button className={toolBtnCls} style={toolBtn} aria-label="Back" title="Back (Esc)" onClick={props.onBack}><IconArrowLeft size={17} /></button>
       {props.saveState && props.saveState !== "idle" && (
         <span style={{ color: props.saveState === "error" ? c.danger : c.muted, fontSize: "0.72rem", flexShrink: 0 }}>
           {props.saveState === "saving" ? "saving…" : props.saveState === "saved" ? "saved" : "save failed"}
         </span>
       )}
+      <div style={{ position: "absolute", left: "50%", top: "50%", transform: "translate(-50%, -50%)", display: "flex", flexDirection: "column", alignItems: "center", gap: "0.12rem", maxWidth: "min(30rem, 55vw)", pointerEvents: "none", textAlign: "center" }}>
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 600, fontSize: "0.92rem", lineHeight: 1.25, maxWidth: "100%" }}>{props.title}</span>
+        {props.meta && (
+          <span style={{ color: c.muted, fontSize: "0.68rem", lineHeight: 1.45, background: "rgba(255,255,255,0.06)", borderRadius: "999px", padding: "0.02rem 0.55rem", maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{props.meta}</span>
+        )}
+      </div>
+      <span style={{ flex: 1 }} />
       {props.children != null && <div style={{ display: "flex", alignItems: "center", gap: "0.15rem", flexShrink: 0 }}>{props.children}</div>}
     </div>
   );
 }
 
-export function TapZones(props: { onLeft: () => void; onRight: () => void }) {
+export function TapZones(props: { onLeft: () => void; onRight: () => void; leftLabel?: string; rightLabel?: string }) {
   const zone: CSSProperties = {
     position: "absolute", top: 0, bottom: 0, width: "33.333%", zIndex: 5,
-    background: "transparent", border: "none", padding: 0, cursor: "pointer", outline: "none",
+    background: "transparent", border: "none", padding: 0, cursor: "pointer",
   };
   return (
     <div style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
-      <button aria-label="Previous page" style={{ ...zone, left: 0, pointerEvents: "auto" }} onClick={props.onLeft} />
-      <button aria-label="Next page" style={{ ...zone, right: 0, pointerEvents: "auto" }} onClick={props.onRight} />
+      <button aria-label={props.leftLabel ?? "Previous page"} style={{ ...zone, left: 0, pointerEvents: "auto" }} onClick={props.onLeft} />
+      <button aria-label={props.rightLabel ?? "Next page"} style={{ ...zone, right: 0, pointerEvents: "auto" }} onClick={props.onRight} />
     </div>
   );
 }

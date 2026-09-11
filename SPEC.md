@@ -282,73 +282,78 @@ error), no fsnotify, no providers/network metadata, no multi-user UI polish
 beyond create/revoke, no podcasts, no OPDS, no backups tooling (document
 `data/` copy), no Docker image (bare binary + systemd doc).
 
-## 9. Current state (2026-09-09, after waves 1-4)
+## 9. Current state (2026-09-11, consolidated)
 
-**Done and smoke-verified** (synthetic libraries over curl/tests, all faces):
+§1–8 above is the frozen Slice 0 contract (chi/sqlc/`/api/`/`libteca scan`
+are historical). Live ledgers: this section, PLAN status, DECISIONS,
+README matrix.
 
-- Tasks 1-9 complete: scaffold (neutron-go), store + migrations 0001-0006,
-  argon2id auth, audiobook scanner (m4b chapters, multi-mp3, covers), core API
-  (Range streaming), ABS face, embedded Neutron web UI.
-- Slice 1 core: movie/TV/music scanners, Jellyfin face v1 (Views, Items,
-  Seasons/Episodes, PlaybackInfo, /Videos stream, ffmpeg HLS transcode w/
-  reaper + prebuffer, /Audio universal, Sessions, Images, NextUp real,
-  trickplay tiles + manifest, /socket websocket w/ hand-rolled RFC6455,
-  hardware accel: videotoolbox/vaapi/nvenc/qsv auto-detect + software
-  fallback).
-- Discovery layer + web UI overhaul (home resume hub, global search, filters,
-  players + subtitles + Media Session, admin w/ live SSE scan jobs, PWA).
-- Wave 1: books/comics scanning (EPUB/CBZ/PDF, reading progress page/percent/
-  locator) + web readers (epub.js, CBZ three-mode w/ RTL + webtoon, native
-  PDF); podcasts domain (fetch/download/retention/scheduler/OPML) + web UI +
-  ABS/Jellyfin face surfacing; Subsonic face v1 (dual XML/JSON, real
-  everything incl. playlists after 0006); users/tokens management; bench
-  suite (PLAN §10 targets tracked in bench/results/).
-- Wave 2: OPDS 1.2 + OPDS-PSE face (KOReader/Chunky path, Basic auth);
-  warm-scan probe-skip (10k warm re-scan 211.6s → 0.17s, 0 probes — was a
-  bench FAIL); playlists (migration 0006, core + subsonic + owner-only);
-  Jellyfin /socket (remote-control passthrough, ForceKeepAlive, Sessions
-  push); edition linking (move/split/merge — the Work→Editions moat, manual)
-  + ABS and Kavita instance importers (read-only foreign DBs, dryRun plans);
-  packaging (make release → 4-platform artifacts + SHA256SUMS, systemd unit,
-  teploy template); README w/ honest compat matrix.
-- Wave 3: metadata providers behind one interface (meta.go Registry: TMDB,
-  Audible, MusicBrainz, OpenLibrary, ComicVine; DB-cached 14d; env keys
-  LIBTECA_TMDB_KEY / LIBTECA_COMICVINE_KEY) + matching flow (auto-apply only
-  on single strong match >= 0.85 Levenshtein, else manual inbox at
-  #/matching with Apply/Skip/override); fsnotify watch (2s debounce,
-  per-library; 6h sweep; 24h boot reconcile; missing-file reconciliation;
-  --watch flag, fsnotify dep added); podcast episode progress (migration
-  0007, ABS + Jellyfin UserData shapes, web resume); playlist web UI +
-  play-all; OPDS thumbnails (stdlib box-average downscale, thumb cache);
-  CBR via unrar/unar exec when present; `libteca backup` subcommand
-  (VACUUM INTO + covers mirror + prune).
-- Wave 4: TMDB season/episode titles (`POST /works/{id}/apply-episodes`,
-  fills filename-like titles only); works.genres column (migration 0008,
-  KV leftover rows left in place); OpenLibrary Fetch resolves author keys;
-  multi-file edition Audible chapter distribution (cumulative duration,
-  never clobber ffprobe titles); watch and HTTP scans share one core
-  instance; `--init-admin` is idempotent (same password = ok, wrong
-  password / second admin = error). Race-clean on auth/store/core/watch.
+### Built and verified (synthetic + real demo media, unit + E2E)
 
-**Owed — human-owned (founder), in order:**
+- **Spine**: SQLite WAL (+0009 indexes), goose 0001-0009, argon2 auth +
+  per-device tokens + password-reset revocation, admin gates on every
+  mutating route, per-user progress (position/page/percent/locator),
+  scan/watch with hash re-link, warm-scan probe-skip, sidecar import
+  (NFO plot/genres/titles, poster/fanart/suffix art, language-suffixed
+  SRT), frame/ID3/m4b-attached-pic cover extraction, providers behind
+  one interface with 0.85 auto-apply + manual inbox.
+- **Web UI (the product)**: cinematic home (recency hero, Next Up,
+  Continue W/L/R rails, library tiles), type-first library with
+  progress-badged hover-scrim cards, work pages with facts/genre chips
+  + fanart wash, global search (dropdown + page), admin/matching
+  redesign, playlists + play-all, podcasts, PWA. Header carries every
+  category with icons (deep-links `#/library?type=`).
+- **Viewers**: custom video player (hover-thickening scrubber w/
+  buffered + chapters + tooltip, dblclick-seek, glass controls,
+  buffering state, speed, iOS fullscreen, HLS fallback w/ start offset
+  + server kill on close), floating glass audio bar (chapters popover,
+  sleep/speed, tooltip seek), readers with glass chrome + auto-fading
+  page pill (epub.js CFI, CBZ LRU + webtoon + RTL, PDF pill input).
+- **Faces (built, corpus-unverified)**: Jellyfin (auth headers, Items,
+  PlaybackInfo, HLS w/ rewritten playlists, Sessions hub, websocket,
+  trickplay, hwaccel), ABS (login/items/progress/sessions, owner
+  checks), OPDS 1.2 + PSE + CBR, Subsonic (dual XML/JSON, playlists).
+- **Ops**: release artifacts (4 platforms + SHA256SUMS), systemd unit,
+  teploy template, `libteca backup`, benches tracked in bench/results/.
 
-1. Corpus capture RUN — phone + mitmproxy against real ABS (`make record`,
-   flows in tools/record/README.md); then JMP/Android TV against the
-   Jellyfin face; then Symfonium/KOReader. Replay-green corpus pins every
-   `// corpus:` marker (~20 across faces).
-2. Slice exit gates G1-G3 (real library, web player on real books, phone).
-3. Version pins for ABS server/app + Jellyfin server in DECISIONS (after
-   capture).
-4. PLAN §14 launch decisions (public repo timing, media-hub archive, license).
+### Completion accounting (honest)
 
-**Owed — code, next session:** teploy /dev/dri passthrough is a Teploy-format
-gap, not libteca. Darwin watch logs Add failures (dir-only watches already).
-neutron-go is published: `github.com/neutron-build/neutron/go` v0.1.0
-(Forgejo `Tyler/neutron-go`).
+| Area | % of v1 | What's left |
+|---|---|---|
+| Spine/server | 90 | tx-wrap linking paths; provider-cache pruning; works pagination; non-ASCII search fold |
+| Web UI | 85 | Gate W founder week + what it surfaces; toasts/skeletons niceties |
+| Viewers | 80 | seek thumbnails (trickplay in core face); PiP; real-device tuning |
+| Podcasts | 75 | single Service instance; retention disk cleanup UI; OPML background import |
+| Faces | 65 built / 0 verified | corpus capture + live clients (Gate F, founder-owned) |
+| Ops | 85 | CI workflow; container image; teploy /dev/dri upstream |
+| **Overall (v1 = Gate W)** | **~85** | founder week, CI, deferred tail above |
 
-**Demo/testing:** data/demo + data/demo-media (seeded via tools/seed), admin
-via --init-admin; server on :8096 — the founder's browser-test instance.
+Not started by design: native apps, Kavita protocol, Plex, acquisition,
+Live TV, plugin SDK (PLAN §2).
 
-**Known warts:** episode titles from filename quality until apply-episodes
-runs against TMDB; OPDS full-size image rel is unsized (thumbnail rel is
-160px); teploy device passthrough missing; CI absent (replace-path blocker).
+### Deferred tail (judged low-value, from audits)
+
+single podcast Service instance; retention purge leaves files on disk;
+OPML import synchronous; login timing oracle; refresh-meta SSE
+404/heartbeat/unsubscribe; works list unpaginated; matching inbox
+unbounded; `people/series/collections` model.
+
+### Owed — founder
+
+1. Gate W: a week of daily use on a real library (demo is real media
+   now, but the real library is the bar).
+2. Corpus capture + G1-G3 + version pins (Gate F, optional after W).
+3. PLAN §14: media-hub archive, public timing, license.
+4. CI: add a workflow (module path unblocked).
+
+### Demo
+
+data/demo + data/demo-media — all-real corpus: full 10-min Big Buck
+Bunny (webm), HEVC/MKV transcode test film, Blender Shorts TV (2
+seasons, 4 episodes), three spoken audiobooks (Alice 16.6 min/2
+chapters, Gift of the Magi 10.4 min/2 parts, The Raven 2.4 min — TTS
+from Gutenberg texts, real covers), Kevin MacLeod album, illustrated
+Pride & Prejudice + Frankenstein (EPUB; Frankenstein also PDF — one
+work two editions), Alice CBZ (Tenniel plates); sidecars: Sintel
+movie.nfo, plain + .en.srt subtitles, poster + fanart art. Admin
+tyler / libteca-demo; :8096.

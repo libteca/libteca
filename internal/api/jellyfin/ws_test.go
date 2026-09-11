@@ -404,6 +404,36 @@ func TestSocketAuthRejected(t *testing.T) {
 	}
 }
 
+func TestSocketAuthXEmbyAuthorizationToken(t *testing.T) {
+	srv, _, token, _, _ := wsTestStack(t)
+	host := strings.TrimPrefix(srv.URL, "http://")
+	conn, err := net.DialTimeout("tcp", host, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	key := base64.StdEncoding.EncodeToString([]byte("0123456789abcdef"))
+	var sb strings.Builder
+	sb.WriteString("GET /socket HTTP/1.1\r\n")
+	sb.WriteString("Host: " + host + "\r\n")
+	sb.WriteString("Upgrade: websocket\r\nConnection: Upgrade\r\n")
+	sb.WriteString("Sec-WebSocket-Key: " + key + "\r\nSec-WebSocket-Version: 13\r\n")
+	sb.WriteString(`X-Emby-Authorization: MediaBrowser Client="tclient", Device="tbox", DeviceId="dev", Version="1.0", Token="` + token + `"` + "\r\n")
+	sb.WriteString("\r\n")
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn.Write([]byte(sb.String())); err != nil {
+		t.Fatal(err)
+	}
+	br := bufio.NewReader(conn)
+	status, err := br.ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(status, "101") {
+		t.Fatalf("upgrade status %q, want 101", status)
+	}
+}
+
 func TestSocketEndToEnd(t *testing.T) {
 	srv, jf, token, uid, itemID := wsTestStack(t)
 

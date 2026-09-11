@@ -92,6 +92,27 @@ func (a *API) search(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"results": results})
 }
 
+func (a *API) nextUp(w http.ResponseWriter, r *http.Request) {
+	items, err := a.DB.NextUp(auth.UserID(r), 0, true)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	if len(items) > 12 {
+		items = items[:12]
+	}
+	out := make([]map[string]any, 0, len(items))
+	for _, it := range items {
+		out = append(out, map[string]any{
+			"workId": it.WorkID, "editionId": it.EditionID,
+			"title": it.Title, "episodeTitle": it.EpisodeTitle,
+			"seasonNum": it.SeasonNum, "episodeNum": it.EpisodeNum,
+			"hasCover": it.CoverPath != nil && *it.CoverPath != "",
+		})
+	}
+	writeJSON(w, 200, map[string]any{"items": out})
+}
+
 func (a *API) recent(w http.ResponseWriter, r *http.Request) {
 	limit := 12
 	if v := r.URL.Query().Get("limit"); v != "" {

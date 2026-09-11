@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import { api, media } from "../api";
+import { api, getToken, media } from "../api";
 import { EmptyState, QuietLoad } from "../components/rail";
 import { IconBack30, IconChevronDown, IconChevronLeft, IconChevronUp, IconFwd30, IconPause, IconPlay, IconX } from "../components/svg";
 import { fmt, fmtClock } from "../util";
@@ -14,7 +14,7 @@ type Playlist = {
 
 type PlaylistItem = {
   editionId: number; position: number; title: string; format: string;
-  durationSecs: number; workTitle: string; workAuthor: string | null; hasCover: boolean;
+  durationSecs: number; workId: number; workTitle: string; workAuthor: string | null; hasCover: boolean;
 };
 
 type PlaylistDetail = Playlist & { items: PlaylistItem[] };
@@ -29,7 +29,32 @@ function PlaylistPlayer(props: { items: PlaylistItem[]; onDone: () => void }) {
   const [duration, setDuration] = useState(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const autoplay = useRef(false);
+  const lastPostRef = useRef(0);
   const item = props.items[idx];
+  const itemRef = useRef(item);
+  itemRef.current = item;
+
+  useEffect(() => {
+    const post = () => {
+      const a = audioRef.current;
+      const it = itemRef.current;
+      if (!a || !it || a.ended || a.currentTime <= 1) return;
+      fetch(`/api/core/progress/${it.editionId}`, {
+        method: "POST", keepalive: true,
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${getToken()}` },
+        body: JSON.stringify({
+          position: a.currentTime,
+          duration: isFinite(a.duration) && a.duration > 0 ? a.duration : (it.durationSecs || 0),
+          finished: false,
+        }),
+      }).catch(() => {});
+    };
+    addEventListener("pagehide", post);
+    return () => {
+      removeEventListener("pagehide", post);
+      post();
+    };
+  }, []);
 
   useEffect(() => {
     const a = audioRef.current;
@@ -45,7 +70,24 @@ function PlaylistPlayer(props: { items: PlaylistItem[]; onDone: () => void }) {
     setIdx(i);
   };
 
+  const saveProgress = (finished: boolean) => {
+    const a = audioRef.current;
+    if (!a || !item) return;
+    const pos = a.currentTime;
+    if (pos <= 1 && !finished) return;
+    lastPostRef.current = Date.now();
+    api(`/progress/${item.editionId}`, {
+      method: "POST",
+      body: JSON.stringify({
+        position: pos,
+        duration: isFinite(a.duration) && a.duration > 0 ? a.duration : (item.durationSecs || 0),
+        finished,
+      }),
+    }).catch(() => {});
+  };
+
   const ended = () => {
+    saveProgress(true);
     if (idx < props.items.length - 1) {
       autoplay.current = true;
       setIdx(idx + 1);
@@ -68,8 +110,15 @@ function PlaylistPlayer(props: { items: PlaylistItem[]; onDone: () => void }) {
         ref={audioRef}
         src={item ? media(`/editions/${item.editionId}/download`) : undefined}
         onPlay={() => setPlaying(true)}
-        onPause={() => setPlaying(false)}
-        onTimeUpdate={(e) => setElapsed((e.target as HTMLAudioElement).currentTime)}
+        onPause={() => {
+          setPlaying(false);
+          const a = audioRef.current;
+          if (a && !a.ended) saveProgress(false);
+        }}
+        onTimeUpdate={(e) => {
+          setElapsed((e.target as HTMLAudioElement).currentTime);
+          if (Date.now() - lastPostRef.current >= 15000) saveProgress(false);
+        }}
         onLoadedMetadata={(e) => {
           const a = e.target as HTMLAudioElement;
           if (isFinite(a.duration) && a.duration > 0) setDuration(a.duration);
@@ -105,7 +154,7 @@ function PlaylistPlayer(props: { items: PlaylistItem[]; onDone: () => void }) {
         aria-label="Seek"
       />
       <span style={{ fontSize: "0.75rem", color: c.muted, fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>{fmtClock(duration)}</span>
-      <button className="press" style={{ ...linkBtn, marginLeft: "0.2rem", flexShrink: 0 }} onClick={props.onDone}>Stop</button>
+      <button className="press" style={{ ...linkBtn, marginLeft: "0.2rem", flexShrink: 0 }} onClick={() => { saveProgress(false); props.onDone(); }}>Stop</button>
     </div>
   );
 }
@@ -130,25 +179,38 @@ function PlaylistList() {
     e.preventDefault();
     if (!name.trim()) return;
     setBusy(true); setErr("");
-    const res = await api("/playlists", { method: "POST", body: JSON.stringify({ name: name.trim() }) });
-    setBusy(false);
-    if (res.error) { setErr(res.error); return; }
-    setName("");
-    location.hash = `#/playlists?id=${res.id}`;
+    try {
+      const res = await api("/playlists", { method: "POST", body: JSON.stringify({ name: name.trim() }) });
+      if (res.error) { setErr(res.error); return; }
+      setName("");
+      location.hash = `#/playlists?id=${res.id}`;
+    } catch {
+      setErr("Couldn't reach the server.");
+    } finally {
+      setBusy(false);
+    }
   };
 
   const rename = async (id: number) => {
     if (!renameVal.trim()) { setRenaming(null); return; }
-    const res = await api(`/playlists/${id}`, { method: "PATCH", body: JSON.stringify({ name: renameVal.trim() }) });
-    if (res.error) setErr(res.error);
+    try {
+      const res = await api(`/playlists/${id}`, { method: "PATCH", body: JSON.stringify({ name: renameVal.trim() }) });
+      if (res.error) setErr(res.error);
+    } catch {
+      setErr("Couldn't reach the server.");
+    }
     setRenaming(null);
     refresh();
   };
 
   const remove = async (id: number, label: string) => {
     if (!confirm(`Delete playlist "${label}"?`)) return;
-    const res = await api(`/playlists/${id}`, { method: "DELETE" });
-    if (res.error) setErr(res.error);
+    try {
+      const res = await api(`/playlists/${id}`, { method: "DELETE" });
+      if (res.error) setErr(res.error);
+    } catch {
+      setErr("Couldn't reach the server.");
+    }
     refresh();
   };
 
@@ -192,34 +254,57 @@ function PlaylistList() {
 
 function PlaylistDetail(props: { id: number }) {
   const [p, setP] = useState<PlaylistDetail | null>(null);
+  const [notFound, setNotFound] = useState(false);
   const [err, setErr] = useState("");
   const [playing, setPlaying] = useState(false);
   const [moving, setMoving] = useState(false);
 
   const refresh = () => api(`/playlists/${props.id}`)
-    .then((r: PlaylistDetail & { error?: string }) => setP(r && !r.error ? r : null))
-    .catch(() => setP(null));
+    .then((r: PlaylistDetail & { error?: string }) => {
+      if (r && !r.error) setP(r);
+      else setNotFound(true);
+    })
+    .catch(() => setNotFound(true));
   useEffect(() => { refresh(); }, [props.id]);
 
   const removeItem = async (editionId: number) => {
     setErr("");
-    const res = await api(`/playlists/${props.id}/items/${editionId}`, { method: "DELETE" });
-    if (res.error) setErr(res.error);
+    try {
+      const res = await api(`/playlists/${props.id}/items/${editionId}`, { method: "DELETE" });
+      if (res.error) setErr(res.error);
+    } catch {
+      setErr("Couldn't reach the server.");
+    }
     refresh();
   };
 
   const move = async (editionId: number, position: number) => {
     if (moving) return;
     setMoving(true); setErr("");
-    const res = await api(`/playlists/${props.id}/reorder`, { method: "POST", body: JSON.stringify({ editionId, position }) });
-    setMoving(false);
-    if (res.error) setErr(res.error);
+    try {
+      const res = await api(`/playlists/${props.id}/reorder`, { method: "POST", body: JSON.stringify({ editionId, position }) });
+      if (res.error) setErr(res.error);
+    } catch {
+      setErr("Couldn't reach the server.");
+    } finally {
+      setMoving(false);
+    }
     refresh();
   };
 
+  if (notFound) {
+    return (
+      <div>
+        <button className="press" style={backLink} onClick={() => { location.hash = "#/playlists"; }}><IconChevronLeft size={16} /> Playlists</button>
+        <EmptyState title="Playlist not found" hint="It may have been deleted.">
+          <a style={linkBtn} href="#/playlists">Back to playlists</a>
+        </EmptyState>
+      </div>
+    );
+  }
   if (!p) return <QuietLoad />;
 
-  const audioItems = p.items.filter((it) => it.format === "audio");
+  const audioItems = p.items.filter((it) => ["audio", "m4b", "mp3"].includes(it.format));
 
   return (
     <div style={{ paddingBottom: playing ? "5rem" : 0 }}>
@@ -244,12 +329,21 @@ function PlaylistDetail(props: { id: number }) {
             <div key={it.editionId} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", padding: "0.7rem 0.2rem", borderBottom: `1px solid ${c.lineSoft}` }}>
               <span style={{ display: "flex", gap: "0.7rem", alignItems: "baseline", minWidth: 0 }}>
                 <span style={{ color: c.faint, fontVariantNumeric: "tabular-nums" }}>{i + 1}.</span>
-                <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
-                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: c.textDim }}>{it.title}</span>
-                  <span style={{ ...muted, fontSize: "0.75rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {it.workTitle}{it.workAuthor ? ` · ${it.workAuthor}` : ""}
+                {it.workId ? (
+                  <a href={`#/work?id=${it.workId}`} style={{ display: "flex", flexDirection: "column", minWidth: 0, textDecoration: "none", color: "inherit" }}>
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: c.textDim }}>{it.title}</span>
+                    <span style={{ ...muted, fontSize: "0.75rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {it.workTitle}{it.workAuthor ? ` · ${it.workAuthor}` : ""}
+                    </span>
+                  </a>
+                ) : (
+                  <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: c.textDim }}>{it.title}</span>
+                    <span style={{ ...muted, fontSize: "0.75rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {it.workTitle}{it.workAuthor ? ` · ${it.workAuthor}` : ""}
+                    </span>
                   </span>
-                </span>
+                )}
               </span>
               <span style={{ display: "flex", gap: "0.6rem", alignItems: "center", flexShrink: 0 }}>
                 <span style={badge}>{it.format}</span>

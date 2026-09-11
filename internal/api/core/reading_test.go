@@ -218,7 +218,7 @@ func TestProgressReadingRoundtrip(t *testing.T) {
 	other := seedBookEdition(t, env.db, w, "cbz", ptr(24))
 	seedFileOnDisk(t, env.db, other, "c.cbz", []byte("PK"))
 	_, body = readingReq(t, env, "GET", env.base+fmt.Sprintf("/progress/%d", other), env.token, "")
-	if strings.Contains(body, "page") || strings.Contains(body, "percent") || strings.Contains(body, "locator") {
+	if strings.Contains(body, `"page"`) || strings.Contains(body, `"percent"`) || strings.Contains(body, `"locator"`) {
 		t.Fatalf("default shape leaked reading keys: %s", body)
 	}
 }

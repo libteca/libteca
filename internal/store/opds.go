@@ -6,7 +6,7 @@ import (
 )
 
 // Read-only queries for the OPDS face (internal/api/opds). One feed entry =
-// one edition joined to its work; only epub/pdf/cbz editions with at least
+// one edition joined to its work; only epub/pdf/cbz/cbr editions with at least
 // one non-missing file are exposed.
 
 type OPDSEdition struct {
@@ -29,7 +29,7 @@ const opdsEditionFrom = `
 	FROM editions e
 	JOIN works w ON w.id = e.work_id
 	JOIN libraries l ON l.id = w.library_id
-	WHERE e.format IN ('epub','pdf','cbz')
+	WHERE e.format IN ('epub','pdf','cbz','cbr')
 	  AND EXISTS (SELECT 1 FROM files f WHERE f.edition_id = e.id AND f.missing = 0)`
 
 const opdsBookTypes = ` AND l.type IN ('books','comics')`

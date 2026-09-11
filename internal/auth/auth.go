@@ -115,6 +115,10 @@ func Middleware(db *store.DB) func(http.Handler) http.Handler {
 	}
 }
 
+func WithUser(r *http.Request, id int64) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), userIDKey, id))
+}
+
 func UserID(r *http.Request) int64 {
 	if v, ok := r.Context().Value(userIDKey).(int64); ok {
 		return v

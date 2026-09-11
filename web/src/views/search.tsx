@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { api, type SearchItem } from "../api";
 import { Cover } from "../components/cover";
-import { QuietLoad } from "../components/rail";
-import { IconSearch, TypeIcon } from "../components/svg";
+import { CardProgress, QuietLoad } from "../components/rail";
+import { IconPlay, IconSearch, TypeIcon } from "../components/svg";
 import { coverRatio, debounce, typeLabel } from "../util";
 import { c, card, cardMeta, cardTitleWrap, eyebrow, gridFor, muted, sectionTitle } from "../styles";
 
-const GROUP_ORDER = ["movies", "tv", "music", "audiobooks", "books", "comics"];
+const GROUP_ORDER = ["movies", "tv", "music", "audiobooks", "books", "comics", "podcasts"];
 
 function group(items: SearchItem[]) {
   const g = new Map<string, SearchItem[]>();
@@ -80,7 +80,7 @@ export function SearchBox() {
                 <a key={it.workId} href={`#/work?id=${it.workId}`} onClick={() => setOpen(false)}
                   className="row-hit"
                   style={{ display: "flex", gap: "0.7rem", alignItems: "center", padding: "0.5rem 0.85rem", textDecoration: "none", color: c.text, minHeight: "44px" }}>
-                  <span style={{ width: "2.1rem", flexShrink: 0 }}><Cover has={it.hasCover} id={it.workId} title={it.title} ratio={coverRatio(type)} /></span>
+                  <span style={{ width: "2.1rem", flexShrink: 0 }}><Cover has={it.hasCover} id={it.workId} title={it.title} progress={it.percent || undefined} ratio={coverRatio(type)} /></span>
                   <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
                     <span style={{ fontSize: "0.85rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.title}</span>
                     {it.author && <span style={{ fontSize: "0.73rem", color: c.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.author}</span>}
@@ -115,7 +115,11 @@ export function SearchPage(props: { q: string }) {
     <div>
       <h2 style={sectionTitle}>{props.q}</h2>
       <p style={{ ...muted, marginBottom: "1.4rem" }}>
-        {items.length > 0 ? `${items.length} result${items.length === 1 ? "" : "s"}` : done ? "Nothing found." : ""}
+        {items.length > 0
+          ? `${items.length} result${items.length === 1 ? "" : "s"}`
+          : done
+            ? (props.q.trim().length < 2 ? "Keep typing — search needs at least 2 characters." : "Nothing found.")
+            : ""}
       </p>
       {!done && items.length === 0 && <QuietLoad />}
       {group(items).map(([type, list]) => (
@@ -124,7 +128,11 @@ export function SearchPage(props: { q: string }) {
           <div style={gridFor(type)}>
             {list.map((it) => (
               <a key={it.workId} href={`#/work?id=${it.workId}`} className="cover-card" style={card}>
-                <Cover has={it.hasCover} id={it.workId} title={it.title} progress={it.percent || undefined} ratio={coverRatio(type)} />
+                <div className="cardwrap">
+                  <Cover has={it.hasCover} id={it.workId} title={it.title} ratio={coverRatio(type)} />
+                  <div className="cardover"><div className="cardplay"><IconPlay size={18} /></div></div>
+                  {it.percent ? <CardProgress pct={it.percent} /> : null}
+                </div>
                 <p style={cardTitleWrap}>{it.title}</p>
                 <p style={cardMeta}>{it.author}</p>
               </a>

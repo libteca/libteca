@@ -1,272 +1,277 @@
-# Libteca — one media server, every client
+# Libteca — one library, one UI
 
-One server for movies, TV, music, audiobooks, podcasts, books, comics. The moat is not
-out-featuring Jellyfin, Audiobookshelf, or Kavita individually — it is **implementing their
-wire protocols so their existing clients connect to us unchanged**. One spine, four faces.
+One server for movies, TV, music, audiobooks, podcasts, books, and comics.
+The product is the **first-party web UI**: browse, play, read, resume, admin.
+Work → Editions is the bit no incumbent can do without a rewrite (EPUB + M4B
++ CBZ as one book; progress per-edition, resume per-work).
 
-Status: **BUILDING** (repo `Tyler/libteca`, private until the corpus gates pass).
-All four faces implemented (Jellyfin incl. websocket/trickplay/hwaccel, ABS,
-OPDS+PSE, Subsonic incl. playlists); web UI is a headline surface (home hub,
-readers, PWA, matching inbox, playlists); podcasts, users/tokens, edition
-linking + ABS/Kavita importers, providers, fsnotify watch, benches, packaging
-landed in waves 1-4 (2026-09-09, DECISIONS 12-16). Remaining codeable: tail
-items (refresh-meta SSE, neutron-go publish). Remaining gates (founder-owned):
-corpus capture, G1-G3, launch decisions. Task ledger: SPEC.md §9.
+Protocol faces (Jellyfin, Audiobookshelf, OPDS, Subsonic) are a **nicety**:
+if an existing app happens to connect, good. They are not the moat, not the
+critical path, and not a reason to delay the web. Native apps are not in
+scope — PWA now; inherit a TV/phone client later if the web is not enough.
+
+Status: **BUILDING** (repo `Tyler/libteca`, private). All waves through
+2026-09-11 consolidated in DECISIONS 19-23 and SPEC §9. One-line state:
+spine + first-party web + viewers are code-complete for the v1 bar and
+bug-swept (307 Go tests, 16 packages green, five-agent fix waves + live
+verification); protocol faces are built but corpus-unverified (founder
+gate); demo runs real media (full BBB film, three spoken audiobooks,
+illustrated EPUBs, Tenniel CBZ). Completion accounting lives in SPEC §9.
+Remaining to "finished v1": Gate W founder week, CI workflow, and the
+SPEC §9 deferred tail. Server is neutron-go (DECISIONS 9, 17); §2's old
+"no Neutron" line is superseded — it still bars Neutron DB and SSR
+loaders.
 
 ---
 
-## 1. Thesis
+## 1. Thesis (revised 2026-09-10)
 
-Self-hosters currently run 2-3 media servers because each covers one media type and each has
-a captive client ecosystem. No product owns "one server, every client" because each incumbent
-is structurally committed to its own client. We are not: our product IS the compatibility
-layer. We parasitize three mature client ecosystems the way omi-rss parasitized the reader
-ecosystem — at larger scale.
+Self-hosters run 2–3 media servers because each covers one medium and each
+ships a captive client. The original bet was “parasitize their apps.” That
+is a years-long emulation tail (DeviceProfile, socket.io, Kavita protocol)
+for a solo founder. The honest product is:
 
-Inherited clients (the whole point):
+1. **One binary** that holds every library type.
+2. **One web UI** good enough that you do not open the other three.
+3. **Work → Editions** so a title is not three rows in three apps.
+4. Faces, if cheap, so a phone or TV you already own can keep working.
 
-| Protocol face | Free clients we inherit | Surface size | Slice |
-|---|---|---|---|
-| Jellyfin API (pinned, see §7.1) | Android TV, Fire TV, Jellyfin Media Player, Swiftfin (Apple TV), Roku, Findroid, Infuse | Large — the long pole | 1 |
-| Audiobookshelf API | Official ABS iOS/Android apps (open source: contract is fully readable from client code) | Small-medium | 0 |
-| OPDS 1.2 (+PSE) | KOReader, KyBook, Chunky, Moon+ Reader, Panel — the entire book/comics ecosystem | Small | 2 |
-| Subsonic | Symfonium, Feishin, play:Sub — better music clients than Jellyfin's own | Medium | 3 |
+Beat Jellyfin/Kavita/ABS on *their web*, not on their native apps. Inherit
+those apps only where the face already exists and a live client pass is
+cheap. Do not grow a Kavita protocol. Do not write a native client.
 
-The genuinely novel product bit (no competitor can do it without re-architecting): a unified
-**Work → Editions** library. A book exists once, with EPUB, M4B, and CBZ editions linked.
-Progress is per-edition, resume is per-work. Jellyfin cannot represent audiobooks well, ABS
-cannot represent video, Kavita cannot link audio to text. We can, from day one of the model.
+What this is not: a fourth Plex. No Live TV, no plugins, no acquisition, no
+account cloud.
 
-## 2. Non-goals (scope discipline)
+---
 
-- **No acquisition features.** No torrents, no *arr hooks, no scraping/downloading. Same
-  reasoning as media-hub's Vimm/ROM privacy posture. Acquisition lives in the separate
-  jellyfin-plugins concept if anywhere.
-- **No client development.** We write zero native clients. If a face works in the official
-  app, it works; if not, our web UI covers it. No temptation to "just fix the client."
-- **No Live TV, DVR, IPTV, tuner support.** Evergreen rabbit hole, tiny user overlap.
-- **No plugin system before Slice 4.** Providers are internal interfaces, not a public SDK.
-- **No multi-server clustering.** Single node + SQLite. Backups and Teploy handle the rest.
-- **No Neutron coupling.** Standalone product, zero one-way deps on the framework (ontos
-  discipline). If Neutron's DB ever proves itself, that is a post-1.0 conversation.
+## 2. Non-goals
 
-## 3. Brand decision (recorded)
+- **No native apps.** PWA is the installable client. A future iOS/Android/TV
+  app is a new product decision, not a slice in this plan. Reverse: web+PWA
+  cannot be the living-room client *and* no inherited TV face is green.
+- **No Kavita API face.** OPDS + our reader is the books path. Kavita apps
+  will not point at us; do not spend months so they can.
+- **No Plex face.** Closed protocol, account-tethered clients (DECISIONS 13).
+- **No acquisition.** No torrents, *arr, scraping. jellyfin-plugins concept
+  stays separate.
+- **No Live TV / DVR / IPTV.**
+- **No plugin SDK** before the web gate.
+- **No clustering.** One node, SQLite. Backups + Teploy.
+- **No Neutron DB / no SSR loaders.** Server is neutron-go; web is Neutron
+  static/Preact, client-side only, data via `fetch('/api/core/...')`.
+  (DECISIONS 5, 9, 17 — supersedes the old “zero Neutron” line.)
 
-Standalone name: **libteca** — the natural clipping of *biblioteca*: *lib* (book) + *-teca*
-(case, Greek *thēkē*) = "library." Real morphology, not invention; says the category on
-first hearing. Domains libteca.com/.org/.io all free at decision time (2026-09-09);
-register .com + .org. The rule, for future products:
+---
 
-- Teploy brand when the user is the *server operator* and the product is *infrastructure*
-  (arcade = game-server fleet manager → correct call; dash, observe).
-- Standalone when users are *consumers of content* and adoption must come from outside the
-  Teploy userbase (lullmail, omi-rss, libteca).
+## 3. Brand
 
-Teploy recognition comes from distribution, not naming: libteca ships as a **first-class Teploy
-app template** (`teploy deploy libteca`) at Slice 1 exit — flagship demonstration of Teploy
-deploying a real product, zero brand dilution. Bare deploy (single binary + systemd unit)
-stays first-class; Teploy is optional.
+**libteca** — *biblioteca* clipped: *lib* + *-teca*. Domains libteca.com/.org
+(2026-09-09). Standalone consumer product, not a Teploy sub-brand. Ships as
+an optional Teploy template; bare binary + systemd stays first-class.
+
+---
 
 ## 4. Stack (decided)
 
-| Decision | Choice | Rationale | Rejected |
-|---|---|---|---|
-| Language | **Go** | Hot path is ffmpeg (subprocess); our workload is IO orchestration, API surface, websockets, scanning. Node is proven sufficient (ABS is Node); Go is proven superior for this shape (Navidrome vs every Node media server). Single static binary, low RAM (N5000 4GB constraint), goroutines = transcode session management. Matches Teploy DNA and Tyler's Go fluency. | Rust (buys nothing when the hot path is a subprocess), Node (RAM + single-binary story), C# (Jellyfin's own cage) |
-| Store | **SQLite (WAL)** | Zero-config single binary. Jellyfin and Kavita both default SQLite. Write load (progress ticks) is trivial; reads are cacheable. Repository layer (sqlc) keeps a PG switch theoretically open; do not build it. | PostgreSQL (Tyler default, but wrong here — a home media server must not require a DB server) |
-| Web UI | **Astro/React SPA embedded via `embed.FS`** | One artifact, no Node on the server. Same pattern as Teploy binaries. | Server-side templates (reader/player need SPA interactivity) |
-| Router | **neutron-go** (dogfood; akiroo pattern) | Long-term bet gets a second, load-different production consumer (media IO). Raw `HandleFunc`/`Mount` for the compat faces — framework error contract must not leak into ABS/Jellyfin/Subsonic shapes. Unpublished module: relative `replace` for now, publish before open-sourcing. | chi (revised 2026-09-09 evening — see DECISIONS 9), gin, stdlib mux |
-| Migrations | **goose, embedded** | House-adjacent, boring | atlas |
-| HTTP | stdlib `net/http` | No framework cage | — |
+| Decision | Choice | Notes |
+|---|---|---|
+| Language | Go | ffmpeg is the hot path; single static binary; N5000 4GB floor |
+| Store | SQLite WAL, `modernc.org/sqlite`, goose embedded, hand-rolled SQL | sqlc deferred (DECISIONS 10). No Postgres. |
+| Web | Neutron static + Preact in `web/`, `embed.FS` | Client-side only. `neutron-ts dev` → :8096 |
+| Router | neutron-go `github.com/neutron-build/neutron/go` v0.1.0 | No `replace`. Compat faces use raw `HandleFunc` |
+| Transcode | ffmpeg HLS (MPEG-TS), hwaccel auto + software | First-party player is direct play today; in-browser HLS is a later web gap |
+| HTTP | stdlib `net/http` | |
+
+---
 
 ## 5. Architecture
 
 ```
 libteca (one binary)
-├── cmd/libteca/
+├── cmd/libteca/          # --data, --port, --scan, --watch, --init-admin; backup
 ├── internal/
-│   ├── api/
-│   │   ├── jellyfin/   # path-compatible emulation, one pinned version
-│   │   ├── abs/        # audiobookshelf emulation
-│   │   ├── opds/
-│   │   ├── subsonic/
-│   │   └── core/       # first-party API for own web UI (the only "real" API)
-│   ├── scan/           # fsnotify + periodic sweep; content hashing; NFO import
-│   ├── meta/           # providers behind one interface, DB-cached, manual override
-│   ├── stream/         # DeviceProfile engine: DirectPlay | Remux | Transcode
-│   │                   # ffmpeg pool; HLS session manager; orphan reaper; segment LRU
-│   ├── session/        # playback sessions, progress, websocket hub
-│   ├── auth/           # local users, per-device tokens, admin roles
-│   └── store/          # sqlc + SQLite
-├── web/                # embedded SPA: player, EPUB/CBZ readers, admin
-└── migrations/
+│   ├── api/core/         # THE API. Web is the only first-party client.
+│   ├── api/jellyfin/     # nicety
+│   ├── api/abs/          # nicety
+│   ├── api/opds/         # nicety
+│   ├── api/subsonic/     # nicety
+│   ├── scan/ watch/ meta/ audio/ transcode/ trickplay/
+│   ├── podcast/ importer/ auth/ store/
+│   └── server/           # neutron-go App, embed webdist
+├── web/                  # Neutron static / Preact — the product
+└── testcorpus/           # face fixtures; empty except one ABS ping
 ```
 
-Data model (sketch, sqlc-generated):
+Data model (exists):
 
 ```
-works          -- the intellectual unit (a title)
-  editions     -- embodiment: epub | m4b | mp3 | cbz | pdf | video | season
-    files      -- physical: path, hash, codec/container via ffprobe, chapters
-people, credits, series, collections
-libraries      -- typed: movies | tv | music | audiobooks | books | comics | podcasts
-progress       -- (user, edition, kind=position|page|percent, value, device, updated_at)
-sessions       -- playback sessions incl. transcode state
-tokens, provider_cache, settings
+libraries (typed) → works → editions → files
+progress (per-edition; reading: page/percent/locator)
+podcasts / podcast_episodes (not editions)
+playlists, users, tokens, scan_jobs, provider_cache
 ```
 
-Progress policy (honest, no magic): per-edition positions; work resume = latest across
-editions by wall-clock. Page↔timestamp mapping across editions is explicitly NOT promised.
+Progress policy: per-edition. Work resume = latest in-progress edition by
+wall-clock. Page↔timestamp mapping across editions is **not** promised.
 
-## 6. Streaming pipeline
+`people` / `credits` / `series` / `collections` were sketched and never
+built. Do not add them unless the web gate fails without them. Series for
+comics is Kavita's identity; our answer is editions on one work, not a
+fake series tree.
 
-- Decision engine keyed on client **DeviceProfile** (codecs/containers/bitrate caps declared
-  in PlaybackInfo): DirectPlay → Remux (container change only) → Transcode (HLS fMP4).
-- ffmpeg templates per profile family; hardware accel via VAAPI / NVENC / QSV / VideoToolbox
-  (mac dev box). One accel path ships in Slice 1 (pick by whatever the Proxmox nodes carry),
-  others follow.
-- Session manager: hard cap concurrent transcodes per hardware, orphaned-ffmpeg reaper,
-  segment LRU on disk with a quota. Two clients seeking the same item share output.
-- Audio: direct play nearly always; transcode tier for OPUS-in-M4B edge cases. EBU R128
-  loudness normalize as an opt-in per-library flag (later).
-- Trickplay (scrubber tiles): generate at scan time, serve on Jellyfin's endpoints.
+---
 
-## 7. The four faces
+## 6. First-party web (the product)
 
-### 7.1 Jellyfin (Slice 1 — the moat, the long pole)
+Quality bar: must beat Jellyfin, Kavita, and ABS **in the browser** for a
+household that has all three library types. Inherited apps are irrelevant
+to this bar.
 
-Pin ONE server version — newest stable at kickoff (10.10.x line as of writing; verify at
-slice start), recorded in DECISIONS.md. Never chase every release; re-pin deliberately.
+### Surfaces (all exist; gaps called)
 
-Surface, minimum for living-room parity:
-- Auth: `X-Emby-Authorization` + `X-Emby-Token` headers, `/Users/AuthenticateByName`,
-  `/System/Info/Public` (startup probe). Quick Connect: no.
-- Library: `/Items` typed hierarchy, `/Shows/NextUp`, `/Shows/{id}/Seasons`,
-  `/Users/{id}/Items/Resume`, `/Items/{id}/Similar`, `/Items/{id}/Images`.
-- Playback: `/Items/{id}/PlaybackInfo` (DeviceProfile in, DirectPlay/TranscodingUrl out),
-  `/Videos/{id}/stream`, `/Videos/{id}/master.m3u8`, `/Audio/{id}/universal`,
-  subtitle extraction + delivery.
-- Sessions: `/Sessions`, `/Sessions/Playing`, `/Sessions/Playing/Progress`,
-  `/Sessions/Capabilities/Full`, and the `/socket` websocket (ForceKeepAlive, SessionsStart,
-  Play, Playstate, GeneralCommand) — without sockets, TV apps lose remote control and the
-  client feels dead.
+| Surface | Now | Gap vs the bar |
+|---|---|---|
+| Home | Continue watch/listen/read, Next Up, recently added, libraries | — |
+| Library | Type-first tabs, sort/filter, scan/match, cover progress | — |
+| Work | Cover, metadata, genres, edition tabs, TV seasons, music tracks with resume | Linking is under Manage (admin) |
+| Video | Direct play when browser-safe; else HLS via transcode.Manager + lazy hls.js | Untested on a real non-H.264 file |
+| Audio | Chapters, rate, sleep, resume | Fine for v1 |
+| Readers | EPUB (epub.js + CFI), CBZ (paged/RTL/webtoon), PDF (`<embed>` + page control) | CBR = download, no reader |
+| Podcasts | Subscribe, OPML, play, progress | Fine for v1 |
+| Search | Global, 2+ chars | Percent for books now coalesced; still thin |
+| Admin | Add/remove library, scan SSE, users/tokens, matching, ABS/Kavita import, backup | — |
+| PWA | Installable, runtime cache | Fine |
+| Playlists | CRUD + play-all; rows link to work | — |
 
-Method (this is the part most emulators skip, and why they rot):
-1. Run real Jellyfin + real clients (Android TV, JMP, Swiftfin, Roku) on the LAN.
-2. Record traffic (mitmproxy or a transparent recording reverse-proxy).
-3. Sanitize → **golden traffic corpus** committed to the repo.
-4. Replay harness in CI: every face endpoint is contract-tested against corpus fixtures.
-5. Per-client compat matrix in the README, updated per release. Test the top 5 clients,
-   ignore the tail until filed as issues.
+### Web-complete (the gate)
 
-### 7.2 Audiobookshelf (Slice 0 — smallest surface, proves the pattern)
+Tyler's real library, this UI, daily:
 
-Official apps are open source → the contract is read from client code, not guessed:
-`/login` (token), `/libraries`, `/libraries/{id}/items`, `/me`, `/me/progress/{id}`
-(sync both directions), playback session open/tick/close, cover + file streaming endpoints,
-socket.io for realtime sync. Podcast RSS serving comes with Slice 3 podcasts.
+- All library types browse and open the right CTA (Play / Listen / Read).
+- Resume survives refresh and hash-change (video unmount already flushes).
+- Matching inbox + apply-episodes used on the actual TV shows.
+- Admin can add **and remove** a library without SQL.
+- Cover grid shows progress.
+- A non-browser-playable movie still plays in the web UI (HLS or an honest
+  “open in player” — pick HLS; do not ship a dead Play button).
 
-### 7.3 OPDS (Slice 2)
+Until that gate, do not expand faces.
 
-OPDS 1.2 navigation + acquisition feeds, Basic or token auth, **OPDS-PSE** for paged CBZ
-streaming (Chunky/KOReader page-at-a-time). Search via OpenSearch descriptor. This single
-face covers everything Kavita's external-client story does.
+---
 
-### 7.4 Subsonic (Slice 3)
+## 7. Faces (niceties)
 
-Navidrome's proven subset: `ping`, `authenticate`, `getArtists`/`getIndexes`, `getAlbumList2`,
-`getArtist`/`getAlbum`/`getSong`, `stream`, `download`, `getCoverArt`, `search3`, `scrobble`,
-minimal playlists. Inherited music clients instantly beat Jellyfin's own.
+Honesty rule unchanged: a README cell says **works** only after recorded
+client traffic replays and a live client pass. Today nothing says works.
+On-disk corpus: one synthetic ABS ping.
+
+Do not grow a face because a PLAN table listed it. Grow a face when:
+
+- the web gate is green, **and**
+- Tyler actually uses that client (phone ABS, KOReader, JMP on the TV), **and**
+- the delta is a thin adapter over `core`, not a DeviceProfile engine.
+
+Current adapters stay mounted. Bugs that affect *our* model (auth header,
+owner checks, HLS playlist URIs) get fixed because they are cheap. A
+general Jellyfin DeviceProfile engine, ABS socket.io, Kavita protocol, and
+`/Items/{id}/Similar` are **not** on the web-first path.
+
+If a living-room client is required after the web gate, the order is:
+Jellyfin Media Player (already pointed at us in the README recipe) →
+Android TV. Not Infuse, not Roku, not Swiftfin.
+
+---
 
 ## 8. Scanner & metadata
 
-- Watch (fsnotify) + periodic full sweep (crash reconciliation). Content hash (xxhash:
-  head+tail+size for video, full for audio/books) → move/rename detection without re-probe.
-- ffprobe at scan: codecs, chapters, embedded art. Chapters are load-bearing for audiobooks.
-- Sidecar import at scan: Kodi/Jellyfin NFO + poster/fanart images. This IS the Jellyfin
-  migration story — a switcher keeps their curated metadata.
-- Providers behind one interface, DB-cached, manually overridable:
-  TMDB (movies/TV) · MusicBrainz + Cover Art Archive (music) · Audible + OpenLibrary +
-  Google Books (audiobooks/books — Audible for chapters) · ComicVine (comics) ·
-  iTunes Search (podcast discovery) + RSS (podcast fetch, OPML import).
-- Matching: filename parse → fuzzy → provider; ambiguous = inbox for manual resolution
-  (never wrong-guess silently; wrong metadata is the #1 self-hoster complaint).
+Keep: fsnotify + sweep, xxhash head+tail+size, hash re-link on move,
+ffprobe chapters, NFO + sidecar art, providers behind one interface
+(TMDB, Audible, MusicBrainz, OpenLibrary, ComicVine), auto-apply only on
+single ≥0.85 match else inbox.
 
-## 9. Slices (gates, not hopes — founder gate at each exit)
+Drop from the old list (not built, not needed for the web gate): Google
+Books, iTunes Search. Podcasts are RSS URL + OPML, which is enough.
 
-**Slice 0 — Spine + ABS face** (~2-4 weeks part-time)
-Scan audiobooks (m4b/mp3 + chapters). Web UI: library, player, admin, progress. ABS API deep
-enough for the official apps. Direct play only, no transcode.
-Exit criteria: Tyler's phone, official ABS app (unmodified), connects / browses / plays /
-syncs progress both directions. Golden corpus for the ABS face exists and replays in CI.
+---
 
-**Slice 1 — Jellyfin core** (~2-3 months)
-Auth, Items, images, PlaybackInfo + DeviceProfile engine, `/Sessions` + websockets, HLS
-transcode via one hardware accel path.
-Exit criteria: Android TV + Jellyfin Media Player browse and play (direct + one transcode
-case); transcode start p95 < 2s; `teploy deploy libteca` template published. Golden corpus
-covering the five priority clients' session traffic.
+## 9. Sequence (gates, not hopes)
 
-**Slice 2 — Books & comics (Kavita parity)**
-EPUB/CBZ/PDF scan, web readers (epub.js; CBZ paged reader with prefetch), OPDS + OPDS-PSE.
-Exit criteria: KOReader or Chunky browses + downloads via OPDS; web EPUB reader round-trips
-progress to a phone resume in ABS app (work-level resume working across two editions).
+**Gate W — web daily-use** (current; founder-owned on a real library)
 
-**Slice 3 — Music, podcasts, polish**
-Subsonic subset, music library, podcast fetch/retention/OPML, trickplay tiles.
-Exit criteria: Symfonium or Feishin plays + scrobbles; a podcast subscribes, downloads new
-episodes, appears in ABS app.
+Code for the bar in §6 landed (DECISIONS 19). Then Tyler uses it for a week
+on a real library. If he still opens Jellyfin web, the gap is the next code
+item — not a face.
 
-**Slice 4 — Unified works, migrations, maybe DLNA**
-Multi-edition linking UI, ABS/Kavita instance importers (read their data dirs), DLNA/uPnP
-only if filed by real users.
+**Gate U — unification visible**
 
-## 10. Verification & performance (simval discipline, applied to a product)
+Work→Editions is how you *find* a title, not an admin trick. Resume-per-work
+is the default on the work page (already prefers in-progress edition).
+Importer from ABS/Kavita is how a switcher arrives; dry-run stays.
 
-- Golden traffic corpus (§7.1) is the contract; replay harness runs in CI on every push.
-- Benchmarks as tests, tracked per release: idle RSS, scan throughput (10k-file synthetic
-  library, cold + warm), transcode start latency p95, concurrent-session ceiling.
-- Targets: idle RSS < 100 MB (ABS ~250 MB Node, Jellyfin 300+ MB C# — beatable, Go);
-  10k-file cold scan < 10 min; direct play = disk-bound (no server CPU); one 1080p software
-  transcode sustainable on a 4 GB N5000 (that box is the floor, not the target — the
-  Proxmox cluster is the real deployment).
-- Cross-platform: linux/amd64 + arm64 (cluster + RPi), darwin (dev). Bit-reproducible
-  releases via GoReleaser or hand-rolled Make, Forgejo `Tyler/libteca`, public mirror +
-  `libteca/libteca` when it goes public.
+**Gate F — one inherited client, optional**
 
-## 11. Security posture
+Only after W. Pick the client Tyler actually launches. Record traffic.
+Pin the version in DECISIONS. One green cell in the README. Stop.
 
-Local-first, zero telemetry. Per-device tokens with revocation. Admin surface separate from
-user surface. No exposure to the public internet in any default; Tailscale-first (matches
-the household topology). Media path traversal is the classic media-server kill vector —
-all file serving goes through the file table's resolved paths, never client-supplied paths
-(arcade's BUGS.md filesystem lessons apply directly).
+Old slices 0–4 (ABS → Jellyfin → OPDS → Subsonic → unify) described the
+emulation-first path. Codeable scope of those slices is largely in-tree;
+their *exit criteria* (phone, JMP, KOReader) are demoted to Gate F.
 
-## 12. Risks & mitigations
+---
+
+## 10. Verification
+
+- **Gate W** is judged by daily use, not by corpus. Synthetic `data/demo`
+  is for browser smoke, not the gate.
+- Benchmarks stay as tests: idle RSS < 100 MB (23 MB now), 10k cold scan
+  < 10 min, warm rescan near-instant, transcode p95 < 2s if HLS ships in
+  the web player.
+- Face corpus + CI replay remain the method **if** Gate F is invoked.
+  Do not block web work on an empty `testcorpus/`.
+- CI: no workflow yet. Module path is unblocked. Add when public or when
+  Gate F needs replay on push.
+
+---
+
+## 11. Security
+
+Local-first, zero telemetry. Bind `:<port>`, Tailscale/LAN intended, no
+default public auth. Per-device tokens with revocation. Admin vs user
+surfaces. All file bytes through the `files` table path, never a
+client-supplied path.
+
+---
+
+## 12. Risks
 
 | Risk | Mitigation |
 |---|---|
-| Jellyfin API churn breaks faces | Hard version pin; corpus replay catches regressions before users do; re-pin is a deliberate gated decision, not a chase |
-| Protocol emulation = permanent bug tail | Top-5-clients matrix, ignore the tail; issues filed with client + version; faces are thin adapters over `core` so a face bug is never a data bug |
-| Scope creep (three products in a trench coat) | §2 non-goals; slice gates; nothing enters a slice after its gate is set |
-| Solo bandwidth across 6 active priorities | Slice 0 is deliberately small (ABS face proves the pattern in weeks); kill switch at every gate if the Jellyfin face balloons |
-| Incumbents are free and good enough | The wedge is consolidation + inherited clients, not parity; a Teploy-template one-command install undercuts their Docker-compose setup ritual |
+| Web is “fine” but he still opens Jellyfin for TV | Gate W includes in-browser play for non-H.264; if still failing, Gate F on JMP — not a native app |
+| Solo bandwidth | Faces are niceties; nothing enters a gate after it is set |
+| Scope creep (three products + a UI) | §2; Work→Editions is the only novel surface; no series tree, no people DB |
+| Incumbents are free | Wedge is one install + one work across editions, not parity |
+| Faces rot while ignored | Leave them mounted; do not promise cells; README stays honest |
+
+---
 
 ## 13. Relationships
 
-- **media-hub** (parked, Sides/): superseded by this. Fold anything reusable from its
-  streaming frontend into web/, then archive media-hub. Open decision, below.
-- **Teploy**: deployment target + app template (§3). No shared code required; shared
-  conventions (chi, layout, single binary) deliberate.
-- **Neutron**: none. No coupling, no dogfooding — this must be deployable and maintainable
-  as a plain Go project forever (ontos one-way-dep discipline).
-- **jellyfin-plugins concept**: stays separate; if it revives, libteca is its target host,
-  but libteca itself never grows acquisition.
+- **media-hub** (parked): superseded. Archive when convenient (§14).
+- **Teploy**: optional deploy template. Bare systemd first.
+- **Neutron**: dogfood. neutron-go server + Neutron static UI. No Neutron DB.
+- **jellyfin-plugins concept**: separate; libteca never grows acquisition.
 
-## 14. Open decisions (founder owes)
+---
 
-1. media-hub: archive on Slice 0 exit, or earlier?
-2. Public at Slice 1 exit (recommended — adoption needs eyes; golden corpus + compat matrix
-   make a credible launch post in self-hosting communities) or stay private longer?
-3. Podcasts in Slice 0 scope (ABS apps expect them) or hold at Slice 3 (recommended —
-   audiobook library + progress is the Slice 0 proof, podcasts are fetch-scheduling noise)?
-4. License: MIT (house default for public).
+## 14. Open (founder owes)
+
+1. media-hub: archive now, or whenever?
+2. Public when Gate W is green (recommended — a credible “one UI for the
+   whole library” post) or stay private until one face cell is green?
+3. License: MIT (house default for public).
+4. In-browser HLS vs “Play fails, download/open” for non-browser codecs.
+   Recommendation: HLS, because a dead Play button loses to Jellyfin web.
+
+Closed: podcasts are in (first-party). ABS-app podcasts are a Gate F item,
+not a web item.

@@ -1,4 +1,4 @@
-// libteca service worker — cache-first for same-origin static assets,
+// libteca service worker — network-first for the app shell (navigations),
 // never for media/API. Version-keyed; old caches are dropped on activate.
 //
 // What works offline:
@@ -9,7 +9,7 @@
 //     hashed names rule out install-time precaching from this verbatim
 //     file, so reader code is cached on first reader use
 //   - NOT offline: book files, streams, covers, everything under NEVER
-const VERSION = "libteca-v2";
+const VERSION = "libteca-v3";
 const CACHE = "libteca-" + VERSION;
 const NEVER = [/\/api\//, /^\/s\//, /^\/stream\//, /^\/covers\//, /^\/subtitles\//, /^\/Videos\//, /^\/Audio\//];
 
@@ -41,21 +41,30 @@ self.addEventListener("fetch", (event) => {
 
   event.respondWith(
     (async () => {
+      if (req.mode === "navigate" || url.pathname === "/") {
+        try {
+          const res = await fetch(req);
+          if (res && res.ok) {
+            const cache = await caches.open(CACHE);
+            await cache.put(new Request("/"), res.clone());
+          }
+          return res;
+        } catch (err) {
+          const shell = await caches.match("/");
+          if (shell) return shell;
+          throw err;
+        }
+      }
       const cached = await caches.match(req);
       if (cached) return cached;
       try {
         const res = await fetch(req);
         if (res && res.ok) {
-          const key = req.mode === "navigate" ? new Request("/") : req;
           const cache = await caches.open(CACHE);
-          await cache.put(key, res.clone());
+          await cache.put(req, res.clone());
         }
         return res;
       } catch (err) {
-        if (req.mode === "navigate") {
-          const shell = await caches.match("/");
-          if (shell) return shell;
-        }
         throw err;
       }
     })()

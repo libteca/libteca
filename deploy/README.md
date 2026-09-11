@@ -63,8 +63,8 @@ units get device access via the device cgroup defaults).
 `deploy/teploy/teploy.yml` is the app template for `teploy deploy libteca`
 (single service, port 8096, `/healthcheck` health, `data` volume). Read its
 header before using: it is the target shape — the container image is not
-published yet (the `neutron-go` dependency is a relative `replace` until it
-publishes), and the teploy format has no device mapping, so in-container
+published yet (neutron-go is a published module; remaining work is the ghcr
+image), and the teploy format has no device mapping, so in-container
 hwaccel degrades to software. Until then, deploy bare as above.
 
 ## Network posture

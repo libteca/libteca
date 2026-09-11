@@ -54,9 +54,9 @@ func writeVTT(w http.ResponseWriter, data []byte) {
 	w.Write(data)
 }
 
-// sidecarSRT looks for <base>.srt and <base>.<2-letter>.srt next to the media
-// file; the plain sidecar wins, else the first lang match. The media path comes
-// only from the files table (PLAN §11: never client-supplied paths).
+// sidecarSRT looks for <base>.srt and <base>.<lang>[.flag].srt next to the
+// media file; the plain sidecar wins, else the first lang match. The media
+// path comes only from the files table (PLAN §11: never client-supplied paths).
 func sidecarSRT(media string) (string, bool) {
 	dir := filepath.Dir(media)
 	base := strings.ToLower(strings.TrimSuffix(filepath.Base(media), filepath.Ext(media)))
@@ -77,7 +77,14 @@ func sidecarSRT(media string) (string, bool) {
 			return filepath.Join(dir, e.Name()), true
 		}
 		mid := name[len(base)+1 : len(name)-len(".srt")]
-		if lang == "" && len(mid) == 2 && mid[0] >= 'a' && mid[0] <= 'z' && mid[1] >= 'a' && mid[1] <= 'z' {
+		ok := len(mid) > 0
+		for _, r := range mid {
+			if !(r >= 'a' && r <= 'z' || r == '.') {
+				ok = false
+				break
+			}
+		}
+		if lang == "" && ok {
 			lang = filepath.Join(dir, e.Name())
 		}
 	}

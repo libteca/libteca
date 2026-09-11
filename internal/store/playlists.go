@@ -28,6 +28,7 @@ type PlaylistItem struct {
 	Title        string
 	Format       string
 	DurationSecs float64
+	WorkID       int64
 	WorkTitle    string
 	WorkAuthor   *string
 	CoverPath    *string
@@ -93,7 +94,7 @@ func (d *DB) PlaylistDetail(id int64) (*Playlist, []PlaylistItem, error) {
 }
 
 func (d *DB) PlaylistItems(id int64) ([]PlaylistItem, error) {
-	rows, err := d.Query(`SELECT pi.edition_id, pi.position, pi.added_at, e.title, e.format, `+playlistItemDur+`, w.title, w.author, w.cover_path
+	rows, err := d.Query(`SELECT pi.edition_id, pi.position, pi.added_at, e.title, e.format, `+playlistItemDur+`, e.work_id, w.title, w.author, w.cover_path
 		FROM playlist_items pi
 		JOIN editions e ON e.id = pi.edition_id
 		JOIN works w ON w.id = e.work_id
@@ -106,7 +107,7 @@ func (d *DB) PlaylistItems(id int64) ([]PlaylistItem, error) {
 	var out []PlaylistItem
 	for rows.Next() {
 		var it PlaylistItem
-		if err := rows.Scan(&it.EditionID, &it.Position, &it.AddedAt, &it.Title, &it.Format, &it.DurationSecs, &it.WorkTitle, &it.WorkAuthor, &it.CoverPath); err != nil {
+		if err := rows.Scan(&it.EditionID, &it.Position, &it.AddedAt, &it.Title, &it.Format, &it.DurationSecs, &it.WorkID, &it.WorkTitle, &it.WorkAuthor, &it.CoverPath); err != nil {
 			return nil, err
 		}
 		out = append(out, it)

@@ -112,25 +112,29 @@ func TestEditionMoveEndpoints(t *testing.T) {
 	e2 := linkSeedEdition(t, env.db, w1, "Alpha mp3")
 
 	code, _ := env.do(t, "POST", "/editions/999/move", env.userToken, `{"workId":`+itoa(w2)+`}`)
+	if code != 403 {
+		t.Fatalf("non-admin move = %d, want 403", code)
+	}
+	code, _ = env.do(t, "POST", "/editions/999/move", env.adminToken, `{"workId":`+itoa(w2)+`}`)
 	if code != 404 {
 		t.Fatalf("missing edition = %d, want 404", code)
 	}
-	code, _ = env.do(t, "POST", "/editions/"+itoa(e1)+"/move", env.userToken, `{"workId":999}`)
+	code, _ = env.do(t, "POST", "/editions/"+itoa(e1)+"/move", env.adminToken, `{"workId":999}`)
 	if code != 404 {
 		t.Fatalf("missing work = %d, want 404", code)
 	}
-	code, _ = env.do(t, "POST", "/editions/"+itoa(e1)+"/move", env.userToken, `{}`)
+	code, _ = env.do(t, "POST", "/editions/"+itoa(e1)+"/move", env.adminToken, `{}`)
 	if code != 400 {
 		t.Fatalf("empty move body = %d, want 400", code)
 	}
 
-	code, body := env.do(t, "POST", "/editions/"+itoa(e1)+"/move", env.userToken, `{"workId":`+itoa(w2)+`}`)
+	code, body := env.do(t, "POST", "/editions/"+itoa(e1)+"/move", env.adminToken, `{"workId":`+itoa(w2)+`}`)
 	if code != 200 || body["workId"] != float64(w2) || body["created"] != false || body["sourceDeleted"] != false {
 		t.Fatalf("move to existing = %d %v", code, body)
 	}
 
 	// e2 is now w1's last edition: moving it to a new work must delete w1.
-	code, body = env.do(t, "POST", "/editions/"+itoa(e2)+"/move", env.userToken, `{"newTitle":"Gamma","newAuthor":"C"}`)
+	code, body = env.do(t, "POST", "/editions/"+itoa(e2)+"/move", env.adminToken, `{"newTitle":"Gamma","newAuthor":"C"}`)
 	if code != 200 || body["created"] != true || body["sourceDeleted"] != true || body["sourceWorkId"] != float64(w1) {
 		t.Fatalf("move to new = %d %v", code, body)
 	}
@@ -152,7 +156,7 @@ func TestEditionSplitEndpoint(t *testing.T) {
 	e1 := linkSeedEdition(t, env.db, w1, "Collected")
 	e2 := linkSeedEdition(t, env.db, w1, "Side Story")
 
-	code, body := env.do(t, "POST", "/editions/"+itoa(e2)+"/split", env.userToken, `{"title":"Side Story"}`)
+	code, body := env.do(t, "POST", "/editions/"+itoa(e2)+"/split", env.adminToken, `{"title":"Side Story"}`)
 	if code != 200 || body["created"] != true || body["sourceDeleted"] != false {
 		t.Fatalf("split = %d %v", code, body)
 	}
@@ -166,7 +170,7 @@ func TestEditionSplitEndpoint(t *testing.T) {
 	// Splitting without a title derives "Collected" — which matches the
 	// source work itself, so the move is a no-op. An explicit distinct title
 	// creates the fresh work and empties (deletes) the source.
-	code, body = env.do(t, "POST", "/editions/"+itoa(e1)+"/split", env.userToken, `{"title":"Collected Solo"}`)
+	code, body = env.do(t, "POST", "/editions/"+itoa(e1)+"/split", env.adminToken, `{"title":"Collected Solo"}`)
 	if code != 200 || body["sourceDeleted"] != true {
 		t.Fatalf("split last = %d %v", code, body)
 	}

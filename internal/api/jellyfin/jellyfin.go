@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -55,6 +57,7 @@ func (a *API) Mount(r *neutron.Router) {
 	g.HandleFunc("POST /Items/{id}/PlaybackInfo", a.playbackInfo)
 	g.HandleFunc("GET /Videos/{id}/stream", a.videoStream)
 	g.HandleFunc("GET /videos/{id}/main.m3u8", a.hlsMaster)
+	g.HandleFunc("GET /Videos/{id}/master.m3u8", a.hlsMaster)
 	g.HandleFunc("GET /videos/{id}/hls/{sid}/{file}", a.hlsSegment)
 	g.HandleFunc("GET /Audio/{id}/universal", a.audioUniversal)
 	g.HandleFunc("GET /Audio/{id}/stream", a.audioUniversal)
@@ -76,8 +79,12 @@ func jfAuth(db *store.DB) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			token := r.Header.Get("X-Emby-Token")
 			if token == "" {
-				m := regexp.MustCompile(`Token="([^"]+)"`).FindStringSubmatch(r.Header.Get("Authorization"))
-				if m != nil {
+				if m := reWSAuthToken.FindStringSubmatch(r.Header.Get("Authorization")); m != nil {
+					token = m[1]
+				}
+			}
+			if token == "" {
+				if m := reWSAuthToken.FindStringSubmatch(r.Header.Get("X-Emby-Authorization")); m != nil {
 					token = m[1]
 				}
 			}
@@ -242,7 +249,7 @@ func (a *API) userItems(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		works, _ := a.DB.WorksInLibrary(lib.ID)
-		includeSeries := strings.Contains(types, "series")
+		includeSeries := strings.Contains(types, "series") || types == ""
 		includeMovies := strings.Contains(types, "movie") || types == ""
 		for i := range works {
 			wv := &works[i]
@@ -267,7 +274,7 @@ func (a *API) userItems(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			if includeMovies {
-				items = append(items, a.movieItem(userID, wv))
+				items = append(items, a.movieItem(userID, wv, lib.Type))
 			}
 		}
 	}
@@ -323,7 +330,18 @@ func (a *API) userData(userID int64, ed *store.EditionView) map[string]any {
 	return base
 }
 
-func (a *API) movieItem(userID int64, wv *store.WorkView) map[string]any {
+func movieItemType(libType string) string {
+	switch libType {
+	case "audiobooks":
+		return "AudioBook"
+	case "books", "comics":
+		return "Book"
+	default:
+		return "Movie"
+	}
+}
+
+func (a *API) movieItem(userID int64, wv *store.WorkView, libType string) map[string]any {
 	year := ""
 	if wv.Author != nil && *wv.Author != "" {
 		year = *wv.Author
@@ -335,7 +353,7 @@ func (a *API) movieItem(userID int64, wv *store.WorkView) map[string]any {
 		userData = a.userData(userID, &wv.Editions[0])
 	}
 	it := map[string]any{
-		"Id": "w" + strconv.FormatInt(wv.ID, 10), "Name": wv.Title, "Type": "Movie",
+		"Id": "w" + strconv.FormatInt(wv.ID, 10), "Name": wv.Title, "Type": movieItemType(libType),
 		"ServerId": "libteca-server", "ImageTags": a.coverTags(wv),
 		"RunTimeTicks": ticks(rt), "ProductionYear": nil,
 		"UserData": userData, "IsFolder": false,
@@ -444,7 +462,7 @@ func (a *API) detailFor(userID int64, id string) (map[string]any, bool) {
 				case "music":
 					return a.albumItem(&works[i]), true
 				default:
-					return a.movieItem(userID, &works[i]), true
+					return a.movieItem(userID, &works[i], lib.Type), true
 				}
 			}
 		}
@@ -607,7 +625,11 @@ func (a *API) ancestors(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) sessionsList(w http.ResponseWriter, r *http.Request) {
-	write(w, 200, []any{})
+	if socketHub == nil {
+		write(w, 200, []any{})
+		return
+	}
+	write(w, 200, a.sessionDTOs())
 }
 
 func (a *API) image(w http.ResponseWriter, r *http.Request) {
@@ -679,14 +701,14 @@ func browserPlayable(ed *store.EditionView) bool {
 	if f.Codec != nil {
 		acodec = *f.Codec
 	}
-	audioOK := acodec == "aac" || acodec == "mp3" || acodec == "flac" || acodec == "opus" || acodec == "vorbis"
+	audioOK := acodec == "" || acodec == "aac" || acodec == "mp3" || acodec == "flac" || acodec == "opus" || acodec == "vorbis"
 	first := strings.Split(container, ",")[0]
 	containerOK := first == "mp4" || first == "mov" || first == "m4v" ||
 		(strings.Contains(container, "webm") && (vcodec == "vp9" || vcodec == "vp8" || vcodec == "av1"))
 	if vcodec == "" {
 		return audioOK
 	}
-	return (vcodec == "h264" || vcodec == "vp9" || vcodec == "av1" || vcodec == "hevc") && audioOK && containerOK
+	return (vcodec == "h264" || vcodec == "vp9" || vcodec == "av1") && audioOK && containerOK
 }
 
 func (a *API) playbackInfo(w http.ResponseWriter, r *http.Request) {
@@ -744,12 +766,24 @@ func (a *API) mediaStreams(f *store.FileRec) []map[string]any {
 		}
 		streams = append(streams, s)
 	}
-	streams = append(streams, map[string]any{
-		"Type": "Subtitle", "Index": 0, "Codec": "vtt",
-		"IsExternal": true, "DeliveryMethod": "External",
-		"IsTextSubtitleStream": true,
-	})
+	if sidecarSubtitle(f.Path) {
+		streams = append(streams, map[string]any{
+			"Type": "Subtitle", "Index": 0, "Codec": "vtt",
+			"IsExternal": true, "DeliveryMethod": "External",
+			"IsTextSubtitleStream": true,
+		})
+	}
 	return streams
+}
+
+func sidecarSubtitle(media string) bool {
+	base := strings.TrimSuffix(media, filepath.Ext(media))
+	for _, ext := range []string{".srt", ".vtt"} {
+		if _, err := os.Stat(base + ext); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *API) videoStream(w http.ResponseWriter, r *http.Request) {
@@ -794,7 +828,29 @@ func (a *API) hlsMaster(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Touch()
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-	w.Write(data)
+	w.Write(rewriteHLSPlaylist(data, r.PathValue("id"), sessionID, r.URL.Query().Get("api_key")))
+}
+
+var reHLSURI = regexp.MustCompile(`^(seg\d+\.ts|index\.m3u8)$`)
+
+func rewriteHLSPlaylist(playlist []byte, itemID, sessionID, apiKey string) []byte {
+	prefix := "/videos/" + itemID + "/hls/" + sessionID + "/"
+	q := ""
+	if apiKey != "" {
+		q = "?api_key=" + url.QueryEscape(apiKey)
+	}
+	lines := strings.Split(string(playlist), "\n")
+	for i, line := range lines {
+		s := strings.TrimSpace(line)
+		if s == "" || strings.HasPrefix(s, "#") {
+			continue
+		}
+		file, _, _ := strings.Cut(s, "?")
+		if reHLSURI.MatchString(file) {
+			lines[i] = prefix + file + q
+		}
+	}
+	return []byte(strings.Join(lines, "\n"))
 }
 
 func (a *API) hlsSegment(w http.ResponseWriter, r *http.Request) {
@@ -819,10 +875,17 @@ func (a *API) hlsSegment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer f.Close()
-	fi, _ := f.Stat()
 	if strings.HasSuffix(file, ".m3u8") {
+		data, err := io.ReadAll(f)
+		if err != nil {
+			http.Error(w, "not found", 404)
+			return
+		}
 		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+		w.Write(rewriteHLSPlaylist(data, r.PathValue("id"), sid, r.URL.Query().Get("api_key")))
+		return
 	}
+	fi, _ := f.Stat()
 	http.ServeContent(w, r, file, fi.ModTime(), f)
 }
 
@@ -859,21 +922,16 @@ func (a *API) sessionProgress(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) sessionStopped(w http.ResponseWriter, r *http.Request) {
-	a.saveFromSession(w, r)
-	if sid := r.URL.Query().Get("PlaySessionId"); sid != "" {
-	} else {
-		var body struct {
-			PlaySessionId string `json:"PlaySessionId"`
-		}
-		json.NewDecoder(r.Body).Decode(&body)
-		if body.PlaySessionId != "" {
-			a.TC.Close(strings.TrimPrefix(body.PlaySessionId, "ps-"))
-		}
+	sid := a.saveFromSession(w, r)
+	if q := r.URL.Query().Get("PlaySessionId"); q != "" {
+		sid = q
 	}
-	write(w, 200, map[string]any{})
+	if a.TC != nil && sid != "" {
+		a.TC.Close(sid)
+	}
 }
 
-func (a *API) saveFromSession(w http.ResponseWriter, r *http.Request) {
+func (a *API) saveFromSession(w http.ResponseWriter, r *http.Request) string {
 	var body struct {
 		ItemId        string `json:"ItemId"`
 		PositionTicks int64  `json:"PositionTicks"`
@@ -882,12 +940,12 @@ func (a *API) saveFromSession(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		write(w, 200, map[string]any{})
-		return
+		return ""
 	}
 	ed, err := a.resolvePlayable(body.ItemId)
 	if err != nil {
 		write(w, 200, map[string]any{})
-		return
+		return body.PlaySessionId
 	}
 	pos := fromTicks(body.PositionTicks)
 	fileID, offset := ed.Locate(pos)
@@ -901,6 +959,7 @@ func (a *API) saveFromSession(w http.ResponseWriter, r *http.Request) {
 	a.DB.SetProgress(p)
 	a.ReportPlayback(r, body.ItemId, body.PlaySessionId, body.PositionTicks, body.IsPaused)
 	write(w, 200, map[string]any{})
+	return body.PlaySessionId
 }
 
 func serveFile(w http.ResponseWriter, r *http.Request, path string) {

@@ -15,3 +15,7 @@ STATUS.md
 *.local.md
 testcorpus/*/raw/
 bench/results/
+
+# demo/test data (media + db)
+data/
+dist/

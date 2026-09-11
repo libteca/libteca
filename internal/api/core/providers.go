@@ -165,6 +165,9 @@ var reScanFallbackTitle = regexp.MustCompile(`^[Ss]\d{2}[Ee]\d{2,3}$`)
 // stores the season's first-episode description only when empty. Genres
 // from the main Fetch are written best-effort.
 func (a *API) applyEpisodes(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdmin(w, r) {
+		return
+	}
 	id := auth.Atoi64(r.PathValue("id"))
 	wv, err := a.DB.WorkByID(id)
 	if err != nil {
@@ -188,20 +191,26 @@ func (a *API) applyEpisodes(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "not a tv work"})
 		return
 	}
-	sf, err := a.findSeasonFetcher(body.Provider)
+	if res, err := a.fetchResult(r.Context(), body.Provider, body.ID); err == nil && len(res.Genres) > 0 {
+		_ = a.DB.SetWorkGenres(id, res.Genres)
+	}
+	updated, skipped, err := a.applyEpisodesToWork(r.Context(), id, body.Provider, body.ID)
 	if err != nil {
 		writeJSON(w, 502, map[string]string{"error": err.Error()})
 		return
 	}
-	editions, err := a.DB.WorkEpisodes(id)
+	writeJSON(w, 200, map[string]any{"updated": updated, "skipped": skipped})
+}
+
+func (a *API) applyEpisodesToWork(ctx context.Context, workID int64, provider, id string) (updated, skipped int, err error) {
+	sf, err := a.findSeasonFetcher(provider)
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
-		return
+		return 0, 0, err
 	}
-	if res, err := a.fetchResult(r.Context(), body.Provider, body.ID); err == nil && len(res.Genres) > 0 {
-		_ = a.DB.SetWorkGenres(id, res.Genres)
+	editions, err := a.DB.WorkEpisodes(workID)
+	if err != nil {
+		return 0, 0, err
 	}
-	var updated, skipped int
 	season := -1
 	var byEp map[int]meta.EpisodeInfo
 	first := true
@@ -209,10 +218,9 @@ func (a *API) applyEpisodes(w http.ResponseWriter, r *http.Request) {
 		if ed.SeasonNum != season {
 			season = ed.SeasonNum
 			first = true
-			infos, err := sf.FetchSeasonEpisodes(r.Context(), body.ID, season)
-			if err != nil {
-				writeJSON(w, 502, map[string]string{"error": err.Error()})
-				return
+			infos, ferr := sf.FetchSeasonEpisodes(ctx, id, season)
+			if ferr != nil {
+				return updated, skipped, ferr
 			}
 			byEp = make(map[int]meta.EpisodeInfo, len(infos))
 			for _, info := range infos {
@@ -239,10 +247,13 @@ func (a *API) applyEpisodes(w http.ResponseWriter, r *http.Request) {
 		}
 		first = false
 	}
-	writeJSON(w, 200, map[string]any{"updated": updated, "skipped": skipped})
+	return updated, skipped, nil
 }
 
 func (a *API) matchWork(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdmin(w, r) {
+		return
+	}
 	id := auth.Atoi64(r.PathValue("id"))
 	wv, err := a.DB.WorkByID(id)
 	if err != nil {
@@ -285,6 +296,9 @@ type fileChapter struct {
 }
 
 func (a *API) applyMatch(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdmin(w, r) {
+		return
+	}
 	id := auth.Atoi64(r.PathValue("id"))
 	wv, err := a.DB.WorkByID(id)
 	if err != nil {
@@ -309,7 +323,7 @@ func (a *API) applyMatch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 502, map[string]string{"error": err.Error()})
 		return
 	}
-	summary, err := a.applyResult(wv, lib.Type, res)
+	summary, err := a.applyResult(r.Context(), wv, lib.Type, res)
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
@@ -320,11 +334,11 @@ func (a *API) applyMatch(w http.ResponseWriter, r *http.Request) {
 // applyResult writes a fetched result into the work: description + provider
 // identity, cover download (house convention: covers/{workID}.jpg), Audible
 // chapters for audiobooks (only where empty/generic), genres for movies/tv.
-func (a *API) applyResult(w *store.Work, libType string, res *meta.Result) (map[string]any, error) {
+func (a *API) applyResult(ctx context.Context, w *store.Work, libType string, res *meta.Result) (map[string]any, error) {
 	if err := a.DB.ApplyWorkMeta(w.ID, res.Description, res.Provider, res.ID); err != nil {
 		return nil, err
 	}
-	summary := map[string]any{"cover": false, "chapters": int64(0), "genres": 0}
+	summary := map[string]any{"cover": false, "chapters": int64(0), "genres": 0, "episodes": 0}
 	if res.CoverURL != "" && (w.CoverPath == nil || *w.CoverPath == "") {
 		if saved, err := a.downloadCover(w.ID, res.CoverURL); err == nil && saved {
 			_ = a.DB.SetWorkCover(w.ID, fmt.Sprintf("%d.jpg", w.ID))
@@ -338,6 +352,11 @@ func (a *API) applyResult(w *store.Work, libType string, res *meta.Result) (map[
 	if (kind == "movie" || kind == "tv") && len(res.Genres) > 0 {
 		if err := a.DB.SetWorkGenres(w.ID, res.Genres); err == nil {
 			summary["genres"] = len(res.Genres)
+		}
+	}
+	if kind == "tv" && res.Provider != "" && res.ID != "" {
+		if n, _, err := a.applyEpisodesToWork(ctx, w.ID, res.Provider, res.ID); err == nil {
+			summary["episodes"] = n
 		}
 	}
 	return summary, nil
@@ -515,6 +534,9 @@ func (a *API) downloadCover(workID int64, url string) (bool, error) {
 }
 
 func (a *API) skipWork(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdmin(w, r) {
+		return
+	}
 	id := auth.Atoi64(r.PathValue("id"))
 	if _, err := a.DB.WorkByID(id); err != nil {
 		writeJSON(w, 404, map[string]string{"error": "work not found"})
@@ -614,6 +636,9 @@ func (r *metaRun) finish(s metaSnap) {
 // and the title similarity is >= autoApplyMin. Returns 202 immediately;
 // progress is on GET /libraries/{id}/refresh-meta and the SSE events route.
 func (a *API) refreshMeta(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdmin(w, r) {
+		return
+	}
 	id := auth.Atoi64(r.PathValue("id"))
 	if _, err := a.DB.Library(id); err != nil {
 		writeJSON(w, 404, map[string]string{"error": "library not found"})
@@ -711,7 +736,7 @@ func (a *API) runRefreshMeta(ctx context.Context, libID int64, run *metaRun) {
 		cands, failures := a.searchAll(ctx, q)
 		if failures == 0 && len(cands) == 1 && titleSimilarity(iw.Title, cands[0].Title) >= autoApplyMin {
 			if res, err := a.fetchResult(ctx, cands[0].Provider, cands[0].ID); err == nil {
-				if _, err := a.applyResult(wv, iw.LibraryType, res); err == nil {
+				if _, err := a.applyResult(ctx, wv, iw.LibraryType, res); err == nil {
 					applied++
 					run.publish(metaSnap{Status: "running", Matched: matched, AutoApplied: applied, Total: total})
 				}

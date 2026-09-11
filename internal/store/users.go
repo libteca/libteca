@@ -78,6 +78,28 @@ func (d *DB) DeleteUser(id int64) ([]string, error) {
 	return values, nil
 }
 
+func (d *DB) UserTokenValues(id int64) ([]string, error) {
+	rows, err := d.Query(`SELECT value FROM tokens WHERE user_id = ? AND revoked_at IS NULL`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var values []string
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			return nil, err
+		}
+		values = append(values, v)
+	}
+	return values, rows.Err()
+}
+
+func (d *DB) RevokeUserTokens(id int64) error {
+	_, err := d.Exec(`UPDATE tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`, nowMilli(), id)
+	return err
+}
+
 // Tokens lists tokens; userID 0 means all users.
 func (d *DB) Tokens(userID int64) ([]Token, error) {
 	rows, err := d.Query(`SELECT id, user_id, label, created_at, last_seen_at, revoked_at

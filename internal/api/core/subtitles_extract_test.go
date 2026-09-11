@@ -186,3 +186,30 @@ func TestSubtitlesExtractNoStream(t *testing.T) {
 		t.Fatalf("status = %d, want 404", resp.StatusCode)
 	}
 }
+
+func TestSidecarSRTLanguageSuffix(t *testing.T) {
+	dir := t.TempDir()
+	media := filepath.Join(dir, "movie.mkv")
+	os.WriteFile(media, []byte("x"), 0o644)
+	os.WriteFile(filepath.Join(dir, "movie.eng.forced.srt"), []byte("s"), 0o644)
+	got, ok := sidecarSRT(media)
+	if !ok || !strings.HasSuffix(got, "movie.eng.forced.srt") {
+		t.Fatalf("got %q ok=%v", got, ok)
+	}
+	os.WriteFile(filepath.Join(dir, "movie.srt"), []byte("s"), 0o644)
+	got, ok = sidecarSRT(media)
+	if !ok || !strings.HasSuffix(got, "movie.srt") {
+		t.Fatalf("plain should win: %q ok=%v", got, ok)
+	}
+	os.WriteFile(filepath.Join(dir, "movie.notes.srt"), []byte("s"), 0o644)
+	os.Remove(filepath.Join(dir, "movie.srt"))
+	os.Remove(filepath.Join(dir, "movie.eng.forced.srt"))
+	if _, ok := sidecarSRT(media); !ok {
+		t.Fatal("letter-suffix sibling should match")
+	}
+	os.WriteFile(filepath.Join(dir, "movie.2010.srt"), []byte("s"), 0o644)
+	os.Remove(filepath.Join(dir, "movie.notes.srt"))
+	if _, ok := sidecarSRT(media); ok {
+		t.Fatal("digit-containing suffix must not match")
+	}
+}

@@ -58,6 +58,8 @@ func Library(db *store.DB, lib *store.Library, coversDir string, onProgress Prog
 		return scanMusicLibrary(db, lib, coversDir, tr)
 	case "books", "comics":
 		return scanBooksLibrary(db, lib, coversDir, tr)
+	case "podcasts":
+		return 0, nil
 	}
 	return scanAudioLibrary(db, lib, coversDir, tr)
 }
@@ -139,6 +141,13 @@ func scanBook(db *store.DB, lib *store.Library, top string, group []bookFile, co
 		}
 	}
 	if unchanged {
+		title, author := titleAuthor(top, bookFile{})
+		authorPtr := nullable(author)
+		if id, ok := db.FindWorkID(lib.ID, title, &authorPtr); ok {
+			if err := ensureCover(db, id, top, group, coversDir); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 

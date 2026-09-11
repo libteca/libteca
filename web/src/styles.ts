@@ -15,12 +15,14 @@ export const c = {
   text: "#f5f5f7",
   textDim: "#c7c9ce",
   muted: "#86868b",
-  faint: "#5c5f66",
+  faint: "#767981",
   accent: "#0a84ff",
   accentSoft: "rgba(10, 132, 255, 0.14)",
   danger: "#ff6961",
   ok: "#32d74b",
   coverShadow: "0 8px 28px rgba(0,0,0,0.45)",
+  accentGlow: "0 10px 30px rgba(10, 132, 255, 0.38)",
+  ring: "0 0 0 1px rgba(255,255,255,0.09)",
 };
 
 export const page: CSSProperties = {
@@ -37,7 +39,8 @@ export const page: CSSProperties = {
 export const content: CSSProperties = {
   maxWidth: "88rem",
   margin: "0 auto",
-  padding: "1.15rem 1.6rem 7.5rem",
+  padding: "1.9rem 2rem 8rem",
+  letterSpacing: "-0.011em",
 };
 
 export const center: CSSProperties = {
@@ -54,6 +57,7 @@ export const headerBar: CSSProperties = {
   position: "sticky",
   top: 0,
   zIndex: 30,
+  paddingTop: "env(safe-area-inset-top)",
   background: "rgba(12, 13, 15, 0.82)",
   backdropFilter: "saturate(180%) blur(20px)",
   WebkitBackdropFilter: "saturate(180%) blur(20px)",
@@ -63,12 +67,9 @@ export const headerBar: CSSProperties = {
 export const headerInner: CSSProperties = {
   maxWidth: "88rem",
   margin: "0 auto",
-  padding: "0 1.6rem",
-  height: HEADER_H,
   display: "flex",
   alignItems: "center",
   gap: "0.85rem",
-  flexWrap: "nowrap",
 };
 
 export const brand: CSSProperties = {
@@ -134,8 +135,9 @@ export const loginCard: CSSProperties = {
 
 export const loginTitle: CSSProperties = {
   margin: 0,
-  fontSize: "2rem",
-  fontWeight: 650,
+  fontFamily: serif,
+  fontSize: "2.15rem",
+  fontWeight: 600,
   letterSpacing: "-0.03em",
   lineHeight: 1.1,
 };
@@ -255,18 +257,19 @@ export const tabActive: CSSProperties = {
   ...tab,
   color: c.text,
   fontWeight: 600,
+  boxShadow: `inset 0 -1.5px 0 ${c.text}`,
 };
 
 export const grid: CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "repeat(auto-fill, minmax(10rem, 1fr))",
-  gap: "1rem 0.8rem",
+  gridTemplateColumns: "repeat(auto-fill, minmax(11.75rem, 1fr))",
+  gap: "1.35rem 1.1rem",
 };
 
 export const gridSquare: CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "repeat(auto-fill, minmax(9.25rem, 1fr))",
-  gap: "1rem 0.8rem",
+  gridTemplateColumns: "repeat(auto-fill, minmax(10.5rem, 1fr))",
+  gap: "1.35rem 1.1rem",
 };
 
 export const card: CSSProperties = {
@@ -282,9 +285,9 @@ export const card: CSSProperties = {
 };
 
 export const cardTitle: CSSProperties = {
-  margin: "0.55rem 0 0",
-  fontWeight: 550,
-  fontSize: "0.84rem",
+  margin: "0.65rem 0 0",
+  fontWeight: 600,
+  fontSize: "0.92rem",
   letterSpacing: "-0.012em",
   overflow: "hidden",
   textOverflow: "ellipsis",
@@ -302,9 +305,9 @@ export const cardTitleWrap: CSSProperties = {
 };
 
 export const cardMeta: CSSProperties = {
-  margin: 0,
+  margin: "0.15rem 0 0",
   color: c.muted,
-  fontSize: "0.76rem",
+  fontSize: "0.8rem",
   overflow: "hidden",
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
@@ -343,9 +346,10 @@ export const workMeta: CSSProperties = {
 
 export const workTitle: CSSProperties = {
   margin: 0,
-  fontSize: "clamp(1.8rem, 3.2vw, 2.4rem)",
-  fontWeight: 650,
-  letterSpacing: "-0.024em",
+  fontFamily: serif,
+  fontSize: "clamp(1.85rem, 3.2vw, 2.55rem)",
+  fontWeight: 600,
+  letterSpacing: "-0.028em",
   lineHeight: 1.12,
 };
 
@@ -367,17 +371,17 @@ export const backLink: CSSProperties = {
 };
 
 export const sectionTitle: CSSProperties = {
-  margin: "0 0 0.9rem",
-  fontSize: "1.25rem",
+  margin: "0 0 1.05rem",
+  fontSize: "1.42rem",
   fontWeight: 650,
   letterSpacing: "-0.02em",
 };
 
 export const railTitle: CSSProperties = {
-  margin: "0 0 0.85rem",
-  fontSize: "1.02rem",
-  fontWeight: 650,
-  letterSpacing: "-0.016em",
+  margin: "0 0 1rem",
+  fontSize: "1.16rem",
+  fontWeight: 700,
+  letterSpacing: "-0.021em",
 };
 
 export const eyebrow: CSSProperties = {
@@ -421,9 +425,9 @@ export const videoEl: CSSProperties = {
 export function progressMini(pct: number): CSSProperties {
   return {
     width: "3rem",
-    height: "4px",
+    height: "5px",
     borderRadius: "999px",
-    background: `linear-gradient(90deg, ${c.accent} ${Math.min(100, pct * 100)}%, ${c.line} ${Math.min(100, pct * 100)}%)`,
+    background: `linear-gradient(90deg, ${c.accent} ${Math.min(100, pct * 100)}%, #3a3d45 ${Math.min(100, pct * 100)}%)`,
     alignSelf: "center",
     flexShrink: 0,
   };
@@ -439,10 +443,11 @@ export const playerBar: CSSProperties = {
   backdropFilter: "blur(20px) saturate(160%)",
   WebkitBackdropFilter: "blur(20px) saturate(160%)",
   borderTop: `1px solid ${c.lineSoft}`,
-  padding: "0.7rem 1.5rem 0.8rem",
+  padding: "0.7rem 1.5rem calc(0.8rem + env(safe-area-inset-bottom))",
   display: "flex",
   gap: "0.85rem",
   alignItems: "center",
+  flexWrap: "wrap",
   minHeight: "4.4rem",
 };
 
@@ -554,6 +559,7 @@ export const filterBtnOn: CSSProperties = {
   ...filterBtn,
   color: c.text,
   fontWeight: 600,
+  boxShadow: `inset 0 -1.5px 0 ${c.text}`,
 };
 
 export const selectWrap: CSSProperties = {
@@ -573,3 +579,59 @@ export const selectChevron: CSSProperties = {
 export function gridFor(type?: string): CSSProperties {
   return type === "music" || type === "podcasts" ? gridSquare : grid;
 }
+
+export const panel: CSSProperties = {
+  background: c.bgRaised,
+  border: `1px solid ${c.lineSoft}`,
+  borderRadius: "16px",
+  padding: "1.35rem 1.5rem",
+  marginTop: "1.6rem",
+};
+
+export const panelHead: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: "1rem",
+  flexWrap: "wrap",
+  marginBottom: "0.9rem",
+};
+
+export const fieldLabel: CSSProperties = {
+  margin: 0,
+  fontSize: "0.7rem",
+  fontWeight: 600,
+  textTransform: "uppercase",
+  letterSpacing: "0.07em",
+  color: c.faint,
+};
+
+export const formBlock: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "0.7rem",
+  background: c.bg,
+  border: `1px solid ${c.lineSoft}`,
+  borderRadius: "12px",
+  padding: "1.1rem 1.2rem",
+  maxWidth: "28rem",
+  marginTop: "1.2rem",
+};
+
+export const formNote: CSSProperties = { margin: 0, fontSize: "0.8rem", color: c.muted };
+
+export const formNoteErr: CSSProperties = { ...formNote, color: c.danger };
+
+export const preBlock: CSSProperties = {
+  margin: 0,
+  fontFamily: mono,
+  fontSize: "0.8rem",
+  lineHeight: 1.65,
+  whiteSpace: "pre-wrap",
+  wordBreak: "break-word",
+  color: c.textDim,
+  background: c.bg,
+  border: `1px solid ${c.lineSoft}`,
+  borderRadius: "12px",
+  padding: "0.9rem 1rem",
+};

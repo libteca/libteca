@@ -12,9 +12,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/libteca/libteca/internal/auth"
 	"github.com/libteca/libteca/internal/meta"
 	"github.com/libteca/libteca/internal/store"
 )
+
+var testAdminUID int64
 
 type fakeProvider struct {
 	name       string
@@ -75,6 +78,12 @@ func newMatchingAPI(t *testing.T, libType string, providers ...meta.Provider) (*
 		a.SetMetaProviders(func() []meta.Provider { return set })
 	}
 	t.Cleanup(func() { a.SetMetaProviders(nil) })
+	res, err := db.Exec(`INSERT INTO users (name, password_hash, is_admin, created_at, updated_at) VALUES ('admin','x',1,0,0)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uid, _ := res.LastInsertId()
+	testAdminUID = uid
 	return a, db, libID
 }
 
@@ -106,6 +115,7 @@ func callHandler(t *testing.T, method, path, id, body string, h func(w http.Resp
 	if id != "" {
 		req.SetPathValue("id", id)
 	}
+	req = auth.WithUser(req, testAdminUID)
 	rec := httptest.NewRecorder()
 	h(rec, req)
 	var out map[string]any
@@ -649,5 +659,88 @@ func TestTitleSimilarity(t *testing.T) {
 	}
 	if s := titleSimilarity("Dune: Part Two", "Dune Part Two"); s < 0.85 {
 		t.Errorf("punctuation-only difference = %.3f, want >= 0.85", s)
+	}
+}
+
+type fakeSeasonProvider struct {
+	*fakeProvider
+	seasons map[int][]meta.EpisodeInfo
+}
+
+func (p *fakeSeasonProvider) FetchSeasonEpisodes(ctx context.Context, tvID string, season int) ([]meta.EpisodeInfo, error) {
+	return p.seasons[season], nil
+}
+
+func addTVEpisodes(t *testing.T, db *store.DB, libID int64, title string, eps [][3]any) int64 {
+	t.Helper()
+	w := &store.Work{LibraryID: libID, Title: title}
+	workID, err := db.UpsertWork(w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ep := range eps {
+		s, e := ep[0].(int), ep[1].(int)
+		ed := &store.Edition{WorkID: workID, Format: "video", Title: ep[2].(string), SeasonNum: &s, EpisodeNum: &e}
+		if _, err := db.UpsertEdition(ed); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return workID
+}
+
+func TestApplyMatchFillsEpisodeTitles(t *testing.T) {
+	fp := &fakeProvider{
+		name: "tmdb",
+		kind: "tv",
+		fetchRes: &meta.Result{
+			Provider: "tmdb", ID: "tv:9", Title: "Show",
+			Description: "series desc", Genres: []string{"Drama"},
+		},
+	}
+	sp := &fakeSeasonProvider{fakeProvider: fp, seasons: map[int][]meta.EpisodeInfo{
+		1: {
+			{Season: 1, Episode: 1, Title: "Pilot", Description: "The start"},
+			{Season: 1, Episode: 2, Title: "Second Hour"},
+		},
+	}}
+	a, db, libID := newMatchingAPI(t, "tv", sp)
+	workID := addTVEpisodes(t, db, libID, "Show", [][3]any{{1, 1, "S01E01"}, {1, 2, "A Real Title"}})
+
+	code, body := callHandler(t, "POST", "/works/1/apply", strconv.FormatInt(workID, 10),
+		`{"provider":"tmdb","id":"tv:9"}`, a.applyMatch)
+	if code != 200 {
+		t.Fatalf("code = %d body = %v", code, body)
+	}
+	apply, _ := body["apply"].(map[string]any)
+	if apply["episodes"] != float64(1) {
+		t.Fatalf("apply summary = %v", apply)
+	}
+	eds, err := db.WorkEpisodes(workID)
+	if err != nil || len(eds) != 2 {
+		t.Fatalf("episodes = %v %v", eds, err)
+	}
+	if eds[0].Title != "Pilot" {
+		t.Fatalf("S01E01 not filled: %q", eds[0].Title)
+	}
+	if eds[1].Title != "A Real Title" {
+		t.Fatalf("good title clobbered: %q", eds[1].Title)
+	}
+}
+
+func TestApplyEpisodesEndpoint(t *testing.T) {
+	fp := &fakeProvider{name: "tmdb", kind: "tv", fetchRes: &meta.Result{Provider: "tmdb", ID: "tv:9"}}
+	sp := &fakeSeasonProvider{fakeProvider: fp, seasons: map[int][]meta.EpisodeInfo{
+		1: {{Season: 1, Episode: 1, Title: "Pilot"}},
+	}}
+	a, db, libID := newMatchingAPI(t, "tv", sp)
+	workID := addTVEpisodes(t, db, libID, "Show", [][3]any{{1, 1, "S01E01"}})
+
+	code, body := callHandler(t, "POST", "/works/1/apply-episodes", strconv.FormatInt(workID, 10),
+		`{"provider":"tmdb","id":"tv:9"}`, a.applyEpisodes)
+	if code != 200 {
+		t.Fatalf("code = %d body = %v", code, body)
+	}
+	if body["updated"] != float64(1) {
+		t.Fatalf("body = %v", body)
 	}
 }

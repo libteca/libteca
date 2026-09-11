@@ -1,14 +1,14 @@
 # libteca
 
-One media server, every client. Movies, TV, music, audiobooks, podcasts, books,
-and comics from a single Go binary with an embedded SQLite store — serving four
-wire-protocol faces so existing client apps are the target, not a fifth client
-ecosystem.
+One library, one UI. Movies, TV, music, audiobooks, podcasts, books, and comics
+from a single Go binary with an embedded SQLite store. The product is the
+first-party web UI. Four protocol faces (Jellyfin, Audiobookshelf, OPDS,
+Subsonic) are optional — existing apps are a nicety, not the target.
 
-Status: BUILDING (private). The spine, first-party web UI, and all four faces
-are mounted. No live-client cell below says "works". ABS is expected from
-reading official-app source (corpus replay pending). Jellyfin, OPDS, and
-Subsonic are corpus-pending / untested against real clients.
+Status: BUILDING (private). Spine, web UI, and viewers are code-complete
+for v1 and bug-swept (see SPEC §9 for the completion table). The live gate
+is daily use of the web UI on a real library. No inherited-client cell
+below says "works".
 
 ## The four faces
 
@@ -19,8 +19,10 @@ Subsonic are corpus-pending / untested against real clients.
 | OPDS | OPDS 1.2 navigation/acquisition feeds, Basic auth, OpenSearch, OPDS-PSE paged CBZ | KOReader, KyBook, Chunky, Moon+, Panel | Built; untested against clients |
 | Subsonic | Subsonic subset: ping, password/token auth on `/rest/*`, artists/indexes, album lists, stream, search, scrobble | Symfonium, Feishin, play:Sub | Subset built; untested against clients |
 
-Podcast subscribe, auto-download, and OPML import/export are on the spine and
-mounted on the ABS face. That path is corpus-unverified against ABS apps.
+Podcast subscribe, auto-download, and OPML are on the spine and first-party
+UI. Parallel ABS `/api/podcasts` routes exist; the official app lists podcasts
+via `/api/libraries/{id}/items`, which is works-only — so the app will not
+see them. Corpus-unverified either way.
 
 ## Quickstart
 
@@ -74,8 +76,9 @@ run is pending, so nothing says "works" yet.
 | Feishin | Subsonic | Untested |
 | play:Sub | Subsonic | Untested |
 
-The web UI (library browse, players for audio/video, EPUB/CBZ readers, admin)
-is a first-party surface, not a substitute for face verification.
+The web UI is the product (library, players, EPUB/CBZ/PDF readers, podcasts,
+admin). Face cells above are optional compatibility, not a substitute for
+that UI being good enough to replace Jellyfin / Kavita / ABS in the browser.
 
 ## Benchmarks
 

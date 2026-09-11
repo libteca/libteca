@@ -185,6 +185,39 @@ func TestSearchEndpoint(t *testing.T) {
 	}
 }
 
+func TestLibrariesJSONShape(t *testing.T) {
+	db, base, token := newDiscoveryEnv(t)
+	dir := t.TempDir()
+	id, err := db.AddLibrary("Audio", "audiobooks", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp := authedGet(t, base+"/libraries", token)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var libs []map[string]any
+	if err := json.Unmarshal([]byte(bodyStr(t, resp)), &libs); err != nil {
+		t.Fatal(err)
+	}
+	if len(libs) != 1 {
+		t.Fatalf("len = %d, want 1: %v", len(libs), libs)
+	}
+	got := libs[0]
+	for _, k := range []string{"id", "name", "type", "path"} {
+		if _, ok := got[k]; !ok {
+			t.Fatalf("missing key %q: %v", k, got)
+		}
+	}
+	if _, ok := got["ID"]; ok {
+		t.Fatalf("PascalCase leaked: %v", got)
+	}
+	if int64(got["id"].(float64)) != id || got["name"] != "Audio" || got["type"] != "audiobooks" || got["path"] != dir {
+		t.Fatalf("got %v", got)
+	}
+}
+
 func TestRecentEndpoint(t *testing.T) {
 	db, base, token := newDiscoveryEnv(t)
 	lib, _ := db.AddLibrary("ab", "audiobooks", t.TempDir())

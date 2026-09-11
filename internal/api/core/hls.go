@@ -1,0 +1,181 @@
+package core
+
+import (
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/libteca/libteca/internal/auth"
+	"github.com/libteca/libteca/internal/store"
+	"github.com/neutron-build/neutron/go/neutron"
+)
+
+var (
+	reHLSURI  = regexp.MustCompile(`^(seg\d+\.ts|index\.m3u8)$`)
+	reHLSFile = regexp.MustCompile(`^seg\d+\.ts$|^index\.m3u8$`)
+	reHLSSID  = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+)
+
+func (a *API) MountHLS(r *neutron.Router) {
+	r.HandleFunc("GET /editions/{id}/playback", a.editionPlayback)
+	r.HandleFunc("GET /hls/{sid}/{file}", a.hlsFile)
+	r.HandleFunc("DELETE /hls/{sid}", a.hlsStop)
+}
+
+func webSessionID(editionID int64) string {
+	return "web-" + strconv.FormatInt(editionID, 10)
+}
+
+func browserPlayable(ed *store.EditionView) bool {
+	if len(ed.Files) == 0 {
+		return false
+	}
+	f := ed.Files[0]
+	vcodec := ""
+	container := ""
+	if f.VideoCodec != nil {
+		vcodec = *f.VideoCodec
+	}
+	if f.Container != nil {
+		container = *f.Container
+	}
+	acodec := ""
+	if f.Codec != nil {
+		acodec = *f.Codec
+	}
+	audioOK := acodec == "" || acodec == "aac" || acodec == "mp3" || acodec == "flac" || acodec == "opus" || acodec == "vorbis"
+	first := strings.Split(container, ",")[0]
+	containerOK := first == "mp4" || first == "mov" || first == "m4v" ||
+		(strings.Contains(container, "webm") && (vcodec == "vp9" || vcodec == "vp8" || vcodec == "av1"))
+	if vcodec == "" {
+		return acodec != "" && audioOK
+	}
+	return (vcodec == "h264" || vcodec == "vp9" || vcodec == "av1") && audioOK && containerOK
+}
+
+func (a *API) editionPlayback(w http.ResponseWriter, r *http.Request) {
+	id := auth.Atoi64(r.PathValue("id"))
+	ed, err := a.DB.EditionByID(id)
+	if err != nil || len(ed.Files) == 0 {
+		writeJSON(w, 404, map[string]string{"error": "not found"})
+		return
+	}
+	fileID := ed.Files[0].ID
+	if browserPlayable(ed) {
+		writeJSON(w, 200, map[string]any{"mode": "direct", "fileId": fileID})
+		return
+	}
+	if a.TC == nil {
+		writeJSON(w, 503, map[string]string{"error": "transcode unavailable"})
+		return
+	}
+	writeJSON(w, 200, map[string]any{
+		"mode": "hls", "fileId": fileID, "sessionId": webSessionID(ed.ID),
+	})
+}
+
+func rewriteHLSPlaylist(playlist []byte, sid, token string) []byte {
+	prefix := "/api/core/hls/" + sid + "/"
+	q := ""
+	if token != "" {
+		q = "?token=" + url.QueryEscape(token)
+	}
+	lines := strings.Split(string(playlist), "\n")
+	for i, line := range lines {
+		s := strings.TrimSpace(line)
+		if s == "" || strings.HasPrefix(s, "#") {
+			continue
+		}
+		file, _, _ := strings.Cut(s, "?")
+		if reHLSURI.MatchString(file) {
+			lines[i] = prefix + file + q
+		}
+	}
+	return []byte(strings.Join(lines, "\n"))
+}
+
+func (a *API) hlsStop(w http.ResponseWriter, r *http.Request) {
+	sid := r.PathValue("sid")
+	if !reHLSSID.MatchString(sid) || !strings.HasPrefix(sid, "web-") {
+		http.Error(w, "bad", 400)
+		return
+	}
+	if a.TC != nil {
+		a.TC.Close(sid)
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+func (a *API) hlsFile(w http.ResponseWriter, r *http.Request) {
+	sid := r.PathValue("sid")
+	file := r.PathValue("file")
+	if !reHLSSID.MatchString(sid) || !strings.HasPrefix(sid, "web-") {
+		http.Error(w, "bad", 400)
+		return
+	}
+	if !reHLSFile.MatchString(file) {
+		http.Error(w, "bad", 400)
+		return
+	}
+	if a.TC == nil {
+		writeJSON(w, 503, map[string]string{"error": "transcode unavailable"})
+		return
+	}
+	eid := auth.Atoi64(strings.TrimPrefix(sid, "web-"))
+	if eid <= 0 {
+		http.Error(w, "bad", 400)
+		return
+	}
+	ed, err := a.DB.EditionByID(eid)
+	if err != nil {
+		http.Error(w, "not found", 404)
+		return
+	}
+	start := 0.0
+	if s := r.URL.Query().Get("start"); s != "" {
+		if v, err := strconv.ParseFloat(s, 64); err == nil && v > 0 {
+			start = v
+		}
+	}
+	s, err := a.TC.Get(sid, ed.ID, ed.Files[0].Path, start)
+	if err != nil {
+		http.Error(w, "transcode failed", 500)
+		return
+	}
+	if strings.HasSuffix(file, ".m3u8") {
+		s.Prebuffer(r.Context(), 2, 10*time.Second)
+		for i := 0; i < 100; i++ {
+			if fi, err := os.Stat(s.Playlist()); err == nil && fi.Size() > 0 {
+				break
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		data, err := os.ReadFile(s.Playlist())
+		if err != nil {
+			http.Error(w, "no playlist", 500)
+			return
+		}
+		s.Touch()
+		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+		w.Write(rewriteHLSPlaylist(data, sid, r.URL.Query().Get("token")))
+		return
+	}
+	if !a.TC.WaitForSegmentFile(r.Context(), sid, file, 10*time.Second) {
+		http.Error(w, "not found", 404)
+		return
+	}
+	path := filepath.Join(a.DataDir, "transcode", sid, file)
+	f, err := os.Open(path)
+	if err != nil {
+		http.Error(w, "not found", 404)
+		return
+	}
+	defer f.Close()
+	fi, _ := f.Stat()
+	http.ServeContent(w, r, file, fi.ModTime(), f)
+}

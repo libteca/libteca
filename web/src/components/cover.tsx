@@ -1,4 +1,5 @@
 import type { CSSProperties } from "preact";
+import { useState } from "preact/hooks";
 import { media } from "../api";
 import { serif } from "../styles";
 
@@ -30,21 +31,17 @@ function monogram(title: string) {
 
 const wrap: CSSProperties = { position: "relative", width: "100%" };
 
-const img: CSSProperties = { width: "100%", height: "100%", objectFit: "cover", display: "block", willChange: "transform" };
-
-const barOuter: CSSProperties = {
-  position: "absolute", left: "12%", right: "12%", bottom: "9%",
-  height: "2px", borderRadius: "999px", background: "rgba(255,255,255,0.22)", overflow: "hidden",
-};
+const img: CSSProperties = { width: "100%", height: "100%", objectFit: "cover", display: "block" };
 
 function boxStyle(ratio?: CoverRatio): CSSProperties {
   return {
     width: "100%",
     aspectRatio: ratio === "square" ? "1 / 1" : "2 / 3",
-    borderRadius: "4px",
+    borderRadius: "6px",
     overflow: "hidden",
     display: "block",
-    boxShadow: "0 14px 36px rgba(0,0,0,0.42)",
+    position: "relative",
+    boxShadow: "0 16px 40px rgba(0,0,0,0.5)",
   };
 }
 
@@ -54,13 +51,12 @@ function Cloth(props: { id: number; title: string; ratio?: CoverRatio }) {
   const square = props.ratio === "square";
   return (
     <div style={{
-      ...boxStyle(props.ratio),
+      position: "absolute", inset: 0,
       background: `linear-gradient(165deg, ${pal.top} 0%, ${pal.bot} 100%)`,
       display: "flex",
       flexDirection: "column",
       alignItems: "center",
       justifyContent: "center",
-      position: "relative",
     }}>
       <span style={{
         fontFamily: serif,
@@ -81,18 +77,25 @@ function Cloth(props: { id: number; title: string; ratio?: CoverRatio }) {
 }
 
 export function Cover(props: { has: boolean; id: number; title: string; progress?: number; ratio?: CoverRatio }) {
+  const [brokenId, setBrokenId] = useState<number | null>(null);
+  const broken = brokenId === props.id;
   const pct = props.progress != null ? Math.max(0, Math.min(1, props.progress)) : null;
-  const box = boxStyle(props.ratio);
+  const showImg = props.has && !broken;
   return (
     <div style={wrap}>
-      {props.has
-        ? <div style={box}><img className="coverimg" style={img} src={media(`/covers/${props.id}.jpg`)} alt="" loading="lazy" /></div>
-        : <Cloth id={props.id} title={props.title} ratio={props.ratio} />}
-      {pct != null && pct > 0 && (
-        <div style={barOuter}>
-          <div style={{ display: "block", height: "100%", width: `${pct * 100}%`, background: "rgba(255,255,255,0.92)", borderRadius: "999px" }} />
-        </div>
-      )}
+      <div className="cover-box" style={boxStyle(props.ratio)}>
+        {showImg
+          ? <img className="coverimg" style={img} src={media(`/covers/${props.id}.jpg`)} alt="" loading="lazy" onError={() => setBrokenId(props.id)} />
+          : <Cloth id={props.id} title={props.title} ratio={props.ratio} />}
+        {pct != null && pct > 0 && (
+          <div style={{
+            position: "absolute", left: "12%", right: "12%", bottom: "9%",
+            height: "2.5px", borderRadius: "999px", background: "rgba(255,255,255,0.22)", overflow: "hidden",
+          }}>
+            <div style={{ display: "block", height: "100%", width: `${pct * 100}%`, background: "rgba(255,255,255,0.94)", borderRadius: "999px" }} />
+          </div>
+        )}
+      </div>
     </div>
   );
 }

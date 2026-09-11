@@ -161,7 +161,8 @@ func TestCorePlaylistLifecycle(t *testing.T) {
 		t.Fatalf("detail stats = %v", detail)
 	}
 	first := detail["items"].([]any)[0].(map[string]any)
-	if first["title"] != "Two" || first["format"] != "mp3" || first["workTitle"] != "Album Two" || first["hasCover"] != true {
+	wid, _ := first["workId"].(float64)
+	if first["title"] != "Two" || first["format"] != "mp3" || first["workTitle"] != "Album Two" || first["hasCover"] != true || wid < 1 {
 		t.Fatalf("item join fields = %v", first)
 	}
 

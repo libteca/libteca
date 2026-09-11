@@ -283,11 +283,11 @@ func editionEntry(e store.OPDSEdition) Entry {
 }
 
 func formatSummary(e store.OPDSEdition) string {
-	name := map[string]string{"epub": "EPUB", "pdf": "PDF", "cbz": "CBZ"}[e.Format]
+	name := map[string]string{"epub": "EPUB", "pdf": "PDF", "cbz": "CBZ", "cbr": "CBR"}[e.Format]
 	if name == "" {
 		name = strings.ToUpper(e.Format)
 	}
-	if e.Format == "cbz" && e.PageCount != nil {
+	if (e.Format == "cbz" || e.Format == "cbr") && e.PageCount != nil {
 		return fmt.Sprintf("%s edition, %d pages", name, *e.PageCount)
 	}
 	return name + " edition"
@@ -303,6 +303,8 @@ func acquisitionMime(format string) string {
 		// corpus: Kavita serves application/vnd.comicbook+zip; task-pinned
 		// application/zip — verify against KOReader/Chunky on capture
 		return "application/zip"
+	case "cbr":
+		return "application/vnd.comicbook-rar"
 	}
 	return "application/octet-stream"
 }

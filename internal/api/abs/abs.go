@@ -545,7 +545,7 @@ func (a *API) sessionSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s, err := a.DB.Session(r.PathValue("id"))
-	if err != nil || s.ClosedAt != nil {
+	if err != nil || s.ClosedAt != nil || s.UserID != auth.UserID(r) {
 		fail(w, 404, "Session not found")
 		return
 	}
@@ -576,7 +576,7 @@ func (a *API) sessionClose(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 	s, err := a.DB.Session(r.PathValue("id"))
-	if err != nil {
+	if err != nil || s.UserID != auth.UserID(r) {
 		fail(w, 404, "Session not found")
 		return
 	}

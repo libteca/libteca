@@ -36,6 +36,9 @@ func (a *API) MountPodcasts(r *neutron.Router) {
 }
 
 func (a *API) podcastSubscribe(svc *podcast.Service, w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdmin(w, r) {
+		return
+	}
 	var body struct {
 		FeedURL      string `json:"feedUrl"`
 		AutoDownload *bool  `json:"autoDownload"`
@@ -123,6 +126,9 @@ func (a *API) podcastDetailBody(p *store.Podcast, userID int64) map[string]any {
 }
 
 func (a *API) podcastRefresh(svc *podcast.Service, w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdmin(w, r) {
+		return
+	}
 	p, changed, err := svc.RefreshPodcast(r.Context(), auth.Atoi64(r.PathValue("id")))
 	if errors.Is(err, store.ErrNotFound) {
 		writeJSON(w, 404, map[string]string{"error": "podcast not found"})
@@ -142,6 +148,9 @@ func (a *API) podcastRefresh(svc *podcast.Service, w http.ResponseWriter, r *htt
 }
 
 func (a *API) podcastPatch(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdmin(w, r) {
+		return
+	}
 	id := auth.Atoi64(r.PathValue("id"))
 	if _, err := a.DB.Podcast(id); errors.Is(err, store.ErrNotFound) {
 		writeJSON(w, 404, map[string]string{"error": "podcast not found"})
@@ -172,6 +181,9 @@ func (a *API) podcastPatch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) podcastDelete(svc *podcast.Service, w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdmin(w, r) {
+		return
+	}
 	err := svc.DeletePodcast(auth.Atoi64(r.PathValue("id")))
 	if errors.Is(err, store.ErrNotFound) {
 		writeJSON(w, 404, map[string]string{"error": "podcast not found"})
@@ -185,6 +197,9 @@ func (a *API) podcastDelete(svc *podcast.Service, w http.ResponseWriter, r *http
 }
 
 func (a *API) podcastImportOPML(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdmin(w, r) {
+		return
+	}
 	var body struct {
 		OPML string `json:"opml"`
 	}
@@ -352,7 +367,7 @@ func episodeJSON(e *store.PodcastEpisode, prog *store.EpisodeProgress) map[strin
 	m["isFinished"] = fin
 	if e.FileID != nil {
 		m["fileId"] = *e.FileID
-		m["streamUrl"] = "/api/core/podcasts/episodes/" + strconv.FormatInt(e.ID, 10) + "/stream"
+		m["streamUrl"] = "/podcasts/episodes/" + strconv.FormatInt(e.ID, 10) + "/stream"
 	}
 	return m
 }

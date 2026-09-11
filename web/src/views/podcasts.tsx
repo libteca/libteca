@@ -50,34 +50,63 @@ function PodcastCover(props: { pod: Podcast; size?: string }) {
 
 export function PodcastsView() {
   const [pods, setPods] = useState<Podcast[]>([]);
+  const [loadErr, setLoadErr] = useState(false);
   const [selected, setSelected] = useState<number | null>(null);
   const [feedUrl, setFeedUrl] = useState("");
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const refresh = () => api("/podcasts").then((r: Podcast[]) => setPods(Array.isArray(r) ? r : [])).catch(() => setPods([]));
+  const refresh = () => api("/podcasts")
+    .then((r: Podcast[]) => { setPods(Array.isArray(r) ? r : []); setLoadErr(false); })
+    .catch(() => setLoadErr(true));
   useEffect(() => { refresh(); }, []);
 
   const subscribe = async (e: Event) => {
     e.preventDefault();
-    setErr(""); setMsg(""); setBusy(true);
-    const res: PodcastDetailBody | { error: string } = await api("/podcasts", { method: "POST", body: JSON.stringify({ feedUrl }) });
-    setBusy(false);
-    if ("error" in res) { setErr(res.error); return; }
-    setFeedUrl("");
-    setSelected(res.id);
-    refresh();
+    setErr(""); setMsg("");
+    let parsed: URL;
+    try {
+      parsed = new URL(feedUrl.trim());
+    } catch {
+      setErr("Enter a valid feed URL.");
+      return;
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      setErr("The feed URL must start with http:// or https://.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const res: PodcastDetailBody | { error: string; podcastId?: number } = await api("/podcasts", { method: "POST", body: JSON.stringify({ feedUrl: feedUrl.trim() }) });
+      if ("error" in res) {
+        if (res.podcastId != null) { setFeedUrl(""); setSelected(res.podcastId); refresh(); return; }
+        setErr(res.error);
+        return;
+      }
+      setFeedUrl("");
+      setSelected(res.id);
+      refresh();
+    } catch {
+      setErr("Couldn't reach the server.");
+    } finally {
+      setBusy(false);
+    }
   };
 
   const importOPML = async (file: File) => {
     setErr(""); setMsg("Importing…");
-    const opml = await file.text();
-    const res: { subscribed: number; exists: number; failed: number; error?: string } =
-      await api("/podcasts/import-opml", { method: "POST", body: JSON.stringify({ opml }) });
-    if (res.error) { setErr(res.error); setMsg(""); return; }
-    setMsg(`Imported ${res.subscribed} new, ${res.exists} already subscribed, ${res.failed} failed`);
-    refresh();
+    try {
+      const opml = await file.text();
+      const res: { subscribed: number; exists: number; failed: number; error?: string } =
+        await api("/podcasts/import-opml", { method: "POST", body: JSON.stringify({ opml }) });
+      if (res.error) { setErr(res.error); setMsg(""); return; }
+      setMsg(`Imported ${res.subscribed} new, ${res.exists} already subscribed, ${res.failed} failed`);
+      refresh();
+    } catch {
+      setErr("Import failed — couldn't reach the server.");
+      setMsg("");
+    }
   };
 
   if (selected != null) {
@@ -88,7 +117,11 @@ export function PodcastsView() {
     <div>
       <h2 style={sectionTitle}>Podcasts</h2>
 
-      {pods.length === 0 ? (
+      {loadErr ? (
+        <EmptyState title="Couldn't load podcasts">
+          <button style={primaryBtn} type="button" onClick={refresh}>Retry</button>
+        </EmptyState>
+      ) : pods.length === 0 ? (
         <EmptyState title="No subscriptions yet" hint="Add a feed URL or import an OPML file." />
       ) : (
         <div style={gridSquare}>
@@ -106,7 +139,7 @@ export function PodcastsView() {
       )}
 
       <form style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap", marginTop: "2rem", alignItems: "center" }} onSubmit={subscribe}>
-        <input style={{ ...input, flex: 1, minWidth: "14rem" }} type="url" placeholder="https://example.com/feed.xml" value={feedUrl} onInput={(e) => setFeedUrl((e.target as HTMLInputElement).value)} />
+        <input style={{ ...input, flex: 1, minWidth: "14rem" }} type="url" required placeholder="https://example.com/feed.xml" value={feedUrl} onInput={(e) => setFeedUrl((e.target as HTMLInputElement).value)} />
         <button style={primaryBtn} type="submit" disabled={busy}>{busy ? "Subscribing…" : "Subscribe"}</button>
       </form>
       {err && <p style={errStyle}>{err}</p>}

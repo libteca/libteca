@@ -48,14 +48,13 @@ Decisions are append-only. Each entry: date, decision, why, what would reverse i
 
 ## Open (unpinned)
 
-- ABS server/app version pin (after corpus capture, task 10)
-- Cover tile generator: share marketing-site Penguin-style code or regenerate
-  (task 5 detail)
-- Backup story timing (Slice 1)
-- **Publish neutron-go before libteca goes public** — the dep is currently a
-  relative `replace` to the local Neutron checkout (akiroo vendors it the same
-  way; v0.0.0 = unpublished). External builds break until neutron-go is on a
-  real module path.
+- ABS server/app version pin (after corpus capture). Code currently emits
+  `"Version": "2.19.4"` unpinned.
+- Jellyfin server version pin (after corpus capture). Code currently emits
+  `"Version": "10.10.0"` unpinned.
+
+Closed here, not in Open: cover tiles = first-party cloth UI (`cover.tsx`);
+backup = `libteca backup` (15g); neutron-go published (17).
 
 ## 2026-09-09 (evening) — revisions
 
@@ -187,3 +186,105 @@ Decisions are append-only. Each entry: date, decision, why, what would reverse i
     sibling `neutron-build/neutron-go` / Forgejo `Tyler/neutron-go` repos
     were created then deleted — nested is the shape. libteca requires
     v0.1.0, no `replace`. Reverse: none.
+
+18. **Product is the first-party web UI; protocol faces are niceties
+    (2026-09-10).** Founder call after the emulation path was shown to be
+    a years-long tail (DeviceProfile, socket.io, Kavita protocol) for a
+    solo founder. The UI must be the thing you open instead of Jellyfin /
+    Kavita / ABS web. Faces stay mounted; a README cell still only says
+    "works" after corpus + live client — but that work is Gate F, optional,
+    after the web daily-use gate. Native apps are a non-goal (PWA now;
+    inherit JMP/ABS/KOReader later if needed). Reverse: if Tyler still
+    lives in the other three UIs after Gate W, either the web bar was
+    wrong or faces become the wedge again — record which.
+
+20. **Five-agent audit wave (2026-09-10 evening): security gates, scan
+    correctness, perf indexes, player/reader races, shell/mobile.**
+    (a) Admin gates now cover library add/scan/delete, linking
+    move/split/merge, all matching mutations, refresh-meta, podcast
+    subscribe/refresh/patch/delete/OPML — previously any user could add a
+    library pointing anywhere on disk and stream it. (b) podcasts
+    libraries are no longer scanned as audiobooks (phantom works +
+    retention revive). (c) migration 0009: idx editions(work),
+    files(edition,seq), files(hash); works files-pass scoped to the
+    library; synchronous(NORMAL); UpsertWork no longer clobbers provider
+    descriptions on rescan; NextUp SQL filters to series with progress.
+    (d) `position` no longer leaks the music sort-order column as seconds
+    (tracks started N seconds in). (e) HEVC is never browser-direct
+    (black-screen); HLS carries a start offset for resume and a
+    DELETE /hls/{sid} stop so closing the player kills ffmpeg. (f)
+    password reset revokes the user's tokens. (g) Player/reader fixes:
+    video finished-flag race (episodes never marked watched), detached
+    audio kept playing after unmount, PDF page input navigates + finished
+    reopens at p1, reader progress-load failure no longer wipes position,
+    epub iframe keyboard + location shape + book leak, CBZ LRU eviction
+    (200-page books OOM), webtoon saved-page accuracy. (h) Shell: user
+    menu was clipped at every width (header overflow-x), header/player
+    bar responsive + safe-area insets, faint contrast to 4.6:1, playlist
+    404 tri-state, play-all accepts m4b/mp3 + writes progress, podcasts
+    list error state, 409-subscribe jumps to the show, search 1-char
+    hint, admin add-library honest errors, login busy state.
+    Reverse: none expected; gates may need per-route relaxation if a
+    non-admin matching flow is ever wanted.
+
+21. **Wave 2 (2026-09-10 night): cinematic video player + richer demo
+    corpus + view polish.** (a) video.tsx rewritten: native controls
+    replaced with a quiet overlay — auto-hiding scrim bars, custom
+    scrubber (buffered track + hover time tooltip + keyboard-seekable
+    range input), play/pause glyph flash, prev/next episode, volume
+    slider, speed cycle, iOS webkit fullscreen; all save/race/HLS
+    logic preserved. (b) Demo corpus: multi-mp3 audiobook (The
+    Ensemble - Nocturnes), chaptered m4b with embedded cover (David
+    Shaw - The Long Road), PDF edition joined to the Frankenstein work
+    (epub+pdf = two editions, one work), Sintel movie.nfo (plot +
+    genres verified in DB), plain + .en.srt sidecars, Blender Shorts
+    season 2. (c) work/home/library polish (mobile stacking via view-
+    local style block, description clamp+toggle, hero progress bar,
+    movie-card year fallback, movie facts height bug) and admin/
+    matching redesign (panel cards, two-pane matching). (d) Faces
+    regression-verified E2E on the demo (Jellyfin PlaybackInfo
+    transcodes HEVC, Range streams, ABS items/progress, OPDS feeds,
+    Subsonic ping) — all 20 packages green.
+    Reverse: overlay player drops native controls entirely; if a client
+    needs native PIP controls, gate on a setting.
+
+22. **Multi-pass bug sweep (2026-09-10 late): five fix-agents + live
+    verification.** Players: dblclick/double-toggle race (240ms click
+    timer), seek NaN guards, indicator priority (waiting > skip >
+    glyph), stale state across episode switches, event-driven play
+    state, chapter-popover viewport/backdrop-filter fix, queue-end
+    unmount no longer clobbers finished. Readers: PageStore eviction
+    queue thrash, webtoon restore regression + inert slider, RTL tap
+    labels, TOC active highlight, PDF double-post/empty-input/inputMode,
+    deep-link back bounce. Views: hero recency (was category-priority),
+    chapter-click mount race (kick()), no-edition flash, Scan/Match
+    disabled symmetry + lib=0 guard, Cover stale broken-image state.
+    Shell: boot-error Retry screen, 401 reload (was a no-op hash set),
+    apply-episodes affordance on TV matches, busy/error states across
+    admin/matching/podcasts/playlists (network throws previously stuck
+    busy forever), playlist play-all progress on stop/unmount. Server:
+    scan dedup 409 (running + recently-done window), /nextup includes
+    unstarted series. SW: app shell is network-first now (was
+    install-cached forever — the "stale build" reports were real).
+    Demo corpus upgraded to real media: full 10-min Big Buck Bunny
+    (webm), 16.6-min spoken Alice audiobook (m4b, 2 chapters,
+    Tenniel cover) as a second edition of the CBZ work.
+    Reverse: none.
+
+19. **Gate W code (2026-09-10): delete-library, grid percent, type-first
+    library nav, first-party HLS, PDF page control, playlist workId.**
+    HLS uses existing transcode.Manager, session `web-{editionId}`, direct
+    play when codecs are browser-safe; `hls.js` is a lazy import (Safari
+    native HLS pays nothing). PDF stays native `<embed>` plus a page
+    control — no pdf.js. DeleteLibrary does not touch disk media.
+    Reverse: drop hls.js if first-party video stays direct-play-only.
+
+23. **Consolidation + completion accounting (2026-09-11).** Docs
+    rewritten to a single live state (SPEC §9 table, PLAN status,
+    README). Method for the percentages: per-area "% of v1" where v1 =
+    Gate W (web daily-use bar), with faces explicitly scored built-
+    but-unverified. Recorded so "90% done" claims have a denominator.
+    Same session: header category nav (`#/library?type=` deep links,
+    icon-only under 1024px), audiobook corpus made real literature
+    (TTS-spoken Gutenberg texts replacing song-derived fakes).
+    Reverse: none.

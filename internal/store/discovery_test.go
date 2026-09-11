@@ -133,6 +133,28 @@ func TestResumeItems(t *testing.T) {
 	}
 }
 
+func TestResumeItemsReadingPercent(t *testing.T) {
+	db := openTestDB(t)
+	user := addUser(t, db)
+	lib, _ := db.AddLibrary("books", "books", t.TempDir())
+	w := addWork(t, db, lib, "Novel", strp("A"), 1, 1)
+	res, err := db.Exec(`INSERT INTO editions (work_id, format, title, page_count, created_at) VALUES (?,?,?,?,0)`, w, "epub", "Novel", 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eid, _ := res.LastInsertId()
+	if _, err := db.Exec(`INSERT INTO progress (user_id, edition_id, edition_position_secs, is_finished, updated_at, percent, page) VALUES (?,?,0,0,10,0.42,84)`, user, eid); err != nil {
+		t.Fatal(err)
+	}
+	items, err := db.ResumeItems(user, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].Percent != 0.42 || items[0].LibraryType != "books" {
+		t.Fatalf("got %+v", items)
+	}
+}
+
 func TestResumeItemsLimit(t *testing.T) {
 	db := openTestDB(t)
 	user := addUser(t, db)
@@ -337,5 +359,37 @@ func TestWorksInLibraryFiltered(t *testing.T) {
 	}
 	if len(views) != 0 {
 		t.Fatalf("other user in_progress = %v, want none", ids(views))
+	}
+}
+
+func TestWorksInLibraryFilteredPercent(t *testing.T) {
+	db := openTestDB(t)
+	user := addUser(t, db)
+	lib, _ := db.AddLibrary("books", "books", t.TempDir())
+	book := addWork(t, db, lib, "Novel", strp("A"), 1, 1)
+	idle := addWork(t, db, lib, "Idle", strp("B"), 2, 2)
+	res, err := db.Exec(`INSERT INTO editions (work_id, format, title, page_count, created_at) VALUES (?,?,?,?,0)`, book, "epub", "Novel", 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eid, _ := res.LastInsertId()
+	addEdition(t, db, idle, "Idle", nil)
+	if _, err := db.Exec(`INSERT INTO progress (user_id, edition_id, edition_position_secs, is_finished, updated_at, percent, page) VALUES (?,?,0,0,10,0.4,80)`, user, eid); err != nil {
+		t.Fatal(err)
+	}
+	views, err := db.WorksInLibraryFiltered(lib, user, "title", "asc", "all")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[int64]store.WorkView{}
+	for _, v := range views {
+		byID[v.ID] = v
+	}
+	got := byID[book]
+	if got.Percent == nil || *got.Percent != 0.4 {
+		t.Fatalf("in-progress percent = %v, want 0.4", got.Percent)
+	}
+	if byID[idle].Percent != nil {
+		t.Fatalf("unplayed percent = %v, want nil", *byID[idle].Percent)
 	}
 }
