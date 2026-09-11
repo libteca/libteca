@@ -639,6 +639,8 @@ export const preBlock: CSSProperties = {
   padding: "0.9rem 1rem",
 };
 
+export const sectionGap = "2.4rem";
+
 export const globalCss = `
 :root { --ease: cubic-bezier(0.22, 1, 0.36, 1); color-scheme: dark; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; background: #0c0d0f; }
@@ -851,5 +853,13 @@ nav a svg { flex-shrink: 0; }
   .cover-box, .press, .spin, .sk, .row-hit, .rail-nav, .btnp { transition: none; animation: none; }
   .rail-card:hover .cover-box, .cover-card:hover .cover-box { transform: none; }
   .login-err-msg { animation: none; }
+}
+
+@media (max-width: 768px) {
+  .admin-panel { padding: 1rem !important; }
+}
+.danger-ghost:hover:not(:disabled) {
+  border-color: rgba(255, 105, 97, 0.5) !important;
+  background: rgba(255, 105, 97, 0.08) !important;
 }
 `;

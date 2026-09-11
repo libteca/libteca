@@ -1,4 +1,4 @@
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import type { CSSProperties, ComponentChildren } from "preact";
 import { api, type Library, type ScanEvent } from "../api";
 import { useScan } from "../scan";
@@ -6,8 +6,8 @@ import { IconChevronDown, IconChevronLeft, IconScan } from "../components/svg";
 import { fmtRel, typeLabel } from "../util";
 import {
   backLink, badge, c, fieldLabel, formBlock, formNote, formNoteErr, ghostBtn, input, mono,
-  muted, panel, panelHead, preBlock, primaryBtn, railTitle, sectionTitle, selectChevron,
-  selectWrap, table, td, th,
+  muted, panel, panelHead, preBlock, primaryBtn, railTitle, sectionGap, sectionTitle,
+  selectChevron, selectWrap, table, td, th,
 } from "../styles";
 import { toast } from "../toast";
 
@@ -15,17 +15,37 @@ const TYPES = ["audiobooks", "movies", "tv", "music", "books", "comics"];
 
 const truncPath = (p: string) => (p.length > 42 ? `…${p.slice(-41)}` : p);
 
-const tableWrap: CSSProperties = { overflowX: "auto" };
-const thRight: CSSProperties = { ...th, textAlign: "right" };
-const tdRight: CSSProperties = { ...td, textAlign: "right" };
-const libRow: CSSProperties = {
-  display: "flex", gap: "0.9rem", alignItems: "center", minHeight: "44px",
-  padding: "0.55rem 0", borderBottom: `1px solid ${c.lineSoft}`, flexWrap: "wrap",
+const adminStack: CSSProperties = { display: "flex", flexDirection: "column", gap: sectionGap };
+const sectionPanel: CSSProperties = { ...panel, marginTop: 0, padding: "1.4rem 1.5rem" };
+const headTitle: CSSProperties = { ...railTitle, margin: 0 };
+const headDesc: CSSProperties = { ...panelHead, marginBottom: "0.35rem" };
+const panelDesc: CSSProperties = { ...muted, margin: "0 0 0.9rem", lineHeight: 1.5 };
+const adminForm: CSSProperties = { ...formBlock, gap: "0.9rem", maxWidth: "26rem", marginTop: "1.4rem" };
+const checkLabel: CSSProperties = {
+  display: "flex", gap: "0.45rem", alignItems: "center",
+  fontSize: "0.88rem", color: c.textDim, cursor: "pointer",
 };
+const thA: CSSProperties = {
+  ...th, fontFamily: mono, fontSize: "0.68rem", letterSpacing: "0.08em", padding: "0.55rem 0.75rem",
+};
+const tdA: CSSProperties = { ...td, padding: "0.55rem 0.75rem" };
+const thNum: CSSProperties = { ...thA, textAlign: "right" };
+const tdNum: CSSProperties = { ...tdA, textAlign: "right", fontVariantNumeric: "tabular-nums" };
+const thAct: CSSProperties = { ...thA, textAlign: "right", padding: "0.55rem 0" };
+const tdAct: CSSProperties = { ...tdA, textAlign: "right", padding: "0.55rem 0" };
+const rowLine: CSSProperties = {
+  display: "grid", gap: "0.9rem", alignItems: "center", minHeight: "44px",
+  padding: "0.55rem 0", borderBottom: `1px solid ${c.lineSoft}`,
+};
+const libMain: CSSProperties = { display: "flex", gap: "0.7rem", alignItems: "center", flexWrap: "wrap", minWidth: 0 };
 const libPath: CSSProperties = {
   fontFamily: mono, fontSize: "0.78rem", color: c.muted, flex: 1, minWidth: "6rem",
   overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
 };
+const rowActions: CSSProperties = { display: "inline-flex", gap: "0.5rem", alignItems: "center", flexShrink: 0 };
+const provMain: CSSProperties = { display: "flex", gap: "0.7rem", alignItems: "center", flexWrap: "wrap", minWidth: 0 };
+const provLabel: CSSProperties = { minWidth: "7.5rem", color: c.text, fontSize: "0.86rem" };
+const provControls: CSSProperties = { display: "flex", gap: "0.5rem", alignItems: "center", minWidth: 0 };
 const statusDot: CSSProperties = { width: "6px", height: "6px", borderRadius: "50%", display: "inline-block", flexShrink: 0 };
 
 type JobRow = ScanEvent & { id: number; libraryId: number; startedAt: number; createdAt?: number; error?: string };
@@ -54,6 +74,52 @@ function StatusTag(props: { status: string; tone: string }) {
       <span style={{ ...statusDot, background: props.tone }} />
       {props.status}
     </span>
+  );
+}
+
+function useWide() {
+  const [wide, setWide] = useState(() => window.matchMedia("(min-width: 769px)").matches);
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 769px)");
+    const on = () => setWide(mq.matches);
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
+  return wide;
+}
+
+function FadeScroll(props: { children: ComponentChildren }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [fade, setFade] = useState({ l: false, r: false });
+  const measure = () => {
+    const el = ref.current;
+    if (!el) return;
+    const l = el.scrollLeft > 8;
+    const r = el.scrollLeft + el.clientWidth < el.scrollWidth - 8;
+    setFade((s) => (s.l === l && s.r === r ? s : { l, r }));
+  };
+  useEffect(() => {
+    measure();
+    const el = ref.current;
+    if (!el) return;
+    el.addEventListener("scroll", measure);
+    window.addEventListener("resize", measure);
+    return () => {
+      el.removeEventListener("scroll", measure);
+      window.removeEventListener("resize", measure);
+    };
+  });
+  const mask = fade.l && fade.r
+    ? "linear-gradient(to right, transparent 0, #000 1.5rem, #000 calc(100% - 1.5rem), transparent 100%)"
+    : fade.l
+      ? "linear-gradient(to right, transparent 0, #000 1.5rem)"
+      : fade.r
+        ? "linear-gradient(to left, transparent 0, #000 1.5rem)"
+        : "none";
+  return (
+    <div ref={ref} style={{ overflowX: "auto", maskImage: mask, WebkitMaskImage: mask }}>
+      {props.children}
+    </div>
   );
 }
 
@@ -105,37 +171,40 @@ export function AdminView() {
       <button className="press" style={backLink} onClick={() => history.back()}><IconChevronLeft size={16} /> Library</button>
       <h2 style={sectionTitle}>Admin</h2>
 
-      <section style={panel}>
-        <h3 style={railTitle}>Libraries</h3>
-        {libs.map((l) => <AdminLibRow key={l.id} lib={l} onRemoved={refresh} />)}
-        {libs.length === 0 && <p style={muted}>No libraries configured.</p>}
+      <div style={adminStack}>
+        <section className="admin-panel" style={sectionPanel}>
+          <div style={panelHead}>
+            <h3 style={headTitle}>Libraries</h3>
+          </div>
+          {libs.map((l) => <AdminLibRow key={l.id} lib={l} onRemoved={refresh} />)}
+          {libs.length === 0 && <p style={muted}>No libraries configured.</p>}
 
-        <form style={formBlock} onSubmit={add}>
-          <Field label="Name">
-            <input style={input} placeholder="Name" value={name} onInput={(e) => setName((e.target as HTMLInputElement).value)} />
-          </Field>
-          <Field label="Type">
-            <div style={{ ...selectWrap, width: "100%" }}>
-              <select className="pill" style={{ width: "100%" }} value={type} onChange={(e) => setType((e.target as HTMLSelectElement).value)} aria-label="Library type">
-                {TYPES.map((t) => <option key={t} value={t}>{typeLabel(t)}</option>)}
-              </select>
-              <span style={selectChevron}><IconChevronDown size={12} /></span>
-            </div>
-          </Field>
-          <Field label="Path">
-            <input style={input} placeholder="/path/to/media" value={path} onInput={(e) => setPath((e.target as HTMLInputElement).value)} />
-          </Field>
-          <button className="press btnp" style={primaryBtn} type="submit" disabled={busy}>{busy ? "Adding…" : "Add & scan"}</button>
-          {msg && <p style={addOk ? formNote : formNoteErr}>{msg}</p>}
-        </form>
-      </section>
+          <form style={adminForm} onSubmit={add}>
+            <Field label="Name">
+              <input style={input} placeholder="Name" value={name} onInput={(e) => setName((e.target as HTMLInputElement).value)} />
+            </Field>
+            <Field label="Type">
+              <div style={{ ...selectWrap, width: "100%" }}>
+                <select className="pill" style={{ width: "100%" }} value={type} onChange={(e) => setType((e.target as HTMLSelectElement).value)} aria-label="Library type">
+                  {TYPES.map((t) => <option key={t} value={t}>{typeLabel(t)}</option>)}
+                </select>
+                <span style={selectChevron}><IconChevronDown size={12} /></span>
+              </div>
+            </Field>
+            <Field label="Path">
+              <input style={input} placeholder="/path/to/media" value={path} onInput={(e) => setPath((e.target as HTMLInputElement).value)} />
+            </Field>
+            <button className="press btnp" style={primaryBtn} type="submit" disabled={busy}>{busy ? "Adding…" : "Add & scan"}</button>
+            {msg && <p style={addOk ? formNote : formNoteErr}>{msg}</p>}
+          </form>
+        </section>
 
-      <UsersSection users={users} onChanged={refreshUsers} />
-      <TokensSection users={users} />
-      <ImportSection />
-      <ProvidersSection />
-
-      <ScanJobs libs={libs} />
+        <UsersSection users={users} onChanged={refreshUsers} />
+        <TokensSection users={users} />
+        <ImportSection />
+        <ProvidersSection />
+        <ScanJobs libs={libs} />
+      </div>
     </div>
   );
 }
@@ -144,6 +213,7 @@ function AdminLibRow(props: { lib: Library; onRemoved: () => void }) {
   const scan = useScan(() => {});
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  const wide = useWide();
   const line = scan.event && (scan.scanning
     ? `Scanning… ${scan.event.filesSeen} files${scan.event.currentPath ? ` · ${truncPath(scan.event.currentPath)}` : ""}`
     : scan.event.status === "error" ? `Failed${scan.event.error ? `: ${scan.event.error}` : ""}`
@@ -167,18 +237,20 @@ function AdminLibRow(props: { lib: Library; onRemoved: () => void }) {
     props.onRemoved();
   };
   return (
-    <div style={libRow}>
-      <span style={{ fontWeight: 600, fontSize: "0.92rem", flexShrink: 0 }}>{props.lib.name}</span>
-      <span style={badge}>{props.lib.type}</span>
-      <span style={libPath} title={props.lib.path}>{props.lib.path}</span>
-      {line && <span style={{ fontSize: "0.78rem", color: scan.event?.status === "error" ? c.danger : c.muted, flexShrink: 0 }}>{line}</span>}
-      {err && <span style={{ fontSize: "0.78rem", color: c.danger, flexShrink: 0 }}>{err}</span>}
-      <span style={{ display: "inline-flex", gap: "0.5rem", marginLeft: "auto", flexShrink: 0 }}>
+    <div style={{ ...rowLine, gridTemplateColumns: wide ? "minmax(0, 1fr) auto" : "minmax(0, 1fr)" }}>
+      <div style={libMain}>
+        <span style={{ fontWeight: 600, fontSize: "0.92rem", flexShrink: 0 }}>{props.lib.name}</span>
+        <span style={badge}>{props.lib.type}</span>
+        <span style={libPath} title={props.lib.path}>{props.lib.path}</span>
+        {line && <span style={{ fontSize: "0.78rem", color: scan.event?.status === "error" ? c.danger : c.muted, flexShrink: 0 }}>{line}</span>}
+        {err && <span style={{ fontSize: "0.78rem", color: c.danger, flexShrink: 0 }}>{err}</span>}
+      </div>
+      <span style={rowActions}>
         <button className="press" style={ghostBtn} disabled={scan.scanning} onClick={() => { scan.start(props.lib.id); toast("Scan started"); }}>
           <IconScan size={13} />
           {scan.scanning ? "Scanning…" : "Scan"}
         </button>
-        <button className="press" style={{ ...ghostBtn, color: c.danger }} disabled={scan.scanning || busy} onClick={remove}>Remove</button>
+        <button className="press danger-ghost" style={{ ...ghostBtn, color: c.danger }} disabled={scan.scanning || busy} onClick={remove}>Remove</button>
       </span>
     </div>
   );
@@ -199,27 +271,27 @@ function ScanJobs(props: { libs: Library[] }) {
   const nameOf = (id: number) => props.libs.find((l) => l.id === id)?.name || `#${id}`;
 
   return (
-    <section style={panel}>
+    <section className="admin-panel" style={sectionPanel}>
       <div style={panelHead}>
-        <h3 style={{ ...railTitle, margin: 0 }}>Scan Jobs</h3>
+        <h3 style={headTitle}>Scan Jobs</h3>
         <button className="press" style={ghostBtn} onClick={() => { setOpen(true); load(); }}>Refresh</button>
       </div>
       {jobs.length === 0 ? (
         <p style={muted}>{open ? "No scan jobs yet." : "Scan jobs appear here after the first scan."}</p>
       ) : (
-        <div style={tableWrap}>
+        <FadeScroll>
           <table style={table}>
             <thead>
               <tr>
-                <th style={th}>Library</th>
-                <th style={th}>Status</th>
-                <th style={th}>Seen</th>
-                <th style={th}>Added</th>
-                <th style={th}>Updated</th>
-                <th style={th}>Changed</th>
-                <th style={th}>Started</th>
-                <th style={th}>Finished</th>
-                <th style={th}>Error</th>
+                <th style={thA}>Library</th>
+                <th style={thA}>Status</th>
+                <th style={thNum}>Seen</th>
+                <th style={thNum}>Added</th>
+                <th style={thNum}>Updated</th>
+                <th style={thNum}>Changed</th>
+                <th style={thNum}>Started</th>
+                <th style={thNum}>Finished</th>
+                <th style={thA}>Error</th>
               </tr>
             </thead>
             <tbody>
@@ -227,21 +299,21 @@ function ScanJobs(props: { libs: Library[] }) {
                 const tone = j.status === "done" ? c.ok : j.status === "error" ? c.danger : j.status === "running" ? c.accent : c.muted;
                 return (
                   <tr key={j.id} className="row-hit">
-                    <td style={{ ...td, color: c.text }}>{nameOf(j.libraryId)}</td>
-                    <td style={td}><StatusTag status={j.status} tone={tone} /></td>
-                    <td style={td}>{j.filesSeen}</td>
-                    <td style={td}>{j.filesAdded}</td>
-                    <td style={td}>{j.filesUpdated}</td>
-                    <td style={td}>{j.worksChanged}</td>
-                    <td style={td}>{fmtRel(j.startedAt)}</td>
-                    <td style={td}>{j.finishedAt ? fmtRel(j.finishedAt) : "—"}</td>
-                    <td style={{ ...td, color: c.danger, maxWidth: "16rem", overflow: "hidden", textOverflow: "ellipsis" }}>{j.error || "—"}</td>
+                    <td style={{ ...tdA, color: c.text }}>{nameOf(j.libraryId)}</td>
+                    <td style={tdA}><StatusTag status={j.status} tone={tone} /></td>
+                    <td style={tdNum}>{j.filesSeen}</td>
+                    <td style={tdNum}>{j.filesAdded}</td>
+                    <td style={tdNum}>{j.filesUpdated}</td>
+                    <td style={tdNum}>{j.worksChanged}</td>
+                    <td style={tdNum}>{fmtRel(j.startedAt)}</td>
+                    <td style={tdNum}>{j.finishedAt ? fmtRel(j.finishedAt) : "—"}</td>
+                    <td style={{ ...tdA, color: c.danger, maxWidth: "16rem", overflow: "hidden", textOverflow: "ellipsis" }}>{j.error || "—"}</td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
-        </div>
+        </FadeScroll>
       )}
     </section>
   );
@@ -272,39 +344,39 @@ function UsersSection(props: { users: AdminUser[]; onChanged: () => void }) {
   const createOk = msg === "user created";
 
   return (
-    <section style={panel}>
+    <section className="admin-panel" style={sectionPanel}>
       <div style={panelHead}>
-        <h3 style={{ ...railTitle, margin: 0 }}>Users</h3>
+        <h3 style={headTitle}>Users</h3>
         {props.users.length > 0 && <span style={badge}>{props.users.length}</span>}
       </div>
       {props.users.length === 0 ? (
         <p style={muted}>No users.</p>
       ) : (
-        <div style={tableWrap}>
+        <FadeScroll>
           <table style={table}>
             <thead>
               <tr>
-                <th style={th}>Name</th>
-                <th style={th}>Role</th>
-                <th style={th}>Created</th>
-                <th style={thRight}>Actions</th>
+                <th style={thA}>Name</th>
+                <th style={thA}>Role</th>
+                <th style={thNum}>Created</th>
+                <th style={thAct}>Actions</th>
               </tr>
             </thead>
             <tbody>
               {props.users.map((u) => <UserRow key={u.id} u={u} onChanged={props.onChanged} />)}
             </tbody>
           </table>
-        </div>
+        </FadeScroll>
       )}
 
-      <form style={formBlock} onSubmit={create}>
+      <form style={adminForm} onSubmit={create}>
         <Field label="Name">
           <input style={input} placeholder="name" value={name} onInput={(e) => setName((e.target as HTMLInputElement).value)} />
         </Field>
         <Field label="Password">
           <input style={input} type="password" placeholder="min 8 chars" value={password} onInput={(e) => setPassword((e.target as HTMLInputElement).value)} />
         </Field>
-        <label style={{ display: "flex", gap: "0.45rem", alignItems: "center", fontSize: "0.88rem", color: c.textDim, cursor: "pointer" }}>
+        <label style={checkLabel}>
           <input type="checkbox" checked={isAdmin} onChange={(e) => setIsAdmin((e.target as HTMLInputElement).checked)} style={{ accentColor: c.accent }} />
           admin
         </label>
@@ -353,10 +425,10 @@ function UserRow(props: { u: AdminUser; onChanged: () => void }) {
 
   return (
     <tr className="row-hit">
-      <td style={{ ...td, color: c.text, fontWeight: 600 }}>{props.u.name}</td>
-      <td style={td}>{props.u.isAdmin ? <span style={badge}>admin</span> : "—"}</td>
-      <td style={td}>{fmtRel(props.u.createdAtMs) || "—"}</td>
-      <td style={tdRight}>
+      <td style={{ ...tdA, color: c.text, fontWeight: 600 }}>{props.u.name}</td>
+      <td style={tdA}>{props.u.isAdmin ? <span style={badge}>admin</span> : "—"}</td>
+      <td style={tdNum}>{fmtRel(props.u.createdAtMs) || "—"}</td>
+      <td style={tdAct}>
         {msg ? (
           <span style={{ ...muted, fontSize: "0.8rem", color: ok ? c.muted : c.danger }}>{msg}</span>
         ) : resetOpen ? (
@@ -367,7 +439,7 @@ function UserRow(props: { u: AdminUser; onChanged: () => void }) {
           </span>
         ) : confirmDel ? (
           <span style={{ display: "inline-flex", gap: "0.45rem", alignItems: "center" }}>
-            <button className="press" style={{ ...ghostBtn, color: c.danger, borderColor: c.danger }} type="button" disabled={busy} onClick={del}>Confirm delete</button>
+            <button className="press danger-ghost" style={{ ...ghostBtn, color: c.danger }} type="button" disabled={busy} onClick={del}>Confirm delete</button>
             <button className="press" style={ghostBtn} type="button" disabled={busy} onClick={() => setConfirmDel(false)}>Cancel</button>
           </span>
         ) : (
@@ -433,10 +505,12 @@ function ImportSection() {
   };
 
   return (
-    <section style={panel}>
-      <h3 style={railTitle}>Import</h3>
-      <p style={{ ...muted, marginBottom: "0.2rem" }}>Migrate an existing Audiobookshelf or Kavita instance. The foreign database is only read.</p>
-      <div style={formBlock}>
+    <section className="admin-panel" style={sectionPanel}>
+      <div style={headDesc}>
+        <h3 style={headTitle}>Import</h3>
+      </div>
+      <p style={panelDesc}>Migrate an existing Audiobookshelf or Kavita instance. The foreign database is only read.</p>
+      <div style={adminForm}>
         <Field label="Source">
           <div style={{ ...selectWrap, width: "100%" }}>
             <select className="pill" style={{ width: "100%" }} value={source} onChange={(e) => { setSource((e.target as HTMLSelectElement).value); setPlan(null); }} aria-label="Import source">
@@ -454,14 +528,14 @@ function ImportSection() {
             onInput={(e) => setPath((e.target as HTMLInputElement).value)}
           />
         </Field>
-        <label style={{ display: "flex", gap: "0.45rem", alignItems: "center", fontSize: "0.88rem", color: c.textDim, cursor: "pointer" }}>
+        <label style={checkLabel}>
           <input type="checkbox" checked={dryRun} onChange={(e) => setDryRun((e.target as HTMLInputElement).checked)} style={{ accentColor: c.accent }} />
           Dry run (plan only, no changes)
         </label>
         <div style={{ display: "flex", gap: "0.6rem", alignItems: "center", flexWrap: "wrap" }}>
           {confirmRun && !dryRun ? (
             <>
-              <button className="press" style={{ ...ghostBtn, color: c.danger, borderColor: c.danger }} type="button" disabled={busy} onClick={() => run(false)}>Import now</button>
+              <button className="press danger-ghost" style={{ ...ghostBtn, color: c.danger }} type="button" disabled={busy} onClick={() => run(false)}>Import now</button>
               <button className="press" style={ghostBtn} type="button" onClick={() => setConfirmRun(false)}>Cancel</button>
             </>
           ) : (
@@ -474,7 +548,7 @@ function ImportSection() {
       </div>
 
       {plan && (
-        <div style={{ marginTop: "1.3rem", maxWidth: "46rem" }}>
+        <div style={{ marginTop: "1.4rem", maxWidth: "46rem" }}>
           <p style={{ ...fieldLabel, marginBottom: "0.5rem" }}>Plan</p>
           <pre style={preBlock}>{formatPlan(plan)}</pre>
         </div>
@@ -525,35 +599,35 @@ function TokensSection(props: { users: AdminUser[] }) {
   const nameOf = (id: number) => props.users.find((u) => u.id === id)?.name || `#${id}`;
 
   return (
-    <section style={panel}>
+    <section className="admin-panel" style={sectionPanel}>
       <div style={panelHead}>
-        <h3 style={{ ...railTitle, margin: 0 }}>Tokens</h3>
+        <h3 style={headTitle}>Tokens</h3>
         <button className="press" style={ghostBtn} onClick={load}>Refresh</button>
       </div>
       {rows.length === 0 ? (
         <p style={muted}>No tokens yet.</p>
       ) : (
-        <div style={tableWrap}>
+        <FadeScroll>
           <table style={table}>
             <thead>
               <tr>
-                <th style={th}>Label</th>
-                <th style={th}>User</th>
-                <th style={th}>Created</th>
-                <th style={th}>Last seen</th>
-                <th style={th}>Status</th>
-                <th style={thRight}>Action</th>
+                <th style={thA}>Label</th>
+                <th style={thA}>User</th>
+                <th style={thNum}>Created</th>
+                <th style={thNum}>Last seen</th>
+                <th style={thA}>Status</th>
+                <th style={thAct}>Action</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((t) => (
                 <tr key={t.id} className="row-hit">
-                  <td style={{ ...td, color: c.text }}>{t.label}</td>
-                  <td style={td}>{nameOf(t.userId)}</td>
-                  <td style={td}>{fmtRel(t.createdAtMs) || "—"}</td>
-                  <td style={td}>{fmtRel(t.lastSeenAtMs) || "—"}</td>
-                  <td style={td}><StatusTag status={t.revokedAtMs ? "revoked" : "active"} tone={t.revokedAtMs ? c.danger : c.ok} /></td>
-                  <td style={tdRight}>
+                  <td style={{ ...tdA, color: c.text }}>{t.label}</td>
+                  <td style={tdA}>{nameOf(t.userId)}</td>
+                  <td style={tdNum}>{fmtRel(t.createdAtMs) || "—"}</td>
+                  <td style={tdNum}>{fmtRel(t.lastSeenAtMs) || "—"}</td>
+                  <td style={tdA}><StatusTag status={t.revokedAtMs ? "revoked" : "active"} tone={t.revokedAtMs ? c.danger : c.ok} /></td>
+                  <td style={tdAct}>
                     {t.revokedAtMs ? "—" : (
                       <button className="press" style={ghostBtn} type="button" disabled={busy} onClick={() => revoke(t.id)}>Revoke</button>
                     )}
@@ -562,10 +636,10 @@ function TokensSection(props: { users: AdminUser[] }) {
               ))}
             </tbody>
           </table>
-        </div>
+        </FadeScroll>
       )}
 
-      <form style={formBlock} onSubmit={create}>
+      <form style={adminForm} onSubmit={create}>
         <Field label="Label">
           <input style={input} placeholder="e.g. phone" value={label} onInput={(e) => setLabel((e.target as HTMLInputElement).value)} />
         </Field>
@@ -574,7 +648,7 @@ function TokensSection(props: { users: AdminUser[] }) {
       </form>
 
       {issued && (
-        <div style={{ ...formBlock, maxWidth: "none" }}>
+        <div style={{ ...adminForm, maxWidth: "none" }}>
           <p style={formNote}>Copy this token now — it will not be shown again.</p>
           <code style={{ fontFamily: mono, fontSize: "0.82rem", wordBreak: "break-all", color: c.textDim }}>{issued}</code>
           <div>
@@ -590,6 +664,7 @@ function ProvidersSection() {
   const [rows, setRows] = useState<ProviderKey[]>([]);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
+  const wide = useWide();
 
   const load = () => api("/settings/providers").then((r: { providers: ProviderKey[] }) => setRows(r.providers || [])).catch(() => setRows([]));
   useEffect(() => { load(); }, []);
@@ -626,20 +701,22 @@ function ProvidersSection() {
   };
 
   return (
-    <section style={panel}>
-      <div style={panelHead}>
-        <h3 style={{ ...railTitle, margin: 0 }}>Provider Keys</h3>
+    <section className="admin-panel" style={sectionPanel}>
+      <div style={headDesc}>
+        <h3 style={headTitle}>Provider Keys</h3>
       </div>
-      <p style={muted}>Metadata providers for matching and enrichment. Keys apply immediately — no restart.</p>
+      <p style={panelDesc}>Metadata providers for matching and enrichment. Keys apply immediately — no restart.</p>
       {rows.length === 0 && <p style={muted}>Loading…</p>}
       {rows.map((r) => {
         const st = statusFor(r);
         return (
-          <div key={r.name} style={libRow}>
-            <span style={{ minWidth: "7.5rem", color: c.text, fontSize: "0.86rem" }}>{r.label}</span>
-            <span style={{ ...badge, color: st.tone, borderColor: "transparent", background: "transparent" }}>{st.text}</span>
+          <div key={r.name} style={{ ...rowLine, gridTemplateColumns: wide ? "minmax(0, 1fr) minmax(16rem, 24rem)" : "minmax(0, 1fr)" }}>
+            <div style={provMain}>
+              <span style={provLabel}>{r.label}</span>
+              <span style={{ ...badge, color: st.tone, borderColor: "transparent", background: "transparent" }}>{st.text}</span>
+            </div>
             {r.keyed && (
-              <>
+              <div style={provControls}>
                 <input
                   style={{ ...input, flex: 1, minWidth: "10rem" }}
                   type="password"
@@ -652,13 +729,13 @@ function ProvidersSection() {
                 {r.configured && !r.fromEnv && (
                   <button className="press" style={ghostBtn} type="button" disabled={busy} onClick={() => put({ [r.name]: "" }, `${r.label} key cleared`)}>Clear</button>
                 )}
-              </>
+              </div>
             )}
           </div>
         );
       })}
       {rows.some((r) => r.keyed) && (
-        <div style={formBlock}>
+        <div style={adminForm}>
           <button className="press btnp" style={primaryBtn} type="button" disabled={busy} onClick={save}>Save keys</button>
         </div>
       )}

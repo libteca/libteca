@@ -156,7 +156,6 @@ export function App() {
                 </a>
               );
             })}
-            <a href="#/library" style={navItem(view.name === "library" && !view.type)} aria-current={view.name === "library" && !view.type ? "page" : undefined}>Library</a>
             <a href="#/podcasts" style={navItem(view.name === "podcasts")} aria-current={view.name === "podcasts" ? "page" : undefined}>Podcasts</a>
           </nav>
           <SearchBox />
