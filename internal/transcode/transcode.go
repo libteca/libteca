@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -70,7 +71,7 @@ type Session struct {
 	fallbackPending bool
 	downgraded      bool
 	killed          bool
-	lastHit         time.Time
+	lastHit         atomic.Int64
 	mu              sync.Mutex
 }
 
@@ -114,7 +115,7 @@ func (m *Manager) Get(sessionID string, edition int64, source string, startSecs 
 	defer m.mu.Unlock()
 	if s, ok := m.sessions[sessionID]; ok {
 		if s.Edition == edition {
-			s.lastHit = time.Now()
+			s.lastHit.Store(time.Now().UnixNano())
 			return s, nil
 		}
 		s.kill()
@@ -122,10 +123,10 @@ func (m *Manager) Get(sessionID string, edition int64, source string, startSecs 
 	}
 	for len(m.sessions) >= MaxSessions {
 		var oldestID string
-		var oldest time.Time
+		var oldest int64
 		for id, s := range m.sessions {
-			hit := s.lastHit
-			if oldestID == "" || hit.Before(oldest) {
+			hit := s.lastHit.Load()
+			if oldestID == "" || hit < oldest {
 				oldestID, oldest = id, hit
 			}
 		}
@@ -143,8 +144,8 @@ func (m *Manager) Get(sessionID string, edition int64, source string, startSecs 
 		Source:  source,
 		accel:   m.accelMode(),
 		spawn:   m.spawn,
-		lastHit: time.Now(),
 	}
+	s.lastHit.Store(time.Now().UnixNano())
 	m.sessions[sessionID] = s
 	if err := s.start(startSecs); err != nil {
 		delete(m.sessions, sessionID)
@@ -257,7 +258,7 @@ func (m *Manager) reaper() {
 		time.Sleep(15 * time.Second)
 		m.mu.Lock()
 		for id, s := range m.sessions {
-			if time.Since(s.lastHit) > idleSessionTTL {
+			if time.Since(time.Unix(0, s.lastHit.Load())) > idleSessionTTL {
 				s.kill()
 				delete(m.sessions, id)
 			}
@@ -278,7 +279,7 @@ func (m *Manager) CloseAll() {
 
 func (s *Session) Playlist() string        { return filepath.Join(s.Dir, "index.m3u8") }
 func (s *Session) Path(name string) string { return filepath.Join(s.Dir, filepath.Base(name)) }
-func (s *Session) Touch()                  { s.mu.Lock(); s.lastHit = time.Now(); s.mu.Unlock() }
+func (s *Session) Touch()                  { s.lastHit.Store(time.Now().UnixNano()) }
 
 func (m *Manager) TouchSession(id string) {
 	m.mu.Lock()

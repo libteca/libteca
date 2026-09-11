@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -118,7 +119,7 @@ func TestWaitForSegmentFileValidation(t *testing.T) {
 		t.Fatal("absent segment must not be servable")
 	}
 	m.mu.Lock()
-	m.sessions["s1"].lastHit = time.Now()
+	m.sessions["s1"].lastHit.Store(time.Now().UnixNano())
 	m.mu.Unlock()
 }
 
@@ -212,7 +213,7 @@ func TestMaxSessionsEvictsOldest(t *testing.T) {
 		}
 	}
 	m.mu.Lock()
-	m.sessions[first].lastHit = time.Now().Add(-time.Hour)
+	m.sessions[first].lastHit.Store(time.Now().Add(-time.Hour).UnixNano())
 	m.mu.Unlock()
 	if _, err := m.Get("overflow", 99, "src", 0); err != nil {
 		t.Fatalf("Get(overflow): %v", err)
@@ -233,6 +234,34 @@ func TestMaxSessionsEvictsOldest(t *testing.T) {
 		t.Fatal("evicted session's ffmpeg must be killed")
 	}
 	m.CloseAll()
+}
+
+func TestSessionLastHitConcurrentAccess(t *testing.T) {
+	m := New(t.TempDir())
+	m.probeRun = func([]string) (string, error) { return "", errStartFail }
+	m.spawn = func([]string) process { return newSleepProcess() }
+	defer m.CloseAll()
+	for i := 0; i < MaxSessions; i++ {
+		if _, err := m.Get(fmt.Sprintf("s%d", i), int64(i+1), "src", 0); err != nil {
+			t.Fatalf("Get(s%d): %v", i, err)
+		}
+	}
+	var wg sync.WaitGroup
+	for g := 0; g < 4; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 200; i++ {
+				id := fmt.Sprintf("s%d", i%MaxSessions)
+				m.TouchSession(id)
+				if _, err := m.Get(id, int64(i%MaxSessions+1), "src", 0); err != nil {
+					t.Errorf("Get(%s): %v", id, err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 func TestPrebufferIntegrationFFmpeg(t *testing.T) {
