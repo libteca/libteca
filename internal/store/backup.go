@@ -24,6 +24,8 @@ func (d *DB) BackupTo(dest string) error {
 // Snapshot writes data/backups/libteca-<date>.db (VACUUM INTO), mirrors
 // coversDir into backupsDir/covers (skipping the thumb cache), prunes the
 // oldest libteca-*.db backups beyond keep, and returns the new db path.
+// The new backup and its directory are fsynced before any prune runs, so a
+// power loss can never lose both the old and the new snapshot at once.
 func (d *DB) Snapshot(coversDir, backupsDir string, keep int) (string, error) {
 	if err := os.MkdirAll(backupsDir, 0o700); err != nil {
 		return "", err
@@ -32,13 +34,28 @@ func (d *DB) Snapshot(coversDir, backupsDir string, keep int) (string, error) {
 	if err := d.BackupTo(dest); err != nil {
 		return "", err
 	}
+	if err := syncPath(dest); err != nil {
+		return "", err
+	}
+	if err := syncPath(backupsDir); err != nil {
+		return "", err
+	}
 	if err := copyTree(coversDir, filepath.Join(backupsDir, "covers")); err != nil {
 		return "", err
 	}
-	if err := pruneBackups(backupsDir, keep); err != nil {
+	if err := pruneBackups(backupsDir, keep, dest); err != nil {
 		return "", err
 	}
 	return dest, nil
+}
+
+func syncPath(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return f.Sync()
 }
 
 func copyTree(src, dst string) error {
@@ -74,7 +91,10 @@ func copyTree(src, dst string) error {
 	})
 }
 
-func pruneBackups(dir string, keep int) error {
+// pruneBackups deletes the oldest libteca-*.db backups beyond keep; the file
+// named by protect (the just-written snapshot) is never deleted, even when a
+// clock-skewed name sorts it into the prune range.
+func pruneBackups(dir string, keep int, protect string) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return err
@@ -86,7 +106,11 @@ func pruneBackups(dir string, keep int) error {
 		}
 	}
 	for i := 0; i < len(dbs)-keep; i++ {
-		if err := os.Remove(filepath.Join(dir, dbs[i])); err != nil {
+		path := filepath.Join(dir, dbs[i])
+		if path == protect {
+			continue
+		}
+		if err := os.Remove(path); err != nil {
 			return err
 		}
 	}

@@ -97,6 +97,23 @@ func TestSnapshotPrunesOldBackups(t *testing.T) {
 	}
 }
 
+func TestSnapshotNeverPrunesJustWritten(t *testing.T) {
+	db := backupDB(t)
+	backups := t.TempDir()
+	// clock-skewed name sorts AFTER the fresh snapshot: with keep=1 the
+	// just-written file would land in the prune range without protection
+	if err := os.WriteFile(filepath.Join(backups, "libteca-29991231-235959.db"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	path, err := db.Snapshot(filepath.Join(t.TempDir(), "no-covers"), backups, 1)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("just-written backup pruned: %v", err)
+	}
+}
+
 func TestSnapshotCapturesWalWrites(t *testing.T) {
 	db := backupDB(t)
 	dir := t.TempDir()
