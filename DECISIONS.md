@@ -403,9 +403,10 @@ backup = `libteca backup` (15g); neutron-go published (17).
 31. **Founder calls on PLAN 14 (2026-09-11).** media-hub stays parked;
     libteca goes PUBLIC now (was private since inception) under MIT.
     Scrub verified: no secrets/session files ever tracked, data/ never
-    in history. LICENSE + public AGENTS.md committed; GitHub remote
-    staged as `github` (Tyler/libteca) pending gh auth; origin stays
-    Forgejo. Header "Library" nav link removed (route remains, Home +
+    in history. LICENSE + public AGENTS.md committed; Live at
+    github.com/libteca/libteca (org existed, repo created empty by a
+    parallel agent; pushed + made public + description/homepage set;
+    origin stays Forgejo, `github` remote mirrors). Header "Library" nav link removed (route remains, Home +
     category links cover it); admin/settings formatting pass landed
     same day.
     Reverse: none.
