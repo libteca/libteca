@@ -355,3 +355,20 @@ func TestUserChangePasswordSelf(t *testing.T) {
 		t.Fatal("login with new password failed")
 	}
 }
+
+func TestUserChangePasswordTokenFailureIsError(t *testing.T) {
+	db, base, token := newUsersEnv(t)
+	adminID := userIDByName(t, db, "admin")
+
+	if code, _ := callJSON(t, "GET", base+"/users", token, nil); code != http.StatusOK {
+		t.Fatalf("warmup request = %d, want 200", code)
+	}
+	if _, err := db.Exec(`DROP TABLE tokens`); err != nil {
+		t.Fatal(err)
+	}
+	code, out := callJSON(t, "POST", fmt.Sprintf("%s/users/%d/password", base, adminID), token,
+		map[string]string{"password": "newpass123"})
+	if code != http.StatusInternalServerError {
+		t.Fatalf("password change with token-store failure = %d %v, want 500", code, out)
+	}
+}

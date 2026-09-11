@@ -169,14 +169,22 @@ func (a *API) userSetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	opds.InvalidateUser(id)
-	if values, err := a.DB.UserTokenValues(id); err == nil {
-		if err := a.DB.RevokeUserTokens(id); err == nil {
-			for _, v := range values {
-				auth.InvalidateToken(v)
-			}
-		}
+	values, err := a.DB.UserTokenValues(id)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
+		return
 	}
-	a.DB.DeleteSetting("subsonic.pw." + strconv.FormatInt(id, 10))
+	if err := a.DB.RevokeUserTokens(id); err != nil {
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
+		return
+	}
+	for _, v := range values {
+		auth.InvalidateToken(v)
+	}
+	if err := a.DB.DeleteSetting("subsonic.pw." + strconv.FormatInt(id, 10)); err != nil {
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
+		return
+	}
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
