@@ -25,9 +25,10 @@ import (
 )
 
 type API struct {
-	DB  *store.DB
-	Dir string
-	TC  *transcode.Manager
+	DB           *store.DB
+	Dir          string
+	TC           *transcode.Manager
+	LoginLimiter *auth.Limiter
 
 	tpOnce sync.Once
 	tp     *trickplay.Generator
@@ -192,6 +193,14 @@ func (a *API) brandingStub(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) authenticate(w http.ResponseWriter, r *http.Request) {
+	ip := auth.ClientIP(r)
+	if a.LoginLimiter != nil {
+		if ok, retry := a.LoginLimiter.Allow(ip); !ok {
+			auth.WriteRetryAfter(w, retry)
+			write(w, 429, map[string]any{"error": "too many attempts, try again later"})
+			return
+		}
+	}
 	var body struct {
 		Username string `json:"Username"`
 		Pw       string `json:"Pw"`
@@ -204,9 +213,15 @@ func (a *API) authenticate(w http.ResponseWriter, r *http.Request) {
 	}
 	u, err := a.DB.UserByName(body.Username)
 	if err != nil || !auth.Verify(pass, u.PasswordHash) {
+		if a.LoginLimiter != nil {
+			a.LoginLimiter.Failure(ip)
+		}
 		w.WriteHeader(401)
 		w.Write([]byte(`{"error":"invalid"}`))
 		return
+	}
+	if a.LoginLimiter != nil {
+		a.LoginLimiter.Success(ip)
 	}
 	token, _ := auth.IssueToken(a.DB, u.ID, "jellyfin-client")
 	write(w, 200, map[string]any{

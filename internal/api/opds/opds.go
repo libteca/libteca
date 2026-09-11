@@ -52,8 +52,9 @@ const (
 )
 
 type API struct {
-	DB  *store.DB
-	Dir string
+	DB           *store.DB
+	Dir          string
+	LoginLimiter *auth.Limiter
 }
 
 func New(db *store.DB, dir string) *API {
@@ -92,6 +93,14 @@ func (a *API) auth(h func(http.ResponseWriter, *http.Request, int64)) http.Handl
 			a.unauthorized(w)
 			return
 		}
+		ip := auth.ClientIP(r)
+		if a.LoginLimiter != nil {
+			if ok, retry := a.LoginLimiter.Allow(ip); !ok {
+				auth.WriteRetryAfter(w, retry)
+				http.Error(w, "too many attempts, try again later", http.StatusTooManyRequests)
+				return
+			}
+		}
 		var key [32]byte = sha256.Sum256([]byte(user + "\x00" + pass))
 		k := key[:]
 		if v, hit := basicCache.Load(string(k)); hit {
@@ -103,8 +112,14 @@ func (a *API) auth(h func(http.ResponseWriter, *http.Request, int64)) http.Handl
 		}
 		u, err := a.DB.UserByName(user)
 		if err != nil || !auth.Verify(pass, u.PasswordHash) {
+			if a.LoginLimiter != nil {
+				a.LoginLimiter.Failure(ip)
+			}
 			a.unauthorized(w)
 			return
+		}
+		if a.LoginLimiter != nil {
+			a.LoginLimiter.Success(ip)
 		}
 		basicCache.Store(string(k), &cachedBasic{userID: u.ID, at: time.Now().UnixMilli()})
 		h(w, r, u.ID)

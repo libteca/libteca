@@ -70,6 +70,7 @@ func (s *Server) Handler() http.Handler {
 	c.Mount(r.Group("/api/core", coreBodyLimit, authMW))
 
 	jf := jellyfin.New(s.DB, s.Dir, tm)
+	jf.LoginLimiter = loginLimiter
 	jf.Mount(r)
 	s.tm = tm
 	s.jf = jf
@@ -88,6 +89,7 @@ func (s *Server) Handler() http.Handler {
 	sub.Mount(r)
 
 	od := opds.New(s.DB, s.Dir)
+	od.LoginLimiter = loginLimiter
 	od.Mount(r)
 
 	r.StaticFS("/", webFS())
