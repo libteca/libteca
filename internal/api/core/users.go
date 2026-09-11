@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/libteca/libteca/internal/api/opds"
 	"github.com/libteca/libteca/internal/auth"
 	"github.com/libteca/libteca/internal/store"
 	"github.com/neutron-build/neutron/go/neutron"
@@ -132,6 +133,7 @@ func (a *API) userDelete(w http.ResponseWriter, r *http.Request) {
 	for _, v := range values {
 		auth.InvalidateToken(v)
 	}
+	opds.InvalidateUser(id)
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
@@ -166,6 +168,7 @@ func (a *API) userSetPassword(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
+	opds.InvalidateUser(id)
 	if values, err := a.DB.UserTokenValues(id); err == nil {
 		if err := a.DB.RevokeUserTokens(id); err == nil {
 			for _, v := range values {

@@ -67,3 +67,45 @@ func TestBasicAuthSuccessWithinLimit(t *testing.T) {
 		t.Fatalf("valid auth within limit = %d, want 200", rec.Code)
 	}
 }
+
+func TestInvalidateUserDropsCachedBasic(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	now := time.Now().UnixMilli()
+	if _, err := db.Exec(`INSERT INTO users (name, password_hash, is_admin, created_at, updated_at) VALUES (?,?,1,?,?)`,
+		"cache-user", auth.Hash("oldpass123"), now, now); err != nil {
+		t.Fatal(err)
+	}
+	r := neutron.New().Router()
+	a := New(db, t.TempDir())
+	a.LoginLimiter = auth.NewLimiter()
+	a.Mount(r)
+	get := func(user, pass string) int {
+		req := httptest.NewRequest("GET", "/opds", nil)
+		req.SetBasicAuth(user, pass)
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	if code := get("cache-user", "oldpass123"); code != http.StatusOK {
+		t.Fatalf("initial auth = %d, want 200", code)
+	}
+	u, err := db.UserByName("cache-user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE users SET password_hash = ? WHERE id = ?`, auth.Hash("newpass123"), u.ID); err != nil {
+		t.Fatal(err)
+	}
+	InvalidateUser(u.ID)
+	if code := get("cache-user", "oldpass123"); code != http.StatusUnauthorized {
+		t.Fatalf("old password after InvalidateUser = %d, want 401", code)
+	}
+	if code := get("cache-user", "newpass123"); code != http.StatusOK {
+		t.Fatalf("new password after InvalidateUser = %d, want 200", code)
+	}
+}

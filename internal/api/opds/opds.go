@@ -131,6 +131,17 @@ func (a *API) unauthorized(w http.ResponseWriter) {
 	http.Error(w, "unauthorized", http.StatusUnauthorized)
 }
 
+// InvalidateUser drops cached Basic credentials for a user so password
+// changes and deletion take effect before the TTL expires.
+func InvalidateUser(userID int64) {
+	basicCache.Range(func(k, v any) bool {
+		if c, ok := v.(*cachedBasic); ok && c.userID == userID {
+			basicCache.Delete(k)
+		}
+		return true
+	})
+}
+
 type Feed struct {
 	XMLName         xml.Name   `xml:"feed"`
 	XMLNS           string     `xml:"xmlns,attr"`
