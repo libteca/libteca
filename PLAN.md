@@ -10,11 +10,13 @@ if an existing app happens to connect, good. They are not the moat, not the
 critical path, and not a reason to delay the web. Native apps are not in
 scope — PWA now; inherit a TV/phone client later if the web is not enough.
 
-Status: **CODE-COMPLETE, AWAITING GATE W** (repo `Tyler/libteca`, private).
-All codeable work through 2026-09-11 closed (DECISIONS 19-25, SPEC §9
-~95%). Spine + web + viewers + podcasts + ops done and verified (307+
-Go tests, 16 packages green, CI workflow, Dockerfile); faces built but
-corpus-unverified (founder gate). What remains is human-owned: Gate W
+Status: **RELEASE-READY, AWAITING GATE W** (repo `Tyler/libteca`, private).
+Everything codeable through the 2026-09-11 release waves is closed
+(DECISIONS 19-28): full audit wave (security, races, tx safety, faces,
+web correctness) + polish wave (motion system, players, readers, PWA);
+17 packages green incl. -race, CI workflow, Dockerfile, provider keys
+UI. Faces built but corpus-unverified (founder gate). Remaining is
+human-owned: Gate W
 Remaining to "finished v1": Gate W founder week, CI workflow, and the
 SPEC §9 deferred tail. Server is neutron-go (DECISIONS 9, 17); §2's old
 "no Neutron" line is superseded — it still bars Neutron DB and SSR

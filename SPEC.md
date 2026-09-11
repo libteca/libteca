@@ -320,13 +320,13 @@ README matrix.
 
 | Area | % of v1 | What's left |
 |---|---|---|
-| Spine/server | 98 | — |
-| Web UI | 95 | Gate W founder week + what it surfaces |
-| Viewers | 95 | real-device tuning |
-| Podcasts | 90 | cleanup UX affordances if wanted |
+| Spine/server | 99 | — |
+| Web UI | 98 | Gate W founder week + what it surfaces |
+| Viewers | 98 | real-device tuning |
+| Podcasts | 95 | — |
 | Faces | 65 built / 0 verified | corpus capture + live clients (Gate F, founder-owned) |
 | Ops | 95 | teploy /dev/dri upstream (CI + Dockerfile shipped) |
-| **Overall (v1 = Gate W)** | **~95** | founder week (Gate W); Gate F corpus |
+| **Overall (v1 = Gate W)** | **~98** | founder week (Gate W); Gate F corpus |
 
 Not started by design: native apps, Kavita protocol, Plex, acquisition,
 Live TV, plugin SDK (PLAN §2).

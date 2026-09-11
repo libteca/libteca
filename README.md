@@ -5,10 +5,11 @@ from a single Go binary with an embedded SQLite store. The product is the
 first-party web UI. Four protocol faces (Jellyfin, Audiobookshelf, OPDS,
 Subsonic) are optional — existing apps are a nicety, not the target.
 
-Status: BUILDING (private). Spine, web UI, and viewers are code-complete
-for v1 and bug-swept (see SPEC §9 for the completion table). The live gate
-is daily use of the web UI on a real library. No inherited-client cell
-below says "works".
+Status: RELEASE-READY (private). All codeable v1 work closed through the
+2026-09-11 release waves (audit + polish; DECISIONS 28): security hardening,
+race/tx fixes, motion system, PWA, Docker image, provider keys in Admin.
+The live gate is Gate W - daily use of the web UI on a real library. No
+inherited-client cell below says "works" (Gate F pending).
 
 ## The four faces
 

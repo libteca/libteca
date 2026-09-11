@@ -339,3 +339,23 @@ backup = `libteca backup` (15g); neutron-go published (17).
     the login screen. Username rename rejected as unnecessary surface
     (single-household identity glue).
     Reverse: none.
+
+28. **Release waves (2026-09-11).** Wave 1 - four-agent release audit,
+    fixed in full: security (library paths admin-only, scan-path leak
+    masking, covers traversal, 4MiB body limit, Subsonic stale-token
+    hole + secret cleared on password change, err.Error()
+    genericization), races (jellyfin socketHub, zombie ffmpeg, watch
+    debounce re-arm), tx safety (_txlock=immediate + pool cap,
+    single-tx search backfill, all read-then-write upserts wrapped,
+    per-book scan txs, NFO title_l unicode fix), panics (zero-file
+    editions), faces (query-param casing, season/series browsing,
+    System/Ping, session cap 8 + orphan wipe, trickplay partial-tile
+    cleanup), web (safe-parse api, 15s progress heartbeat, every view
+    error+retry, NaN guards, focus-trapped modal), lifecycle (bounded
+    shutdown reaps transcode + sockets). Wave 2 - three-agent polish:
+    global motion system w/ reduced-motion, rail masks + chevrons,
+    glass player/readers refinements, toast system polish, complete
+    PWA manifest + icons, sw v4. 17/17 packages green incl. -race.
+    Remaining: Gate W + Gate F (human), scan ctx threading + login
+    rate-limit (documented limits, not blockers for single-household).
+    Reverse: none.
