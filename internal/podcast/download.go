@@ -72,22 +72,22 @@ func (s *Service) downloadEpisode(ctx context.Context, p *store.Podcast, ep *sto
 		return fmt.Errorf("enclosure fetch: %s", resp.Status)
 	}
 
-	tmp := path + ".part"
-	f, err := os.Create(tmp)
+	tmp, err := os.CreateTemp(dir, name+".*.part")
 	if err != nil {
 		return err
 	}
+	tmpPath := tmp.Name()
 	h := xxhash.New()
-	size, err := io.Copy(io.MultiWriter(f, h), resp.Body)
-	if cerr := f.Close(); err == nil {
+	size, err := io.Copy(io.MultiWriter(tmp, h), resp.Body)
+	if cerr := tmp.Close(); err == nil {
 		err = cerr
 	}
 	if err != nil {
-		os.Remove(tmp)
+		os.Remove(tmpPath)
 		return err
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
 		return err
 	}
 

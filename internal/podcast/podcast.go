@@ -81,6 +81,10 @@ func (s *Service) Subscribe(ctx context.Context, feedURL string, autoDownload bo
 		return nil, err
 	}
 	s.DB.UpdatePodcastFetch(p.ID, nilOrEmpty(etag), nilOrEmpty(lastModified), nowMs())
+	if !s.acquire(p.ID) {
+		return p, ErrRefreshBusy
+	}
+	defer s.release(p.ID)
 	if feed.ImageURL != "" {
 		s.fetchCover(ctx, p.ID, feed.ImageURL)
 	}

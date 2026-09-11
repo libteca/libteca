@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -470,6 +471,120 @@ func TestDeletePodcastKeepsFilesWhenDBFails(t *testing.T) {
 		if _, err := os.Stat(f.Path); err != nil {
 			t.Fatalf("file %s removed from disk before DB rows deleted: %v", f.Path, err)
 		}
+	}
+}
+
+func TestSubscribeHoldsInflightLockDuringDownloads(t *testing.T) {
+	svc, db := newTestService(t)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	mux := http.NewServeMux()
+	mux.HandleFunc("/feed", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `<?xml version="1.0"?><rss version="2.0"><channel><title>Lock Cast</title>
+		<item><title>Ep</title><guid>lock-1</guid>
+		<pubDate>Tue, 10 Dec 2024 06:00:00 +0000</pubDate>
+		<enclosure url="%s/enclosure/lock-1.mp3" length="1024" type="audio/mpeg"/></item>
+		</channel></rss>`, "http://"+r.Host)
+	})
+	mux.HandleFunc("/enclosure/lock-1.mp3", func(w http.ResponseWriter, r *http.Request) {
+		close(entered)
+		<-release
+		w.Header().Set("Content-Type", "audio/mpeg")
+		io.WriteString(w, "fake-audio-lock-1.mp3")
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	subDone := make(chan error, 1)
+	var p *store.Podcast
+	go func() {
+		var err error
+		p, err = svc.Subscribe(context.Background(), srv.URL+"/feed", true, 3)
+		subDone <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("enclosure never fetched")
+	}
+	existing, err := db.PodcastByFeedURL(srv.URL + "/feed")
+	if err != nil {
+		t.Fatalf("podcast row missing while subscribe runs: %v", err)
+	}
+	if _, _, err := svc.RefreshPodcast(context.Background(), existing.ID); err != ErrRefreshBusy {
+		t.Fatalf("refresh during subscribe download = %v, want ErrRefreshBusy", err)
+	}
+	close(release)
+	if err := <-subDone; err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	if _, _, err := svc.RefreshPodcast(context.Background(), p.ID); err == ErrRefreshBusy {
+		t.Fatal("lock not released after subscribe")
+	}
+}
+
+func TestConcurrentDownloadEpisodesUseDistinctTempFiles(t *testing.T) {
+	svc, db := newTestService(t)
+	body := "fake-audio-concurrent"
+	block := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-block
+		w.Header().Set("Content-Type", "audio/mpeg")
+		io.WriteString(w, body)
+	}))
+	t.Cleanup(srv.Close)
+
+	libID, err := db.EnsurePodcastsLibrary(filepath.Join(svc.DataDir, "podcasts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := db.AddPodcast(&store.Podcast{LibraryID: libID, FeedURL: srv.URL + "/feed", Title: "Cast", AutoDownload: true, MaxEpisodes: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := db.Podcast(pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ep := &store.PodcastEpisode{PodcastID: pid, GUID: "c-1", Title: strPtr("Ep"), EnclosureURL: srv.URL + "/e.mp3"}
+	if _, err := db.UpsertPodcastEpisode(ep); err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	close(block)
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := svc.downloadEpisode(context.Background(), p, ep); err != nil {
+				t.Errorf("downloadEpisode: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	dir := filepath.Join(svc.DataDir, "podcasts", strconv.FormatInt(pid, 10))
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parts, finals int
+	var finalName string
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".part") {
+			parts++
+		} else {
+			finals++
+			finalName = e.Name()
+		}
+	}
+	if parts != 0 || finals != 1 {
+		t.Fatalf("dir = %d finals, %d leftover .part files, want 1/0", finals, parts)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, finalName))
+	if err != nil || string(got) != body {
+		t.Fatalf("final file = %q err = %v, want complete body", got, err)
 	}
 }
 
