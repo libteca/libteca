@@ -103,6 +103,13 @@ func New(dataDir string) *Manager {
 }
 
 func (m *Manager) Get(sessionID string, edition int64, source string, startSecs float64) (*Session, error) {
+	// Session ids become directory names under DataDir/transcode via
+	// filepath.Join, which cleans ".." — an unvalidated id resolves outside
+	// its slot, and Session.kill() runs os.RemoveAll(s.Dir). Reject anything
+	// that is not a single safe path component, before any map or disk work.
+	if sessionID == "" || sessionID == "." || sessionID == ".." || strings.ContainsAny(sessionID, `/\`) {
+		return nil, fmt.Errorf("invalid transcode session id")
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if s, ok := m.sessions[sessionID]; ok {

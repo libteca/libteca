@@ -140,6 +140,22 @@ func (startFailProcess) kill()        {}
 
 var errStartFail = os.ErrInvalid
 
+func TestGetRejectsTraversalSessionIDs(t *testing.T) {
+	m := New(t.TempDir())
+	m.spawn = func([]string) process { return startFailProcess{} }
+	for _, sid := range []string{"..", ".", "", "x/../../y", "a/b", `a\b`} {
+		if _, err := m.Get(sid, 1, "src", 0); err == nil {
+			t.Fatalf("Get(%q) must reject unsafe session ids", sid)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(m.DataDir, "transcode")); !os.IsNotExist(err) {
+		t.Fatal("rejected ids must not create any directory")
+	}
+	if _, err := os.Stat(m.DataDir); err != nil {
+		t.Fatalf("DataDir must be untouched: %v", err)
+	}
+}
+
 func TestGetStartFailureCleansSession(t *testing.T) {
 	m := New(t.TempDir())
 	m.probeRun = func([]string) (string, error) { return "", errStartFail }

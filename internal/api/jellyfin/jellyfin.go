@@ -925,6 +925,9 @@ func (a *API) hlsMaster(w http.ResponseWriter, r *http.Request) {
 	sessionID := qget(r, "PlaySessionId")
 	if sessionID == "" {
 		sessionID = fmt.Sprintf("t%d-%d", ed.ID, time.Now().UnixMilli())
+	} else if !validHLSSessionID(sessionID) {
+		http.Error(w, "bad", 400)
+		return
 	}
 	if a.TC == nil {
 		http.Error(w, "transcode unavailable", 503)
@@ -958,6 +961,14 @@ var (
 	reHLSSegmentFile = regexp.MustCompile(`^(seg\d+\.ts|index\.m3u8)$`)
 )
 
+// validHLSSessionID guards ids that reach the transcoder, where they become
+// directory names under DataDir. The charset regex alone admits "." and "..",
+// which filepath.Join cleans upward — the explicit dot-name rejection closes
+// that hole for every caller.
+func validHLSSessionID(s string) bool {
+	return reHLSSessionID.MatchString(s) && s != "." && s != ".."
+}
+
 func rewriteHLSPlaylist(playlist []byte, itemID, sessionID, apiKey string) []byte {
 	prefix := "/videos/" + itemID + "/hls/" + sessionID + "/"
 	q := ""
@@ -981,7 +992,7 @@ func rewriteHLSPlaylist(playlist []byte, itemID, sessionID, apiKey string) []byt
 func (a *API) hlsSegment(w http.ResponseWriter, r *http.Request) {
 	sid := r.PathValue("sid")
 	file := r.PathValue("file")
-	if !reHLSSessionID.MatchString(sid) {
+	if !validHLSSessionID(sid) {
 		http.Error(w, "bad", 400)
 		return
 	}
