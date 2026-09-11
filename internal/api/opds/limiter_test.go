@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -107,5 +108,37 @@ func TestInvalidateUserDropsCachedBasic(t *testing.T) {
 	}
 	if code := get("cache-user", "newpass123"); code != http.StatusOK {
 		t.Fatalf("new password after InvalidateUser = %d, want 200", code)
+	}
+}
+
+func TestInternalErrorsDoNotLeakErrText(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	now := time.Now().UnixMilli()
+	if _, err := db.Exec(`INSERT INTO users (name, password_hash, is_admin, created_at, updated_at) VALUES (?,?,1,?,?)`,
+		"leak-user", auth.Hash("password123"), now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`DROP TABLE libraries`); err != nil {
+		t.Fatal(err)
+	}
+	r := neutron.New().Router()
+	New(db, t.TempDir()).Mount(r)
+	req := httptest.NewRequest("GET", "/opds", nil)
+	req.SetBasicAuth("leak-user", "password123")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("root feed with store failure = %d, want 500", rec.Code)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "no such table") || strings.Contains(body, "sqlite") {
+		t.Fatalf("internal error text leaked to client: %s", body)
+	}
+	if !strings.Contains(body, "internal error") {
+		t.Fatalf("body = %s, want static message", body)
 	}
 }

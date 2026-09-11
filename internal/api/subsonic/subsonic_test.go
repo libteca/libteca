@@ -680,6 +680,28 @@ func TestScrobbleProgressFailureIsError(t *testing.T) {
 	}
 }
 
+func TestInternalErrorsDoNotLeakErrText(t *testing.T) {
+	e := newEnv(t)
+	if _, err := e.db.Exec(`DROP TABLE works`); err != nil {
+		t.Fatal(err)
+	}
+	rec := e.rest(t, "getArtists", "f=json")
+	if rec.Code != 200 {
+		t.Fatalf("getArtists HTTP = %d, subsonic errors travel in the envelope", rec.Code)
+	}
+	errObj := subMap(t, decode(t, rec), "error")
+	if code := errObj["code"].(float64); code != 0 {
+		t.Fatalf("internal error code = %v, want 0", code)
+	}
+	msg := errObj["message"].(string)
+	if strings.Contains(msg, "no such table") || strings.Contains(msg, "sqlite") {
+		t.Fatalf("internal error text leaked to client: %s", msg)
+	}
+	if msg != "Internal server error" {
+		t.Fatalf("message = %q, want static text", msg)
+	}
+}
+
 func TestDualFormatEnvelope(t *testing.T) {
 	e := newEnv(t)
 	recJSON := e.rest(t, "getPlaylists", "f=json")

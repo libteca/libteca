@@ -45,7 +45,7 @@ func (a *API) libraryPodcasts(w http.ResponseWriter, r *http.Request) {
 	libID, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	podcasts, err := a.DB.Podcasts()
 	if err != nil {
-		fail(w, 500, err.Error())
+		serverError(w, r, err)
 		return
 	}
 	limit := intQuery(r, "limit", 20)
@@ -73,13 +73,13 @@ func (a *API) podcastDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		fail(w, 500, err.Error())
+		serverError(w, r, err)
 		return
 	}
 	body := a.podcastItemPayload(p)
 	eps, err := a.DB.PodcastEpisodes(p.ID)
 	if err != nil {
-		fail(w, 500, err.Error())
+		serverError(w, r, err)
 		return
 	}
 	progs, _ := a.DB.EpisodeProgressByPodcast(auth.UserID(r), p.ID)
@@ -104,12 +104,12 @@ func (a *API) podcastEpisodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		fail(w, 500, err.Error())
+		serverError(w, r, err)
 		return
 	}
 	eps, err := a.DB.PodcastEpisodes(p.ID)
 	if err != nil {
-		fail(w, 500, err.Error())
+		serverError(w, r, err)
 		return
 	}
 	progs, _ := a.DB.EpisodeProgressByPodcast(auth.UserID(r), p.ID)
@@ -133,7 +133,7 @@ func (a *API) podcastEpisodeFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		fail(w, 500, err.Error())
+		serverError(w, r, err)
 		return
 	}
 	if ep.FileID == nil {
@@ -189,7 +189,7 @@ func (a *API) podcastEpisodeProgressGet(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err != nil {
-		fail(w, 500, err.Error())
+		serverError(w, r, err)
 		return
 	}
 	p, _ := a.DB.GetEpisodeProgress(auth.UserID(r), ep.ID)
@@ -203,7 +203,7 @@ func (a *API) podcastEpisodeProgressPost(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err != nil {
-		fail(w, 500, err.Error())
+		serverError(w, r, err)
 		return
 	}
 	var body struct {
@@ -236,7 +236,7 @@ func (a *API) podcastEpisodeProgressPost(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	if err := a.DB.SetEpisodeProgress(p); err != nil {
-		fail(w, 500, err.Error())
+		serverError(w, r, err)
 		return
 	}
 	write(w, 200, a.episodeProgressPayload(auth.UserID(r), ep, p))

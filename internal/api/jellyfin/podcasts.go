@@ -3,6 +3,7 @@ package jellyfin
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"path/filepath"
 	"regexp"
@@ -242,7 +243,8 @@ func (a *API) podcastEpisodeProgress(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := a.DB.SetEpisodeProgress(p); err != nil {
-		write(w, 500, map[string]any{"error": err.Error()})
+		slog.Warn("libteca: jellyfin podcast progress failed", "path", r.URL.Path, "err", err)
+		write(w, 500, map[string]any{"error": "internal error"})
 		return
 	}
 	write(w, 200, map[string]any{})

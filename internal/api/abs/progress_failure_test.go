@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -15,7 +16,7 @@ import (
 	"github.com/neutron-build/neutron/go/neutron"
 )
 
-func newSessionEnv(t *testing.T) (*store.DB, func(string) (int, string)) {
+func newSessionEnv(t *testing.T) (*store.DB, func(string, string) (int, string)) {
 	t.Helper()
 	dir := t.TempDir()
 	db, err := store.Open(filepath.Join(dir, "test.db"))
@@ -64,8 +65,8 @@ func newSessionEnv(t *testing.T) (*store.DB, func(string) (int, string)) {
 	abs.New(db, dir).Mount(r.Group("/api", auth.Middleware(db)))
 	srv := httptest.NewServer(app.Handler())
 	t.Cleanup(srv.Close)
-	post := func(path string) (int, string) {
-		req, _ := http.NewRequest(http.MethodPost, srv.URL+path, strings.NewReader(`{"currentTime":120,"timeListened":120,"duration":600}`))
+	post := func(method, path string) (int, string) {
+		req, _ := http.NewRequest(method, srv.URL+path, strings.NewReader(`{"currentTime":120,"timeListened":120,"duration":600}`))
 		req.Header.Set("Authorization", "Bearer "+token)
 		res, err := srv.Client().Do(req)
 		if err != nil {
@@ -86,7 +87,7 @@ func TestSessionSyncProgressFailureIsError(t *testing.T) {
 	if _, err := db.Exec(`DROP TABLE progress`); err != nil {
 		t.Fatal(err)
 	}
-	if code, body := post("/api/session/sess-open/sync"); code != 500 {
+	if code, body := post("POST", "/api/session/sess-open/sync"); code != 500 {
 		t.Fatalf("sync with progress-store failure = %d %s, want 500", code, body)
 	}
 }
@@ -96,7 +97,7 @@ func TestSessionSyncUpdateFailureIsError(t *testing.T) {
 	if _, err := db.Exec(`CREATE TRIGGER fail_sync BEFORE UPDATE ON playback_sessions BEGIN SELECT RAISE(ABORT, 'boom'); END`); err != nil {
 		t.Fatal(err)
 	}
-	if code, body := post("/api/session/sess-open/sync"); code != 500 {
+	if code, body := post("POST", "/api/session/sess-open/sync"); code != 500 {
 		t.Fatalf("sync with session-update failure = %d %s, want 500", code, body)
 	}
 }
@@ -106,7 +107,28 @@ func TestSessionCloseProgressFailureIsError(t *testing.T) {
 	if _, err := db.Exec(`DROP TABLE progress`); err != nil {
 		t.Fatal(err)
 	}
-	if code, body := post("/api/session/sess-close/close"); code != 500 {
+	if code, body := post("POST", "/api/session/sess-close/close"); code != 500 {
 		t.Fatalf("close with progress-store failure = %d %s, want 500", code, body)
+	}
+}
+
+func TestInternalErrorsDoNotLeakErrText(t *testing.T) {
+	db, post := newSessionEnv(t)
+	var edID int64
+	if err := db.QueryRow(`SELECT id FROM editions LIMIT 1`).Scan(&edID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`DROP TABLE progress`); err != nil {
+		t.Fatal(err)
+	}
+	code, body := post("POST", "/api/me/progress/"+strconv.FormatInt(edID, 10))
+	if code != 500 {
+		t.Fatalf("progress post with store failure = %d %s, want 500", code, body)
+	}
+	if strings.Contains(body, "no such table") || strings.Contains(body, "sqlite") {
+		t.Fatalf("internal error text leaked to client: %s", body)
+	}
+	if !strings.Contains(body, "Internal server error") {
+		t.Fatalf("body = %s, want static message", body)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -221,6 +222,11 @@ func (a *API) respond(w http.ResponseWriter, r *http.Request, resp *Response) {
 	xml.NewEncoder(w).Encode(resp)
 }
 
+func (a *API) internalError(w http.ResponseWriter, r *http.Request, err error) {
+	slog.Warn("libteca: subsonic request failed", "path", r.URL.Path, "err", err)
+	a.respond(w, r, errResponse(errGeneric, "Internal server error"))
+}
+
 func (a *API) ping(w http.ResponseWriter, r *http.Request, _ int64) {
 	a.respond(w, r, ok())
 }
@@ -251,7 +257,7 @@ func (a *API) getOpenSubsonicExtensions(w http.ResponseWriter, r *http.Request, 
 func (a *API) getArtists(w http.ResponseWriter, r *http.Request, _ int64) {
 	artists, err := a.DB.MusicArtists()
 	if err != nil {
-		a.respond(w, r, errResponse(errGeneric, err.Error()))
+		a.internalError(w, r, err)
 		return
 	}
 	resp := ok()
@@ -262,7 +268,7 @@ func (a *API) getArtists(w http.ResponseWriter, r *http.Request, _ int64) {
 func (a *API) getIndexes(w http.ResponseWriter, r *http.Request, _ int64) {
 	artists, err := a.DB.MusicArtists()
 	if err != nil {
-		a.respond(w, r, errResponse(errGeneric, err.Error()))
+		a.internalError(w, r, err)
 		return
 	}
 	indexes := make([]Index, 0)
@@ -308,7 +314,7 @@ func (a *API) getArtist(w http.ResponseWriter, r *http.Request, _ int64) {
 	}
 	artists, err := a.DB.MusicArtists()
 	if err != nil {
-		a.respond(w, r, errResponse(errGeneric, err.Error()))
+		a.internalError(w, r, err)
 		return
 	}
 	var found *store.MusicArtist
@@ -324,7 +330,7 @@ func (a *API) getArtist(w http.ResponseWriter, r *http.Request, _ int64) {
 	}
 	albums, err := a.DB.MusicAlbumsByArtistKey(found.Key)
 	if err != nil {
-		a.respond(w, r, errResponse(errGeneric, err.Error()))
+		a.internalError(w, r, err)
 		return
 	}
 	resp := ok()
@@ -348,7 +354,7 @@ func (a *API) getAlbum(w http.ResponseWriter, r *http.Request, _ int64) {
 	}
 	songs, err := a.DB.MusicSongsForWork(workID)
 	if err != nil {
-		a.respond(w, r, errResponse(errGeneric, err.Error()))
+		a.internalError(w, r, err)
 		return
 	}
 	resp := ok()
@@ -393,7 +399,7 @@ func (a *API) getAlbumList2(w http.ResponseWriter, r *http.Request, uid int64) {
 		return
 	}
 	if err != nil {
-		a.respond(w, r, errResponse(errGeneric, err.Error()))
+		a.internalError(w, r, err)
 		return
 	}
 	resp := ok()
@@ -471,17 +477,17 @@ func (a *API) search3(w http.ResponseWriter, r *http.Request, _ int64) {
 	songCount := intParam(r, "songCount", 20, 500)
 	artists, err := a.DB.MusicArtistsSearch(query, artistCount, intParam(r, "artistOffset", 0, 0))
 	if err != nil {
-		a.respond(w, r, errResponse(errGeneric, err.Error()))
+		a.internalError(w, r, err)
 		return
 	}
 	albums, err := a.DB.MusicAlbumsSearch(query, albumCount, intParam(r, "albumOffset", 0, 0))
 	if err != nil {
-		a.respond(w, r, errResponse(errGeneric, err.Error()))
+		a.internalError(w, r, err)
 		return
 	}
 	songs, err := a.DB.MusicSongsSearch(query, songCount, intParam(r, "songOffset", 0, 0))
 	if err != nil {
-		a.respond(w, r, errResponse(errGeneric, err.Error()))
+		a.internalError(w, r, err)
 		return
 	}
 	resp := ok()
@@ -536,7 +542,7 @@ func (a *API) scrobble(w http.ResponseWriter, r *http.Request, uid int64) {
 func (a *API) getPlaylists(w http.ResponseWriter, r *http.Request, uid int64) {
 	list, err := a.DB.ListPlaylists(uid)
 	if err != nil {
-		a.respond(w, r, errResponse(errGeneric, err.Error()))
+		a.internalError(w, r, err)
 		return
 	}
 	resp := ok()
@@ -551,7 +557,7 @@ func (a *API) getPlaylist(w http.ResponseWriter, r *http.Request, uid int64) {
 	}
 	entries, err := a.playlistChildren(p.ID)
 	if err != nil {
-		a.respond(w, r, errResponse(errGeneric, err.Error()))
+		a.internalError(w, r, err)
 		return
 	}
 	resp := ok()
@@ -575,12 +581,12 @@ func (a *API) createPlaylist(w http.ResponseWriter, r *http.Request, uid int64) 
 		pid = p.ID
 		if name := r.Form.Get("name"); name != "" {
 			if err := a.DB.RenamePlaylist(pid, name); err != nil {
-				a.respond(w, r, errResponse(errGeneric, err.Error()))
+				a.internalError(w, r, err)
 				return
 			}
 		}
 		if err := a.DB.ClearPlaylistItems(pid); err != nil {
-			a.respond(w, r, errResponse(errGeneric, err.Error()))
+			a.internalError(w, r, err)
 			return
 		}
 	} else {
@@ -591,25 +597,25 @@ func (a *API) createPlaylist(w http.ResponseWriter, r *http.Request, uid int64) 
 		}
 		id, err := a.DB.CreatePlaylist(uid, name)
 		if err != nil {
-			a.respond(w, r, errResponse(errGeneric, err.Error()))
+			a.internalError(w, r, err)
 			return
 		}
 		pid = id
 	}
 	for _, eid := range editions {
 		if _, err := a.DB.AddPlaylistItem(pid, eid); err != nil {
-			a.respond(w, r, errResponse(errGeneric, err.Error()))
+			a.internalError(w, r, err)
 			return
 		}
 	}
 	p, err := a.DB.Playlist(pid)
 	if err != nil {
-		a.respond(w, r, errResponse(errGeneric, err.Error()))
+		a.internalError(w, r, err)
 		return
 	}
 	entries, err := a.playlistChildren(pid)
 	if err != nil {
-		a.respond(w, r, errResponse(errGeneric, err.Error()))
+		a.internalError(w, r, err)
 		return
 	}
 	resp := ok()
@@ -628,7 +634,7 @@ func (a *API) updatePlaylist(w http.ResponseWriter, r *http.Request, uid int64) 
 	if idxs := r.Form["songIndexToRemove"]; len(idxs) > 0 {
 		items, err := a.DB.PlaylistItems(p.ID)
 		if err != nil {
-			a.respond(w, r, errResponse(errGeneric, err.Error()))
+			a.internalError(w, r, err)
 			return
 		}
 		for _, s := range idxs {
@@ -637,7 +643,7 @@ func (a *API) updatePlaylist(w http.ResponseWriter, r *http.Request, uid int64) 
 				continue // corpus: out-of-range indexes skipped, not errors
 			}
 			if err := a.DB.RemovePlaylistItem(p.ID, items[n].EditionID); err != nil {
-				a.respond(w, r, errResponse(errGeneric, err.Error()))
+				a.internalError(w, r, err)
 				return
 			}
 		}
@@ -649,14 +655,14 @@ func (a *API) updatePlaylist(w http.ResponseWriter, r *http.Request, uid int64) 
 		}
 		for _, eid := range editions {
 			if _, err := a.DB.AddPlaylistItem(p.ID, eid); err != nil {
-				a.respond(w, r, errResponse(errGeneric, err.Error()))
+				a.internalError(w, r, err)
 				return
 			}
 		}
 	}
 	if name := r.Form.Get("name"); name != "" {
 		if err := a.DB.RenamePlaylist(p.ID, name); err != nil {
-			a.respond(w, r, errResponse(errGeneric, err.Error()))
+			a.internalError(w, r, err)
 			return
 		}
 	}
@@ -669,7 +675,7 @@ func (a *API) deletePlaylist(w http.ResponseWriter, r *http.Request, uid int64) 
 		return
 	}
 	if err := a.DB.DeletePlaylist(p.ID); err != nil {
-		a.respond(w, r, errResponse(errGeneric, err.Error()))
+		a.internalError(w, r, err)
 		return
 	}
 	a.respond(w, r, ok())

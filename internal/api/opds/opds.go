@@ -20,6 +20,7 @@ import (
 	_ "image/gif"
 	"image/jpeg"
 	_ "image/png"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -131,6 +132,11 @@ func (a *API) unauthorized(w http.ResponseWriter) {
 	http.Error(w, "unauthorized", http.StatusUnauthorized)
 }
 
+func serverError(w http.ResponseWriter, r *http.Request, err error) {
+	slog.Warn("libteca: opds request failed", "path", r.URL.Path, "err", err)
+	http.Error(w, "internal error", http.StatusInternalServerError)
+}
+
 // InvalidateUser drops cached Basic credentials for a user so password
 // changes and deletion take effect before the TTL expires.
 func InvalidateUser(userID int64) {
@@ -209,10 +215,10 @@ func writeFeed(w http.ResponseWriter, contentType string, f *Feed) {
 	xml.NewEncoder(w).Encode(f)
 }
 
-func (a *API) root(w http.ResponseWriter, _ *http.Request, _ int64) {
+func (a *API) root(w http.ResponseWriter, r *http.Request, _ int64) {
 	libs, err := a.DB.Libraries()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		serverError(w, r, err)
 		return
 	}
 	f := &Feed{
@@ -366,7 +372,7 @@ func (a *API) libraryFeed(w http.ResponseWriter, r *http.Request, _ int64) {
 	}
 	eds, total, err := a.DB.OPDSEditionsInLibrary(libID, pageLimit, pageParam(r)*pageLimit)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		serverError(w, r, err)
 		return
 	}
 	a.emitAcquisition(w, r, "urn:libteca:opds:library:"+strconv.FormatInt(libID, 10), lib.Name, eds, total)
@@ -375,7 +381,7 @@ func (a *API) libraryFeed(w http.ResponseWriter, r *http.Request, _ int64) {
 func (a *API) allFeed(w http.ResponseWriter, r *http.Request, _ int64) {
 	eds, total, err := a.DB.OPDSAllEditions(pageLimit, pageParam(r)*pageLimit)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		serverError(w, r, err)
 		return
 	}
 	a.emitAcquisition(w, r, "urn:libteca:opds:all", "All Items", eds, total)
@@ -384,7 +390,7 @@ func (a *API) allFeed(w http.ResponseWriter, r *http.Request, _ int64) {
 func (a *API) inProgressFeed(w http.ResponseWriter, r *http.Request, userID int64) {
 	eds, total, err := a.DB.OPDSEditionsInProgress(userID, pageLimit, pageParam(r)*pageLimit)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		serverError(w, r, err)
 		return
 	}
 	a.emitAcquisition(w, r, "urn:libteca:opds:in-progress:u"+strconv.FormatInt(userID, 10), "In Progress", eds, total)
@@ -393,7 +399,7 @@ func (a *API) inProgressFeed(w http.ResponseWriter, r *http.Request, userID int6
 func (a *API) newestFeed(w http.ResponseWriter, r *http.Request, _ int64) {
 	eds, total, err := a.DB.OPDSNewestEditions(pageLimit, pageParam(r)*pageLimit)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		serverError(w, r, err)
 		return
 	}
 	a.emitAcquisition(w, r, "urn:libteca:opds:newest", "Newest", eds, total)
@@ -406,7 +412,7 @@ func (a *API) searchFeed(w http.ResponseWriter, r *http.Request, _ int64) {
 		var err error
 		eds, total, err = a.DB.OPDSSearchEditions(q, pageLimit, pageParam(r)*pageLimit)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			serverError(w, r, err)
 			return
 		}
 	}
@@ -511,7 +517,7 @@ func (a *API) coverThumb(w http.ResponseWriter, r *http.Request, wid int64, srcP
 	}
 	var buf bytes.Buffer
 	if err := jpeg.Encode(&buf, scaleToWidth(img, thumbWidth), &jpeg.Options{Quality: 85}); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		serverError(w, r, err)
 		return
 	}
 	if err := os.MkdirAll(thumbDir, 0o755); err == nil {

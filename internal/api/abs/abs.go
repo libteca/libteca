@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -77,7 +78,7 @@ func (a *API) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	token, err := auth.IssueToken(a.DB, u.ID, "abs-app")
 	if err != nil {
-		fail(w, 500, err.Error())
+		serverError(w, r, err)
 		return
 	}
 	write(w, 200, map[string]any{"user": a.userPayload(u.ID), "userToken": token})
@@ -154,7 +155,7 @@ func (a *API) progressPayload(p *store.Progress) map[string]any {
 func (a *API) libraries(w http.ResponseWriter, r *http.Request) {
 	libs, err := a.DB.Libraries()
 	if err != nil {
-		fail(w, 500, err.Error())
+		serverError(w, r, err)
 		return
 	}
 	out := make([]map[string]any, 0, len(libs))
@@ -264,7 +265,7 @@ func (a *API) items(w http.ResponseWriter, r *http.Request) {
 	libID, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	works, err := a.DB.WorksInLibrary(libID)
 	if err != nil {
-		fail(w, 500, err.Error())
+		serverError(w, r, err)
 		return
 	}
 	limit := intQuery(r, "limit", 20)
@@ -336,7 +337,7 @@ func (a *API) personalized(w http.ResponseWriter, r *http.Request) {
 	libID, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	works, err := a.DB.WorksInLibrary(libID)
 	if err != nil {
-		fail(w, 500, err.Error())
+		serverError(w, r, err)
 		return
 	}
 	byEdition := map[int64]*itemCtx{}
@@ -427,7 +428,7 @@ func (a *API) postProgress(w http.ResponseWriter, r *http.Request) {
 		IsFinished: body.IsFinished || (dur > 0 && position >= dur-5), Device: &device,
 	}
 	if err := a.DB.SetProgress(p); err != nil {
-		fail(w, 500, err.Error())
+		serverError(w, r, err)
 		return
 	}
 	write(w, 200, a.progressPayload(p))
@@ -473,7 +474,7 @@ func (a *API) play(w http.ResponseWriter, r *http.Request) {
 		StartedAt: now, UpdatedAt: now, DeviceInfo: string(deviceJSON),
 	}
 	if err := a.DB.CreateSession(s); err != nil {
-		fail(w, 500, err.Error())
+		serverError(w, r, err)
 		return
 	}
 	tracks := make([]map[string]any, 0, len(ctx.ed.Files))
@@ -566,7 +567,7 @@ func (a *API) sessionSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.DB.UpdateSession(s.ID, body.CurrentTime, body.TimeListened); err != nil {
-		fail(w, 500, "Internal server error")
+		serverError(w, r, err)
 		return
 	}
 	ed, err := a.DB.EditionByID(s.EditionID)
@@ -583,7 +584,7 @@ func (a *API) sessionSync(w http.ResponseWriter, r *http.Request) {
 			IsFinished: dur > 0 && body.CurrentTime >= dur-5,
 		}
 		if err := a.DB.SetProgress(p); err != nil {
-			fail(w, 500, "Internal server error")
+			serverError(w, r, err)
 			return
 		}
 	}
@@ -604,7 +605,7 @@ func (a *API) sessionClose(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.ClosedAt == nil {
 		if err := a.DB.CloseSession(s.ID, body.CurrentTime, body.TimeListened); err != nil {
-			fail(w, 500, "Internal server error")
+			serverError(w, r, err)
 			return
 		}
 		if ed, err := a.DB.EditionByID(s.EditionID); err == nil && body.CurrentTime > 0 {
@@ -620,7 +621,7 @@ func (a *API) sessionClose(w http.ResponseWriter, r *http.Request) {
 				IsFinished: dur > 0 && body.CurrentTime >= dur-5,
 			}
 			if err := a.DB.SetProgress(p); err != nil {
-				fail(w, 500, "Internal server error")
+				serverError(w, r, err)
 				return
 			}
 		}
@@ -669,6 +670,11 @@ func intQuery(r *http.Request, key string, def int) int {
 		return def
 	}
 	return n
+}
+
+func serverError(w http.ResponseWriter, r *http.Request, err error) {
+	slog.Warn("libteca: abs request failed", "path", r.URL.Path, "err", err)
+	fail(w, 500, "Internal server error")
 }
 
 func write(w http.ResponseWriter, status int, v any) {
