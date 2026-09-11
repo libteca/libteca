@@ -157,6 +157,9 @@ func runBackup(args []string) {
 		fs.PrintDefaults()
 	}
 	fs.Parse(args)
+	if *keep < 1 {
+		fatal(fmt.Errorf("-keep must be at least 1"))
+	}
 	abs, err := filepath.Abs(*data)
 	if err != nil {
 		fatal(err)

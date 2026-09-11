@@ -91,10 +91,14 @@ func copyTree(src, dst string) error {
 	})
 }
 
-// pruneBackups deletes the oldest libteca-*.db backups beyond keep; the file
-// named by protect (the just-written snapshot) is never deleted, even when a
-// clock-skewed name sorts it into the prune range.
+// pruneBackups deletes the oldest libteca-*.db backups beyond keep. keep < 1
+// prunes nothing — deleting every backup including the just-written one is
+// never wanted. The file named by protect (the just-written snapshot) is
+// never deleted, even when a clock-skewed name sorts it into the prune range.
 func pruneBackups(dir string, keep int, protect string) error {
+	if keep < 1 {
+		return nil
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return err

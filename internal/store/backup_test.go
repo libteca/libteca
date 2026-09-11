@@ -97,6 +97,36 @@ func TestSnapshotPrunesOldBackups(t *testing.T) {
 	}
 }
 
+func TestSnapshotKeepBelowOnePrunesNothing(t *testing.T) {
+	db := backupDB(t)
+	backups := t.TempDir()
+	for _, name := range []string{"libteca-20200101-000000.db", "libteca-20200201-000000.db"} {
+		if err := os.WriteFile(filepath.Join(backups, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path, err := db.Snapshot(filepath.Join(t.TempDir(), "no-covers"), backups, 0)
+	if err != nil {
+		t.Fatalf("Snapshot keep=0: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("fresh backup deleted at keep=0: %v", err)
+	}
+	entries, err := os.ReadDir(backups)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dbs int
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "libteca-") && strings.HasSuffix(e.Name(), ".db") {
+			dbs++
+		}
+	}
+	if dbs != 3 {
+		t.Fatalf("keep=0 pruned backups: %d left, want all 3", dbs)
+	}
+}
+
 func TestSnapshotNeverPrunesJustWritten(t *testing.T) {
 	db := backupDB(t)
 	backups := t.TempDir()
