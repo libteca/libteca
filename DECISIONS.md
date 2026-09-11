@@ -318,3 +318,14 @@ backup = `libteca backup` (15g); neutron-go published (17).
     Gate W (founder week) and Gate F (corpus + live clients) — both
     human-owned by design.
     Reverse: none.
+
+26. **Provider keys via admin UI (2026-09-11).** GET/PUT
+    /settings/providers (admin-gated): TMDB + ComicVine keys stored in
+    settings KV (`provider:tmdb|comicvine`), KV overrides env
+    (LIBTECA_*_KEY fallback), reads return masked last-4 only, empty
+    PUT value clears. meta.envKey consults a injected lookup
+    (SetKeyLookup, wired in cmd from db.GetSetting) so keys apply
+    without restart. Audible/MusicBrainz/OpenLibrary listed as
+    keyless. Admin → Provider Keys section with per-row replace/clear.
+    Closes the "keys at deploy" gap for self-hosted use.
+    Reverse: none.

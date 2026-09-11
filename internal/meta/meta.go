@@ -2,8 +2,6 @@ package meta
 
 import (
 	"context"
-	"os"
-	"strings"
 	"sync"
 )
 
@@ -56,8 +54,4 @@ func Registry() []Provider {
 		out = append(out, p)
 	}
 	return out
-}
-
-func envKey(name string) string {
-	return strings.TrimSpace(os.Getenv(name))
 }

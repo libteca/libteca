@@ -96,7 +96,7 @@ func (d *DB) WorksInLibrary(libID int64) ([]WorkView, error) {
 	}
 	erows.Close()
 
-	frows, err := d.Query(`SELECT ` + fileCols + ` FROM files WHERE missing = 0 AND edition_id IN
+	frows, err := d.Query(`SELECT `+fileCols+` FROM files WHERE missing = 0 AND edition_id IN
 		(SELECT id FROM editions WHERE work_id IN (SELECT id FROM works WHERE library_id = ?))
 		ORDER BY edition_id, seq`, libID)
 	if err != nil {

@@ -37,6 +37,8 @@ type TokenRow = {
   createdAtMs: number; lastSeenAtMs: number | null; revokedAtMs: number | null;
 };
 
+type ProviderKey = { name: string; label: string; keyed: boolean; configured: boolean; masked: string; fromEnv: boolean };
+
 function Field(props: { label: string; children: ComponentChildren }) {
   return (
     <label style={{ display: "flex", flexDirection: "column", gap: "0.35rem", minWidth: 0 }}>
@@ -126,6 +128,7 @@ export function AdminView() {
       <UsersSection users={users} onChanged={refreshUsers} />
       <TokensSection users={users} />
       <ImportSection />
+      <ProvidersSection />
 
       <ScanJobs libs={libs} />
     </div>
@@ -567,6 +570,86 @@ function TokensSection(props: { users: AdminUser[] }) {
           <div>
             <button className="press" style={ghostBtn} type="button" onClick={() => setIssued("")}>Dismiss</button>
           </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ProvidersSection() {
+  const [rows, setRows] = useState<ProviderKey[]>([]);
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+
+  const load = () => api("/settings/providers").then((r: { providers: ProviderKey[] }) => setRows(r.providers || [])).catch(() => setRows([]));
+  useEffect(() => { load(); }, []);
+
+  const put = async (keys: Record<string, string>, msg: string) => {
+    setBusy(true);
+    try {
+      const res: { error?: string } = await api("/settings/providers", { method: "PUT", body: JSON.stringify({ keys }) });
+      if (res.error) { toast(res.error, "error"); return; }
+      toast(msg, "success");
+      setDrafts({});
+      load();
+    } catch {
+      toast("Failed to save.", "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const save = () => {
+    const keys: Record<string, string> = {};
+    for (const r of rows) {
+      const v = (drafts[r.name] || "").trim();
+      if (v) keys[r.name] = v;
+    }
+    if (Object.keys(keys).length === 0) { toast("Nothing to save.", "default"); return; }
+    put(keys, "Provider keys saved");
+  };
+
+  const statusFor = (r: ProviderKey): { text: string; tone: string } => {
+    if (!r.keyed) return { text: "no key required", tone: c.muted };
+    if (!r.configured) return { text: "not set", tone: c.danger };
+    return r.fromEnv ? { text: `env ${r.masked}`, tone: c.accent } : { text: r.masked, tone: c.ok };
+  };
+
+  return (
+    <section style={panel}>
+      <div style={panelHead}>
+        <h3 style={{ ...railTitle, margin: 0 }}>Provider Keys</h3>
+      </div>
+      <p style={muted}>Metadata providers for matching and enrichment. Keys apply immediately — no restart.</p>
+      {rows.length === 0 && <p style={muted}>Loading…</p>}
+      {rows.map((r) => {
+        const st = statusFor(r);
+        return (
+          <div key={r.name} style={libRow}>
+            <span style={{ minWidth: "7.5rem", color: c.text, fontSize: "0.86rem" }}>{r.label}</span>
+            <span style={{ ...badge, color: st.tone, borderColor: "transparent", background: "transparent" }}>{st.text}</span>
+            {r.keyed && (
+              <>
+                <input
+                  style={{ ...input, flex: 1, minWidth: "10rem" }}
+                  type="password"
+                  autocomplete="off"
+                  placeholder={r.configured ? "paste new key to replace" : "paste key"}
+                  aria-label={`${r.label} key`}
+                  value={drafts[r.name] || ""}
+                  onInput={(e) => setDrafts((d) => ({ ...d, [r.name]: (e.target as HTMLInputElement).value }))}
+                />
+                {r.configured && !r.fromEnv && (
+                  <button className="press" style={ghostBtn} type="button" disabled={busy} onClick={() => put({ [r.name]: "" }, `${r.label} key cleared`)}>Clear</button>
+                )}
+              </>
+            )}
+          </div>
+        );
+      })}
+      {rows.some((r) => r.keyed) && (
+        <div style={formBlock}>
+          <button className="press" style={primaryBtn} type="button" disabled={busy} onClick={save}>Save keys</button>
         </div>
       )}
     </section>

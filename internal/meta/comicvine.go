@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -32,7 +31,7 @@ type ComicVine struct {
 // NewComicVine returns nil when LIBTECA_COMICVINE_KEY is unset — the disabled
 // signal for registration.
 func NewComicVine() *ComicVine {
-	key := strings.TrimSpace(os.Getenv(cvKeyEnv))
+	key := envKey(cvKeyEnv)
 	if key == "" {
 		return nil
 	}

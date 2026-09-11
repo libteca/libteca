@@ -273,3 +273,8 @@ func (d *DB) SetSetting(key, value string) error {
 		ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, value)
 	return err
 }
+
+func (d *DB) DeleteSetting(key string) error {
+	_, err := d.Exec(`DELETE FROM settings WHERE key = ?`, key)
+	return err
+}

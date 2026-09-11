@@ -53,6 +53,8 @@ func (a *API) MountPublic(r *neutron.Router) {
 
 func (a *API) Mount(r *neutron.Router) {
 	r.HandleFunc("GET /me", a.me)
+	r.HandleFunc("GET /settings/providers", a.providerKeysGet)
+	r.HandleFunc("PUT /settings/providers", a.providerKeysPut)
 	r.HandleFunc("GET /libraries", a.libraries)
 	r.HandleFunc("POST /libraries", a.addLibrary)
 	r.HandleFunc("DELETE /libraries/{id}", a.deleteLibrary)
@@ -737,7 +739,7 @@ func (a *API) work(w http.ResponseWriter, r *http.Request) {
 			"title": full.Title, "subtitle": full.Subtitle, "author": full.Author,
 			"description": full.Description, "hasCover": full.CoverPath != nil && *full.CoverPath != "",
 			"hasFanart": fileOK(filepath.Join(a.DataDir, "covers", fmt.Sprintf("%d-fanart.jpg", full.ID))),
-			"genres": a.DB.WorkGenres(id), "editions": eds,
+			"genres":    a.DB.WorkGenres(id), "editions": eds,
 		})
 		return
 	}

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/libteca/libteca/internal/auth"
+	"github.com/libteca/libteca/internal/meta"
 	"github.com/libteca/libteca/internal/podcast"
 	"github.com/libteca/libteca/internal/scan"
 	"github.com/libteca/libteca/internal/server"
@@ -58,6 +59,7 @@ func main() {
 		fatal(err)
 	}
 	defer db.Close()
+	meta.SetKeyLookup(db.GetSetting)
 
 	if *initAdmin != "" {
 		name, pass, ok := cut(*initAdmin, ':')

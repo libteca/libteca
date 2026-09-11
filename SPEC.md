@@ -351,8 +351,10 @@ Dockerfile + make docker + deploy docs; neutron 404-body interceptor
 fix (real details now reach clients); linking 500→404s; HLS JSON
 errors; `--version`. Live Gate W simulation (browser): resume-both-
 kinds, seek, chapter list, auto-hiding controls, PDF/EPUB readers,
-search, Next Up, category nav — all pass. Still open: `people/series/
-collections` model (by design).
+search, Next Up, category nav — all pass. Provider keys are set in Admin → Provider Keys
+(settings KV `provider:*`, KV overrides env, masked reads,
+admin-gated, hot-applied — no restart). Still open:
+`people/series/collections` model (by design).
 
 ### Owed — founder
 
