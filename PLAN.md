@@ -267,10 +267,11 @@ client-supplied path.
 
 ## 14. Open (founder owes)
 
-1. media-hub: archive now, or whenever?
-2. Public when Gate W is green (recommended — a credible “one UI for the
-   whole library” post) or stay private until one face cell is green?
-3. License: MIT (house default for public).
+1. media-hub: **KEEP PARKED** (decided 2026-09-11 — no urgency).
+2. Public: **PUBLIC NOW** (decided 2026-09-11 — Subsonic face
+   live-client-verified, demo corpus proves the story; GitHub mirror
+   `Tyler/libteca`, MIT).
+3. License: **MIT** (decided 2026-09-11, LICENSE committed).
 4. In-browser HLS vs “Play fails, download/open” for non-browser codecs.
    Recommendation: HLS, because a dead Play button loses to Jellyfin web.
 

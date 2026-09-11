@@ -399,3 +399,13 @@ backup = `libteca backup` (15g); neutron-go published (17).
     Jellyfin/ABS/OPDS remain built-but-unverified. Corpus capture
     tooling unchanged (founder-owned).
     Reverse: none.
+
+31. **Founder calls on PLAN 14 (2026-09-11).** media-hub stays parked;
+    libteca goes PUBLIC now (was private since inception) under MIT.
+    Scrub verified: no secrets/session files ever tracked, data/ never
+    in history. LICENSE + public AGENTS.md committed; GitHub remote
+    staged as `github` (Tyler/libteca) pending gh auth; origin stays
+    Forgejo. Header "Library" nav link removed (route remains, Home +
+    category links cover it); admin/settings formatting pass landed
+    same day.
+    Reverse: none.
