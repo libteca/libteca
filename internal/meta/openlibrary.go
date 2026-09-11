@@ -57,8 +57,9 @@ func (p *OpenLibrary) Search(ctx context.Context, q Query) ([]Result, error) {
 	}
 	params.Set("limit", strconv.Itoa(olSearchLimit))
 	u := p.base + "/search.json?" + params.Encode()
+	sk := cacheKey("search", "", u)
 	var cached []Result
-	if CacheGetJSON(p.Name(), "search:"+u, &cached) {
+	if CacheGetJSON(p.Name(), sk, &cached) {
 		return cached, nil
 	}
 	var resp olSearchResponse
@@ -94,7 +95,7 @@ func (p *OpenLibrary) Search(ctx context.Context, q Query) ([]Result, error) {
 		}
 		results = append(results, res)
 	}
-	CachePut(p.Name(), "search:"+u, results)
+	CachePut(p.Name(), sk, results)
 	return results, nil
 }
 
@@ -104,7 +105,8 @@ func (p *OpenLibrary) Fetch(ctx context.Context, id string) (*Result, error) {
 		return nil, fmt.Errorf("openlibrary: empty id")
 	}
 	var fc *Result
-	if CacheGetJSON(p.Name(), "fetch:"+p.base+"|"+id, &fc) {
+	fk := cacheKey("fetch", "", p.base+"|"+id)
+	if CacheGetJSON(p.Name(), fk, &fc) {
 		return fc, nil
 	}
 	var work olWork
@@ -142,7 +144,7 @@ func (p *OpenLibrary) Fetch(ctx context.Context, id string) (*Result, error) {
 			break
 		}
 	}
-	CachePut(p.Name(), "fetch:"+p.base+"|"+id, res)
+	CachePut(p.Name(), fk, res)
 	return res, nil
 }
 

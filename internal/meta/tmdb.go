@@ -70,8 +70,9 @@ func (p *TMDB) Search(ctx context.Context, q Query) ([]Result, error) {
 		}
 	}
 	u := p.base + "/search/" + kind + "?" + params.Encode()
+	sk := cacheKey("search", p.key, u)
 	var cached []Result
-	if CacheGetJSON(p.Name(), "search:"+u, &cached) {
+	if CacheGetJSON(p.Name(), sk, &cached) {
 		return cached, nil
 	}
 	var resp tmdbSearchResponse
@@ -85,7 +86,7 @@ func (p *TMDB) Search(ctx context.Context, q Query) ([]Result, error) {
 		}
 		results = append(results, it.toResult(kind, p.image))
 	}
-	CachePut(p.Name(), "search:"+u, results)
+	CachePut(p.Name(), sk, results)
 	return results, nil
 }
 
@@ -97,8 +98,9 @@ func (p *TMDB) Fetch(ctx context.Context, id string) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	fk := cacheKey("fetch", p.key, p.base+"|"+id)
 	var cached Result
-	if CacheGetJSON(p.Name(), "fetch:"+p.base+"|"+id, &cached) {
+	if CacheGetJSON(p.Name(), fk, &cached) {
 		return &cached, nil
 	}
 	u := p.base + "/" + kind + "/" + num
@@ -108,7 +110,7 @@ func (p *TMDB) Fetch(ctx context.Context, id string) (*Result, error) {
 	}
 	res := it.toResult(kind, p.image)
 	res.ID = id
-	CachePut(p.Name(), "fetch:"+p.base+"|"+id, res)
+	CachePut(p.Name(), fk, res)
 	return &res, nil
 }
 
@@ -134,7 +136,7 @@ func (p *TMDB) FetchSeasonEpisodes(ctx context.Context, id string, season int) (
 	if kind != "tv" {
 		return nil, fmt.Errorf("tmdb: season fetch needs a tv id, got %q", id)
 	}
-	key := "season:" + p.base + "|" + id + "|s" + strconv.Itoa(season)
+	key := cacheKey("season", p.key, p.base+"|"+id+"|s"+strconv.Itoa(season))
 	var cached []EpisodeInfo
 	if CacheGetJSON(p.Name(), key, &cached) {
 		return cached, nil

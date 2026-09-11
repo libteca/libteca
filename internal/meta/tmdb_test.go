@@ -352,3 +352,35 @@ func TestTMDBCacheHitNoSecondRequest(t *testing.T) {
 		t.Fatalf("upstream hits = %d, want 1 (second search served from cache)", hits)
 	}
 }
+
+func TestTMDBCacheKeyIncludesAPIKey(t *testing.T) {
+	newMemCacheStore(t)
+	var hits int
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hits++
+		mu.Unlock()
+		fmt.Fprint(w, tmdbSearchFixture)
+	}))
+	defer srv.Close()
+
+	a := newTestTMDB(t, srv.URL, 0)
+	if _, err := a.Search(context.Background(), Query{Kind: "movie", Title: "Dune"}); err != nil {
+		t.Fatal(err)
+	}
+	b := newTestTMDB(t, srv.URL, 0)
+	b.key = "rotated-key"
+	if _, err := b.Search(context.Background(), Query{Kind: "movie", Title: "Dune"}); err != nil {
+		t.Fatal(err)
+	}
+	if hits != 2 {
+		t.Fatalf("upstream hits = %d, want 2 (rotated key must not serve the old key's cache)", hits)
+	}
+	if _, err := b.Search(context.Background(), Query{Kind: "movie", Title: "Dune"}); err != nil {
+		t.Fatal(err)
+	}
+	if hits != 2 {
+		t.Fatalf("upstream hits = %d, want 2 (same key still served from cache)", hits)
+	}
+}

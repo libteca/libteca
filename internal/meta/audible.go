@@ -48,8 +48,9 @@ func (p *Audible) Search(ctx context.Context, q Query) ([]Result, error) {
 	params.Set("response_groups", "media,product_desc,contributors")
 	params.Set("num_results", strconv.Itoa(audibleSearchLimit))
 	u := p.base + "/products?" + params.Encode()
+	sk := cacheKey("search", "", u)
 	var cached []Result
-	if CacheGetJSON(p.Name(), "search:"+u, &cached) {
+	if CacheGetJSON(p.Name(), sk, &cached) {
 		return cached, nil
 	}
 	var resp auSearchResponse
@@ -63,7 +64,7 @@ func (p *Audible) Search(ctx context.Context, q Query) ([]Result, error) {
 		}
 		results = append(results, pr.toResult())
 	}
-	CachePut(p.Name(), "search:"+u, results)
+	CachePut(p.Name(), sk, results)
 	return results, nil
 }
 
@@ -72,8 +73,9 @@ func (p *Audible) Fetch(ctx context.Context, id string) (*Result, error) {
 	if id == "" {
 		return nil, fmt.Errorf("audible: empty id")
 	}
+	fk := cacheKey("fetch", "", p.base+"|"+id)
 	var cached Result
-	if CacheGetJSON(p.Name(), "fetch:"+p.base+"|"+id, &cached) {
+	if CacheGetJSON(p.Name(), fk, &cached) {
 		return &cached, nil
 	}
 	params := url.Values{}
@@ -99,7 +101,7 @@ func (p *Audible) Fetch(ctx context.Context, id string) (*Result, error) {
 		}
 		res.Chapters = chapters
 	}
-	CachePut(p.Name(), "fetch:"+p.base+"|"+id, res)
+	CachePut(p.Name(), fk, res)
 	return &res, nil
 }
 

@@ -1,6 +1,8 @@
 package meta
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"sync"
 	"time"
@@ -73,6 +75,13 @@ func CacheGetJSON(provider, key string, out any) bool {
 		return false
 	}
 	return json.Unmarshal([]byte(resp), out) == nil
+}
+
+// cacheKey folds the provider's active API key into the cache key so a key
+// change never serves responses fetched under a different key.
+func cacheKey(prefix, key, rest string) string {
+	sum := sha256.Sum256([]byte(key))
+	return prefix + ":" + hex.EncodeToString(sum[:8]) + "|" + rest
 }
 
 // CachePut stores v as JSON under (provider, key). Persists via the bound

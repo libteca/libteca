@@ -201,6 +201,32 @@ func TestComicVineFetch(t *testing.T) {
 	}
 }
 
+func TestComicVineFetchCacheKeyIncludesAPIKey(t *testing.T) {
+	newMemCacheStore(t)
+	var hits int
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hits++
+		mu.Unlock()
+		fmt.Fprint(w, cvFetchFixture)
+	}))
+	defer srv.Close()
+
+	a := newTestCV(t, srv.URL, 0)
+	if _, err := a.Fetch(context.Background(), "41333"); err != nil {
+		t.Fatal(err)
+	}
+	b := newTestCV(t, srv.URL, 0)
+	b.key = "rotated-key"
+	if _, err := b.Fetch(context.Background(), "41333"); err != nil {
+		t.Fatal(err)
+	}
+	if hits != 2 {
+		t.Fatalf("upstream hits = %d, want 2 (rotated key must not serve the old key's cache)", hits)
+	}
+}
+
 func TestComicVineAPIError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, cvErrorFixture)

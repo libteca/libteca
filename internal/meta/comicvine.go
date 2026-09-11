@@ -62,8 +62,9 @@ func (p *ComicVine) Search(ctx context.Context, q Query) ([]Result, error) {
 	params.Set("field_list", cvFieldList)
 	params.Set("limit", strconv.Itoa(cvSearchLimit))
 	u := p.base + "/search?" + params.Encode()
+	sk := cacheKey("search", p.key, u)
 	var cached []Result
-	if CacheGetJSON(p.Name(), "search:"+u, &cached) {
+	if CacheGetJSON(p.Name(), sk, &cached) {
 		return cached, nil
 	}
 	var volumes []cvVolume
@@ -74,7 +75,7 @@ func (p *ComicVine) Search(ctx context.Context, q Query) ([]Result, error) {
 	for _, v := range volumes {
 		results = append(results, v.toResult())
 	}
-	CachePut(p.Name(), "search:"+u, results)
+	CachePut(p.Name(), sk, results)
 	return results, nil
 }
 
@@ -87,7 +88,8 @@ func (p *ComicVine) Fetch(ctx context.Context, id string) (*Result, error) {
 		return nil, fmt.Errorf("comicvine: empty id")
 	}
 	var fc *Result
-	if CacheGetJSON(p.Name(), "fetch:"+p.base+"|"+id, &fc) {
+	fk := cacheKey("fetch", p.key, p.base+"|"+id)
+	if CacheGetJSON(p.Name(), fk, &fc) {
 		return fc, nil
 	}
 	params := url.Values{}
@@ -100,7 +102,7 @@ func (p *ComicVine) Fetch(ctx context.Context, id string) (*Result, error) {
 	}
 	res := volume.toResult()
 	res.ID = id
-	CachePut(p.Name(), "fetch:"+p.base+"|"+id, res)
+	CachePut(p.Name(), fk, res)
 	return &res, nil
 }
 
