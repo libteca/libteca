@@ -124,6 +124,7 @@ func (f *fakeClient) enqueue(msg []byte) bool {
 
 func (f *fakeClient) shutdown()      { f.dropped = true }
 func (f *fakeClient) device() string { return f.dev }
+func (f *fakeClient) user() int64   { return 1 }
 
 func TestHubBroadcastSubscribedOnly(t *testing.T) {
 	h := newHub()
@@ -391,7 +392,7 @@ func playbackRequest(t *testing.T, path, deviceID string, uid int64) *http.Reque
 	t.Helper()
 	req := httptest.NewRequest("POST", path, nil)
 	req.Header.Set("X-Emby-Authorization", `MediaBrowser Client="JMP", Device="Living Room TV", DeviceId="`+deviceID+`", Version="10.10"`)
-	return req.WithContext(withUser(req, uid))
+	return req.WithContext(withUser(req, uid, false))
 }
 
 func TestSocketAuthRejected(t *testing.T) {

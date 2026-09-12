@@ -69,7 +69,12 @@ func scanBooksLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 		if ext != ".cbr" && !bookExts[ext] {
 			return nil
 		}
-		fi, _ := d.Info()
+		fi, ierr := d.Info()
+		if ierr != nil {
+			// Entry vanished or became unreadable after enumeration; a nil
+			// deref here was a process-killing panic in a bare goroutine.
+			return nil
+		}
 		docs = append(docs, bookDoc{path: p, name: d.Name(), format: ext[1:], size: fi.Size(), mtime: fi.ModTime().Unix()})
 		tr.seen(p)
 		return nil
@@ -261,11 +266,35 @@ func probeCBZ(p string) (int, []byte, error) {
 // bytes. PDFs that only describe pages inside compressed object streams
 // return 0.
 func pdfPageCount(p string) int {
-	data, err := os.ReadFile(p)
+	// Streamed: materializing multi-GB PDFs (plus a full string copy) blew
+	// the process up during routine scans. The marker count survives a
+	// chunk-boundary split by overlapping chunks by the marker length.
+	f, err := os.Open(p)
 	if err != nil {
 		return 0
 	}
-	n := strings.Count(string(data), "/Type /Page") - strings.Count(string(data), "/Type /Pages")
+	defer f.Close()
+	const markerPage = "/Type /Page"
+	const markerPages = "/Type /Pages"
+	markerLen := len(markerPages)
+	n := 0
+	buf := make([]byte, 1<<20)
+	tail := ""
+	for {
+		nr, rerr := f.Read(buf)
+		if nr > 0 {
+			s := tail + string(buf[:nr])
+			n += strings.Count(s, markerPage) - strings.Count(s, markerPages)
+			if len(s) >= markerLen {
+				tail = s[len(s)-markerLen:]
+			} else {
+				tail = s
+			}
+		}
+		if rerr != nil {
+			break
+		}
+	}
 	if n < 0 {
 		return 0
 	}
@@ -351,13 +380,24 @@ func cbrPageNames(names []string) []string {
 }
 
 func cbrExtract(tool, archive, name string) ([]byte, error) {
+	// The cap is enforced WHILE READING: buffering the full decompressed
+	// page first (Output / ReadFile) let a few-hundred-MB image exhaust
+	// memory before the cap was ever consulted.
 	var data []byte
 	if tool == "unrar" {
-		out, err := exec.Command(tool, "p", "-inul", archive, name).Output()
+		cmd := exec.Command(tool, "p", "-inul", archive, name)
+		stdout, err := cmd.StdoutPipe()
 		if err != nil {
 			return nil, err
 		}
-		data = out
+		if err := cmd.Start(); err != nil {
+			return nil, err
+		}
+		var rerr error
+		data, rerr = io.ReadAll(io.LimitReader(stdout, cbrMaxCoverBytes))
+		if waitErr := cmd.Wait(); rerr == nil && waitErr != nil && len(data) == 0 {
+			return nil, waitErr
+		}
 	} else {
 		dir, err := os.MkdirTemp("", "libteca-cbr-")
 		if err != nil {
@@ -371,15 +411,17 @@ func cbrExtract(tool, archive, name string) ([]byte, error) {
 			if err != nil || e.IsDir() || data != nil {
 				return nil
 			}
-			data, err = os.ReadFile(p)
+			f, ferr := os.Open(p)
+			if ferr != nil {
+				return nil
+			}
+			defer f.Close()
+			data, _ = io.ReadAll(io.LimitReader(f, cbrMaxCoverBytes))
 			return nil
 		})
 		if data == nil {
 			return nil, fmt.Errorf("unar extracted nothing for %s", name)
 		}
-	}
-	if len(data) > cbrMaxCoverBytes {
-		data = data[:cbrMaxCoverBytes]
 	}
 	return data, nil
 }

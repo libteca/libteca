@@ -107,7 +107,12 @@ func scanAudioLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 		if len(parts) > 1 {
 			top = filepath.Join(abs, parts[0])
 		}
-		fi, _ := d.Info()
+		fi, ierr := d.Info()
+		if ierr != nil {
+			// Entry vanished or became unreadable after enumeration; a nil
+			// deref here was a process-killing panic in a bare goroutine.
+			return nil
+		}
 		files = append(files, bookFile{
 			path:  path,
 			dir:   filepath.Dir(path),

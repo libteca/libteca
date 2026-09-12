@@ -83,7 +83,12 @@ func scanVideoLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 		if len(parts) > 1 {
 			top = filepath.Join(abs, parts[0])
 		}
-		fi, _ := d.Info()
+		fi, ierr := d.Info()
+		if ierr != nil {
+			// Entry vanished or became unreadable after enumeration; a nil
+			// deref here was a process-killing panic in a bare goroutine.
+			return nil
+		}
 		v := vidFile{path: path, name: d.Name(), size: fi.Size(), mtime: fi.ModTime().Unix()}
 		if tv {
 			parseEpisode(&v, path, rel)
@@ -337,7 +342,12 @@ func scanMusicLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 		if len(parts) > 1 {
 			top = filepath.Join(abs, parts[0])
 		}
-		fi, _ := d.Info()
+		fi, ierr := d.Info()
+		if ierr != nil {
+			// Entry vanished or became unreadable after enumeration; a nil
+			// deref here was a process-killing panic in a bare goroutine.
+			return nil
+		}
 		base := strings.TrimSuffix(d.Name(), ext)
 		num := 0
 		if n, err := strconv.Atoi(strings.TrimSpace(strings.SplitN(base, " ", 2)[0])); err == nil {

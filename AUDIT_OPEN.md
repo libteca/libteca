@@ -32,3 +32,16 @@ Verification: go build, go vet, go test ./... (15 pkgs), go test -race on podcas
 Also found while verifying (introduced in pass 1, masked by truncated test output): auth context keys collided (two separate `const ... = iota` made userIDKey == tokenKey == 0, so WithToken overwrote the user id and every admin check failed) - FIXED as one iota block; the core podcast tests needed the egress seam (podcast.NewWithClient) because httptest binds loopback; parseWebSessionID accepts the legacy bare web-<id> shape again (sessions are in-memory; the strict parser broke the pinned 404 contract).
 
 Verification: go test ./... -count=1 exit 0 (17 pkgs), go test -race on podcast+core, web tsc+build - all clean (2026-09-12).
+
+## ChatGPT audit pass 3 (2026-09-12, AUDIT-CHATGPT-3.md) - all 8 fixed
+
+1. HIGH subscribe vs library-delete race - FIXED: Service.lifecycleMu gates row publication + single-flight acquisition (Subscribe) against the whole DeleteLibraryPodcasts operation.
+2. HIGH Jellyfin session hijack - FIXED: /Sessions is filtered to own sessions for non-admins; playbackInfo mints u<uid>-prefixed session ids; sessionStopped refuses foreign prefixed sessions; WS command forwarding resolves the target's owner (sender identity from its authenticated connection) and drops cross-user targets.
+3. MEDIUM egress dial gave up after first public IP - FIXED: every public address is tried before failing.
+4. MEDIUM enclosure downloads capped at 30s - FIXED: New builds separate feed (30s) and download (no whole-request timeout) clients; NewWithClient takes both.
+5. MEDIUM subsonic token oracle - FIXED: the t/s branch runs under the login limiter (Allow before verify, Failure on mismatch, Success on pass).
+6. HIGH scanner nil-deref panic on vanished files - FIXED: Info() errors handled at all four walker sites; runScan goroutine carries a recover that fails the job.
+7. HIGH PDF/CBR scan memory blowout - FIXED: pdfPageCount streams 1 MiB chunks (overlapped for marker boundaries); cbrExtract enforces the 20 MiB cap through LimitReader during extraction on both unrar and unar paths.
+8. HIGH ABS import slice desync - FIXED: a planned file vanishing mid-import fails the import instead of silently compacting the id slice.
+
+Verification: go test ./... -count=1 exit 0; go test -race on podcast/jellyfin/subsonic; web tsc+build - all clean (2026-09-12).

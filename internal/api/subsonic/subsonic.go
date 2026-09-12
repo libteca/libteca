@@ -146,13 +146,27 @@ func (a *API) authenticate(r *http.Request) (int64, bool) {
 		if salt == "" {
 			return 0, false
 		}
+		// The token branch is an online password oracle: wrong candidates
+		// cost one MD5, the right one authenticates. Without the limiter it
+		// bypassed the lockout that governs every other credential check.
+		if a.LoginLimiter != nil {
+			if ok, _ := a.LoginLimiter.Allow(auth.ClientIP(r)); !ok {
+				return 0, false
+			}
+		}
 		secret, has := a.DB.GetSetting(subsonicSecretKey(u.ID))
 		if !has {
 			return 0, false
 		}
 		sum := md5.Sum([]byte(secret + salt))
 		if subtle.ConstantTimeCompare([]byte(hex.EncodeToString(sum[:])), []byte(strings.ToLower(token))) != 1 {
+			if a.LoginLimiter != nil {
+				a.LoginLimiter.Failure(auth.ClientIP(r))
+			}
 			return 0, false
+		}
+		if a.LoginLimiter != nil {
+			a.LoginLimiter.Success(auth.ClientIP(r))
 		}
 		if !auth.Verify(secret, u.PasswordHash) {
 			a.DB.DeleteSetting(subsonicSecretKey(u.ID))

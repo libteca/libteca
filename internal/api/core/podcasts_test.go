@@ -102,14 +102,15 @@ func mountPodcastServer(t *testing.T, a *API, db *store.DB) *httptest.Server {
 	// which the production egress guard refuses by design. The service is
 	// installed BEFORE mounting because MountPodcasts binds handlers to the
 	// service it finds at mount time.
-	a.Podcasts = podcast.NewWithClient(db, a.DataDir, &http.Client{
+	local := &http.Client{
 		Timeout:   30 * time.Second,
 		Transport: func() http.RoundTripper {
 			tr := http.DefaultTransport.(*http.Transport).Clone()
 			tr.ResponseHeaderTimeout = 30 * time.Second
 			return tr
 		}(),
-	})
+	}
+	a.Podcasts = podcast.NewWithClient(db, a.DataDir, local, local)
 	a.MountPodcasts(r.Group("/api/core", auth.Middleware(db)))
 	srv := httptest.NewServer(app.Handler())
 	t.Cleanup(srv.Close)

@@ -110,7 +110,7 @@ func jfAuth(db *store.DB) func(http.Handler) http.Handler {
 			}
 			if token != "" {
 				if user, ok := auth.UserForToken(db, token); ok {
-					r = r.WithContext(withUser(r, user.ID))
+					r = r.WithContext(withUser(r, user.ID, user.IsAdmin))
 					r = auth.WithToken(r, token)
 					next.ServeHTTP(w, r)
 					return
@@ -126,9 +126,11 @@ func jfAuth(db *store.DB) func(http.Handler) http.Handler {
 type userKey int
 
 const ukey userKey = 1
+const akey userKey = 2
 
-func withUser(r *http.Request, id int64) context.Context {
-	return context.WithValue(r.Context(), ukey, id)
+func withUser(r *http.Request, id int64, isAdmin bool) context.Context {
+	ctx := context.WithValue(r.Context(), ukey, id)
+	return context.WithValue(ctx, akey, isAdmin)
 }
 
 func uid(r *http.Request) int64 {
@@ -136,6 +138,25 @@ func uid(r *http.Request) int64 {
 		return v
 	}
 	return 0
+}
+
+func adminRequest(r *http.Request) bool {
+	v, _ := r.Context().Value(akey).(bool)
+	return v
+}
+
+// ownsPlaySession reports whether the requesting user may control a
+// generated playback session: session ids minted by playbackInfo carry
+// "u<uid>-" and belong to that user alone; admins control any.
+func ownsPlaySession(r *http.Request, sid string) bool {
+	if adminRequest(r) || sid == "" {
+		return true
+	}
+	var owner int64
+	if _, err := fmt.Sscanf(sid, "u%d-", &owner); err != nil {
+		return true // not one of ours (client-generated id): legacy semantics
+	}
+	return owner == uid(r)
 }
 
 func requestToken(r *http.Request) string {
@@ -776,7 +797,20 @@ func (a *API) ancestors(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) sessionsList(w http.ResponseWriter, r *http.Request) {
-	write(w, 200, a.sessionDTOs())
+	dtos := a.sessionDTOs()
+	if !adminRequest(r) {
+		// The full session table (users, devices, play sessions) is an
+		// admin view; ordinary users see their own sessions only.
+		mine := strconv.FormatInt(uid(r), 10)
+		filtered := make([]wsSessionDTO, 0, len(dtos))
+		for _, d := range dtos {
+			if d.UserId == mine {
+				filtered = append(filtered, d)
+			}
+		}
+		dtos = filtered
+	}
+	write(w, 200, dtos)
 }
 
 func (a *API) image(w http.ResponseWriter, r *http.Request) {
@@ -877,7 +911,10 @@ func (a *API) playbackInfo(w http.ResponseWriter, r *http.Request) {
 	}
 	f := ed.Files[0]
 	fid := "f" + strconv.FormatInt(f.ID, 10)
-	playSession, err := transcode.NewSessionID("ps-", ed.ID)
+	// u<uid>- prefix: session ids are visible through /Sessions and
+	// controllable through stop/WS commands, so the minting user must be
+	// recoverable from the id itself.
+	playSession, err := transcode.NewSessionID(fmt.Sprintf("u%d-ps-", uid(r)), ed.ID)
 	if err != nil {
 		write(w, 500, map[string]any{"error": "internal error"})
 		return
@@ -1105,6 +1142,12 @@ func (a *API) sessionProgress(w http.ResponseWriter, r *http.Request) {
 func (a *API) sessionStopped(w http.ResponseWriter, r *http.Request) {
 	sid := a.saveFromSession(w, r)
 	if q := qget(r, "PlaySessionId"); q != "" {
+		if !ownsPlaySession(r, q) {
+			// Closing another user's ffmpeg session is not this caller's
+			// call; report acceptance without tearing anything down.
+			write(w, 200, map[string]bool{"ok": true})
+			return
+		}
 		sid = q
 	}
 	if a.TC != nil && sid != "" {

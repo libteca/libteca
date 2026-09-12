@@ -29,8 +29,7 @@ func newTestService(t *testing.T) (*Service, *store.DB) {
 		Timeout:   30 * time.Second,
 		Transport: func() http.RoundTripper { tr := http.DefaultTransport.(*http.Transport).Clone(); tr.ResponseHeaderTimeout = 30 * time.Second; return tr }(),
 	}
-	s := NewWithClient(db, t.TempDir(), local)
-	return s, db
+	return NewWithClient(db, t.TempDir(), local, local), db
 }
 
 type feedItem struct {

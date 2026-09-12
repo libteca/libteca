@@ -37,6 +37,11 @@ type Service struct {
 	fetcher     Fetcher
 	mu          sync.Mutex
 	inflight    map[int64]bool
+	// lifecycleMu serializes subscription creation against library
+	// deletion: a subscribe that inserts its row between a deletion's ID
+	// snapshot and its transaction was deleted mid-download without ever
+	// being locked.
+	lifecycleMu sync.Mutex
 	sem         chan struct{}
 	dlReadFloor time.Duration
 }
@@ -65,10 +70,21 @@ func publicHTTPClient(totalTimeout time.Duration) *http.Client {
 		if err != nil {
 			return nil, err
 		}
+		// Try every public address: giving up after the first one made a
+		// single unreachable A record fatal for a host with working mirrors.
+		var lastErr error
 		for _, ip := range ips {
-			if publicIP(ip) {
-				return dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+			if !publicIP(ip) {
+				continue
 			}
+			conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+			if err == nil {
+				return conn, nil
+			}
+			lastErr = err
+		}
+		if lastErr != nil {
+			return nil, lastErr
 		}
 		return nil, fmt.Errorf("podcast URL resolves only to non-public addresses")
 	}
@@ -109,19 +125,21 @@ func publicIP(ip net.IP) bool {
 }
 
 func New(db *store.DB, dataDir string) *Service {
-	client := publicHTTPClient(30 * time.Second)
-	return NewWithClient(db, dataDir, client)
+	// Two clients: feeds are small and get a whole-request timeout; enclosure
+	// downloads are large and rely on downloadEpisode's own size-derived read
+	// deadline - one shared 30s client capped every big episode at 30 seconds.
+	return NewWithClient(db, dataDir, publicHTTPClient(30*time.Second), publicHTTPClient(0))
 }
 
 // NewWithClient is the test seam: httptest servers bind loopback, which the
-// egress guard refuses by design, so fixtures inject an unrestricted client
+// egress guard refuses by design, so fixtures inject unrestricted clients
 // through here. Production callers use New.
-func NewWithClient(db *store.DB, dataDir string, client *http.Client) *Service {
+func NewWithClient(db *store.DB, dataDir string, client, dlClient *http.Client) *Service {
 	return &Service{
 		DB:          db,
 		DataDir:     dataDir,
 		Client:      client,
-		DLClient:    client,
+		DLClient:    dlClient,
 		fetcher:     Fetcher{Client: client},
 		inflight:    map[int64]bool{},
 		sem:         make(chan struct{}, workerPool),
@@ -140,8 +158,14 @@ func (s *Service) Subscribe(ctx context.Context, feedURL string, autoDownload bo
 	if err != nil {
 		return nil, err
 	}
+	// Row publication and the single-flight acquisition are atomic against
+	// library deletion (which holds the same gate): outside it, a subscribe
+	// landing between a deletion's ID snapshot and its transaction was
+	// deleted mid-download without ever being locked.
+	s.lifecycleMu.Lock()
 	libID, err := s.DB.EnsurePodcastsLibrary(filepath.Join(s.DataDir, "podcasts"))
 	if err != nil {
+		s.lifecycleMu.Unlock()
 		return nil, err
 	}
 	p := &store.Podcast{
@@ -151,13 +175,16 @@ func (s *Service) Subscribe(ctx context.Context, feedURL string, autoDownload bo
 	}
 	p.ID, err = s.DB.AddPodcast(p)
 	if err != nil {
+		s.lifecycleMu.Unlock()
 		if existing, qerr := s.DB.PodcastByFeedURL(feedURL); qerr == nil {
 			return existing, ErrDuplicateFeed
 		}
 		return nil, err
 	}
 	s.DB.UpdatePodcastFetch(p.ID, nilOrEmpty(etag), nilOrEmpty(lastModified), nowMs())
-	if !s.acquire(p.ID) {
+	acquired := s.acquire(p.ID)
+	s.lifecycleMu.Unlock()
+	if !acquired {
 		return p, ErrRefreshBusy
 	}
 	defer s.release(p.ID)
@@ -278,6 +305,12 @@ func (s *Service) DeletePodcast(id int64) error {
 // anything is deleted, so a busy subscription aborts the whole operation
 // instead of leaving half a library permanently deleted behind a 409.
 func (s *Service) DeleteLibraryPodcasts(libID int64) error {
+	// The whole operation runs under the lifecycle gate: Subscribe holds it
+	// while inserting a new subscription, so no row can appear between this
+	// ID snapshot and the transaction.
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+
 	all, err := s.DB.Podcasts()
 	if err != nil {
 		return err

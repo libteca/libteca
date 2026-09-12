@@ -245,7 +245,11 @@ func applyFiles(db *store.DB, editionID int64, files []fileSpec) ([]int64, error
 	for i, f := range files {
 		fi, err := os.Stat(f.Path)
 		if err != nil {
-			continue
+			// A planned file vanishing mid-import must fail the whole
+			// import: silently skipping it desynchronized the file slice
+			// from the returned id slice, mis-linking progress and
+			// panicking on the index past the compaction.
+			return nil, fmt.Errorf("planned file vanished during import: %s: %w", f.Path, err)
 		}
 		fr := &store.FileRec{
 			EditionID: editionID, Path: f.Path, Seq: i + 1,

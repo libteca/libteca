@@ -157,6 +157,7 @@ type wsClient interface {
 	enqueue(msg []byte) bool
 	shutdown()
 	device() string
+	user() int64
 }
 
 type liveSession struct {
@@ -269,6 +270,21 @@ func (h *hub) snapshot() []*liveSession {
 	return out
 }
 
+// deviceOwnedBy reports whether the target device belongs to the sender's
+// user. The sender's identity comes from its authenticated connection, not
+// from playback state: sockets exist before any session is reported.
+func (h *hub) deviceOwnedBy(device string, from wsClient) bool {
+	senderUser := from.user()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, s := range h.sessions {
+		if s.DeviceID == device {
+			return s.UserID == senderUser
+		}
+	}
+	return false
+}
+
 func (h *hub) deviceForPlaySession(psid string) string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -319,6 +335,7 @@ func (c *socketConn) shutdown() {
 }
 
 func (c *socketConn) device() string { return c.dev }
+func (c *socketConn) user() int64   { return c.uidv }
 
 func (c *socketConn) requestClose(code int) {
 	select {
@@ -435,6 +452,13 @@ func (a *API) forwardCommand(from wsClient, typ string, raw json.RawMessage) {
 		device = a.hubv().deviceForPlaySession(t.PlaySessionId)
 	}
 	if device == "" || device == from.device() {
+		return
+	}
+	// Remote-controlling another user's device is admin territory: the
+	// session table is global, so without this check any authenticated
+	// user could drive anyone's player. The sender's own sessions define
+	// what it may target.
+	if !a.hubv().deviceOwnedBy(device, from) {
 		return
 	}
 	out, err := json.Marshal(struct {

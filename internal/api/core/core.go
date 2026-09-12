@@ -1,6 +1,7 @@
 package core
 
 import (
+	"log/slog"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -331,6 +332,14 @@ func (a *API) TriggerScan(ctx context.Context, libraryID int64) (int64, error) {
 const scanPersistInterval = 2 * time.Second
 
 func (a *API) runScan(ctx context.Context, run *scanRun, lib *store.Library) {
+	// Bare goroutine, outside request recovery: a panic here used to take
+	// the whole server down.
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("scan panicked", "library", lib.ID, "panic", rec)
+			run.finish("error", fmt.Sprintf("scan panicked: %v", rec))
+		}
+	}()
 	defer func() {
 		a.mu.Lock()
 		if a.runs[run.libraryID] == run {
