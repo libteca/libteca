@@ -38,9 +38,80 @@ func (d *DB) CountAdmins() (int, error) {
 	return n, err
 }
 
+// ErrLastAdmin is returned when the deletion would leave no administrator.
+var ErrLastAdmin = errors.New("cannot delete last admin")
+
+// DeleteUserGuarded removes a user with the last-admin check and the deletion
+// in one transaction: checking admin count separately from deleting let two
+// concurrent admin deletions both pass and leave the install adminless.
+func (d *DB) DeleteUserGuarded(id int64) ([]string, error) {
+	tx, err := d.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	var isAdmin bool
+	err = tx.QueryRow(`SELECT is_admin FROM users WHERE id = ?`, id).Scan(&isAdmin)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if isAdmin {
+		var n int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM users WHERE is_admin = 1`).Scan(&n); err != nil {
+			return nil, err
+		}
+		if n <= 1 {
+			return nil, ErrLastAdmin
+		}
+	}
+
+	rows, err := tx.Query(`SELECT value FROM tokens WHERE user_id = ?`, id)
+	if err != nil {
+		return nil, err
+	}
+	var values []string
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		values = append(values, v)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(`DELETE FROM playback_sessions WHERE user_id = ?`, id); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(`DELETE FROM progress WHERE user_id = ?`, id); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(`DELETE FROM tokens WHERE user_id = ?`, id); err != nil {
+		return nil, err
+	}
+	res, err := tx.Exec(`DELETE FROM users WHERE id = ?`, id)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, ErrNotFound
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return values, nil
+}
+
 // DeleteUser removes the user along with their tokens, progress and
 // playback sessions (all foreign-keyed to users) and returns the deleted
-// token values so callers can drop them from the auth cache.
+// token values so callers can drop them from the auth cache. The last-admin
+// guarantee is the caller's business; admins go through DeleteUserGuarded.
 func (d *DB) DeleteUser(id int64) ([]string, error) {
 	tx, err := d.Begin()
 	if err != nil {

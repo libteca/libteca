@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -579,13 +580,15 @@ func (a *API) createPlaylist(w http.ResponseWriter, r *http.Request, uid int64) 
 			return
 		}
 		pid = p.ID
+		var namePtr *string
 		if name := r.Form.Get("name"); name != "" {
-			if err := a.DB.RenamePlaylist(pid, name); err != nil {
-				a.internalError(w, r, err)
+			namePtr = &name
+		}
+		if err := a.DB.ReplacePlaylist(pid, namePtr, editions); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				a.respond(w, r, errResponse(errNotFound, "song not found"))
 				return
 			}
-		}
-		if err := a.DB.ClearPlaylistItems(pid); err != nil {
 			a.internalError(w, r, err)
 			return
 		}
@@ -595,18 +598,16 @@ func (a *API) createPlaylist(w http.ResponseWriter, r *http.Request, uid int64) 
 			a.respond(w, r, errResponse(errMissingParam, "Required parameter 'name' missing"))
 			return
 		}
-		id, err := a.DB.CreatePlaylist(uid, name)
+		id, err := a.DB.CreatePlaylistWithItems(uid, name, editions)
 		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				a.respond(w, r, errResponse(errNotFound, "song not found"))
+				return
+			}
 			a.internalError(w, r, err)
 			return
 		}
 		pid = id
-	}
-	for _, eid := range editions {
-		if _, err := a.DB.AddPlaylistItem(pid, eid); err != nil {
-			a.internalError(w, r, err)
-			return
-		}
 	}
 	p, err := a.DB.Playlist(pid)
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"path/filepath"
 	"sync"
@@ -39,15 +40,65 @@ type Service struct {
 	dlReadFloor time.Duration
 }
 
-func New(db *store.DB, dataDir string) *Service {
-	client := &http.Client{Timeout: 30 * time.Second}
+// publicHTTPClient builds a client whose dial refuses every non-public
+// destination (loopback, RFC1918/ULA, link-local, multicast, unspecified) at
+// resolve time, and whose redirects are re-validated. Feed, cover and
+// enclosure URLs are attacker-supplied input to a server-side fetch; without
+// this a subscription could probe local services and metadata endpoints
+// reachable only from the host.
+func publicHTTPClient(totalTimeout time.Duration) *http.Client {
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.ResponseHeaderTimeout = 30 * time.Second
+	tr.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(address)
+		if err != nil {
+			return nil, err
+		}
+		ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+		if err != nil {
+			return nil, err
+		}
+		for _, ip := range ips {
+			if publicIP(ip) {
+				return dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+			}
+		}
+		return nil, fmt.Errorf("podcast URL resolves only to non-public addresses")
+	}
+	return &http.Client{
+		Transport: tr,
+		Timeout:   totalTimeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return fmt.Errorf("too many redirects")
+			}
+			if u := req.URL; u == nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+				return fmt.Errorf("redirect to a non-http(s) URL")
+			}
+			return nil
+		},
+	}
+}
+
+func publicIP(ip net.IP) bool {
+	return ip != nil &&
+		!ip.IsLoopback() &&
+		!ip.IsPrivate() &&
+		!ip.IsLinkLocalUnicast() &&
+		!ip.IsLinkLocalMulticast() &&
+		!ip.IsUnspecified() &&
+		!ip.IsMulticast()
+}
+
+func New(db *store.DB, dataDir string) *Service {
+	client := publicHTTPClient(30 * time.Second)
+	dlClient := publicHTTPClient(0)
 	return &Service{
 		DB:          db,
 		DataDir:     dataDir,
 		Client:      client,
-		DLClient:    &http.Client{Transport: tr},
+		DLClient:    dlClient,
 		fetcher:     Fetcher{Client: client},
 		inflight:    map[int64]bool{},
 		sem:         make(chan struct{}, workerPool),
@@ -168,6 +219,10 @@ func (s *Service) DeletePodcast(id int64) error {
 	if err != nil {
 		return err
 	}
+	if !s.acquire(id) {
+		return ErrRefreshBusy
+	}
+	defer s.release(id)
 	files, err := s.DB.FilesForPodcast(id)
 	if err != nil {
 		return err

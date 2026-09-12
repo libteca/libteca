@@ -72,16 +72,7 @@ func (a *API) podcastItems(w http.ResponseWriter, r *http.Request) {
 	}
 
 	total := len(items)
-	if start > total {
-		start = total
-	}
-	if limit <= 0 {
-		limit = total - start
-	}
-	end := start + limit
-	if end > total {
-		end = total
-	}
+	start, end := sliceWindow(start, limit, total)
 	write(w, 200, map[string]any{"Items": items[start:end], "TotalRecordCount": total})
 }
 

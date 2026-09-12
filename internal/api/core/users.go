@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -114,18 +115,15 @@ func (a *API) userDelete(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "cannot delete self"})
 		return
 	}
-	target, err := a.DB.User(id)
-	if err != nil {
+	values, err := a.DB.DeleteUserGuarded(id)
+	if errors.Is(err, store.ErrLastAdmin) {
+		writeJSON(w, 400, map[string]string{"error": "cannot delete last admin"})
+		return
+	}
+	if errors.Is(err, store.ErrNotFound) {
 		writeJSON(w, 404, map[string]string{"error": "user not found"})
 		return
 	}
-	if target.IsAdmin {
-		if n, err := a.DB.CountAdmins(); err == nil && n <= 1 {
-			writeJSON(w, 400, map[string]string{"error": "cannot delete last admin"})
-			return
-		}
-	}
-	values, err := a.DB.DeleteUser(id)
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return

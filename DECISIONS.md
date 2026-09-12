@@ -410,3 +410,27 @@ backup = `libteca backup` (15g); neutron-go published (17).
     category links cover it); admin/settings formatting pass landed
     same day.
     Reverse: none.
+32. **Podcast egress is public-only (2026-09-12, ChatGPT audit #4).** Feed,
+    cover and enclosure URLs are attacker-supplied input to a server-side
+    fetch. The podcast package's HTTP clients now refuse loopback,
+    RFC1918/ULA, link-local, multicast and unspecified destinations at dial
+    time and re-validate redirects. Consequence: a podcast genuinely hosted
+    on a LAN address cannot be subscribed; that is the trade for not being a
+    metadata-endpoint probe. Tests inject unrestricted clients because
+    httptest binds loopback.
+33. **HLS session ids are per-playback, not per-edition (2026-09-12, ChatGPT
+    audit #2).** Manager.Get deduplicates by edition match, so a deterministic
+    "ps-<edition>"/"web-<edition>" id made two viewers, tabs or seeks share
+    one ffmpeg with one start position, and either could stop the other's
+    stream. Session ids now end in 12 random bytes; the edition prefix
+    survives for routing. Segment URLs and stop requests carry the full id
+    unchanged.
+34. **Podcasts library deletion goes through the podcast service
+    (2026-09-12, ChatGPT audit #11).** Downloaded episode files park in
+    `files` with edition_id NULL; a bare library-row delete orphaned them.
+    The library-delete endpoint now walks the library's podcasts through
+    Service.DeletePodcast (rows + disk media, single-flight-locked) before
+    dropping the library, and the store transaction removes episode-linked
+    file rows as defense in depth.
+    Reverse: none of these three reverts cleanly without reintroducing the
+    audited defect.

@@ -21,6 +21,7 @@ import (
 type contextKey int
 
 const userIDKey contextKey = iota
+const tokenKey contextKey = iota
 
 var cache sync.Map
 
@@ -110,6 +111,7 @@ func Middleware(db *store.DB) func(http.Handler) http.Handler {
 				return
 			}
 			ctx := context.WithValue(r.Context(), userIDKey, user.ID)
+			ctx = context.WithValue(ctx, tokenKey, value)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
@@ -119,11 +121,22 @@ func WithUser(r *http.Request, id int64) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), userIDKey, id))
 }
 
+func WithToken(r *http.Request, token string) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), tokenKey, token))
+}
+
 func UserID(r *http.Request) int64 {
 	if v, ok := r.Context().Value(userIDKey).(int64); ok {
 		return v
 	}
 	return 0
+}
+
+func Token(r *http.Request) string {
+	if v, ok := r.Context().Value(tokenKey).(string); ok {
+		return v
+	}
+	return ""
 }
 
 func InitAdmin(db *store.DB, name, password string) error {

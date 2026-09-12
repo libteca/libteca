@@ -105,10 +105,15 @@ func (s *Service) downloadEpisode(ctx context.Context, p *store.Podcast, ep *sto
 
 	fileID, err := s.DB.InsertPodcastFile(path, size, time.Now().Unix(), fmt.Sprintf("%x-%d", h.Sum64(), size), derefFlt(ep.DurationSecs), ext)
 	if err != nil {
-		os.Remove(path)
+		osRemove(path)
 		return err
 	}
-	return s.DB.LinkEpisodeFile(ep.ID, fileID)
+	if err := s.DB.LinkEpisodeFile(ep.ID, fileID); err != nil {
+		s.DB.DeleteFilesByIDs([]int64{fileID})
+		osRemove(path)
+		return err
+	}
+	return nil
 }
 
 func (s *Service) downloadTimeout(contentLength int64) time.Duration {

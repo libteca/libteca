@@ -50,6 +50,79 @@ func (d *DB) CreatePlaylist(userID int64, name string) (int64, error) {
 	return res.LastInsertId()
 }
 
+// CreatePlaylistWithItems validates every edition and inserts the playlist
+// with its items in one transaction, so an unknown edition id cannot leave a
+// half-populated playlist behind a failed request.
+func (d *DB) CreatePlaylistWithItems(userID int64, name string, editionIDs []int64) (int64, error) {
+	var playlistID int64
+	err := d.Update(func(tx *Tx) error {
+		for _, eid := range editionIDs {
+			var one int
+			if err := tx.QueryRow(`SELECT 1 FROM editions WHERE id = ?`, eid).Scan(&one); err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return ErrNotFound
+				}
+				return err
+			}
+		}
+		now := nowMilli()
+		res, err := tx.Exec(`INSERT INTO playlists (user_id, name, created_at, updated_at) VALUES (?,?,?,?)`,
+			userID, name, now, now)
+		if err != nil {
+			return err
+		}
+		playlistID, err = res.LastInsertId()
+		if err != nil {
+			return err
+		}
+		for i, eid := range editionIDs {
+			if _, err := tx.Exec(`INSERT INTO playlist_items (playlist_id, edition_id, position, added_at)
+				VALUES (?,?,?,?)`, playlistID, eid, i+1, now); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return playlistID, nil
+}
+
+// ReplacePlaylist renames and swaps a playlist's items in one transaction:
+// the previous clear-then-add sequence destroyed the original playlist first,
+// so a later failure left it empty or partly filled with no way back.
+func (d *DB) ReplacePlaylist(id int64, name *string, editionIDs []int64) error {
+	return d.Update(func(tx *Tx) error {
+		for _, eid := range editionIDs {
+			var one int
+			if err := tx.QueryRow(`SELECT 1 FROM editions WHERE id = ?`, eid).Scan(&one); err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return ErrNotFound
+				}
+				return err
+			}
+		}
+		if name != nil {
+			if _, err := tx.Exec(`UPDATE playlists SET name = ? WHERE id = ?`, *name, id); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.Exec(`DELETE FROM playlist_items WHERE playlist_id = ?`, id); err != nil {
+			return err
+		}
+		now := nowMilli()
+		for i, eid := range editionIDs {
+			if _, err := tx.Exec(`INSERT INTO playlist_items (playlist_id, edition_id, position, added_at)
+				VALUES (?,?,?,?)`, id, eid, i+1, now); err != nil {
+				return err
+			}
+		}
+		_, err := tx.Exec(`UPDATE playlists SET updated_at = ? WHERE id = ?`, now, id)
+		return err
+	})
+}
+
 func (d *DB) Playlist(id int64) (*Playlist, error) {
 	var p Playlist
 	err := d.QueryRow(`SELECT `+playlistCols+` FROM playlists p JOIN users u ON u.id = p.user_id WHERE p.id = ?`, id).

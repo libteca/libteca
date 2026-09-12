@@ -377,13 +377,25 @@ func episodeProgressFrac(e *store.PodcastEpisode, p *store.EpisodeProgress) floa
 }
 
 func pageWindow(page, limit, total int) (int, int) {
+	if total < 0 {
+		total = 0
+	}
+	if page < 0 {
+		page = 0
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if total == 0 {
+		return 0, 0
+	}
+	if page > total/limit {
+		return total, total
+	}
 	start := page * limit
-	if start > total {
-		start = total
+	remaining := total - start
+	if limit > remaining {
+		limit = remaining
 	}
-	end := start + limit
-	if end > total {
-		end = total
-	}
-	return start, end
+	return start, start + limit
 }

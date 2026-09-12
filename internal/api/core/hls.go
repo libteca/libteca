@@ -14,6 +14,7 @@ import (
 
 	"github.com/libteca/libteca/internal/auth"
 	"github.com/libteca/libteca/internal/store"
+	"github.com/libteca/libteca/internal/transcode"
 	"github.com/libteca/libteca/internal/trickplay"
 	"github.com/neutron-build/neutron/go/neutron"
 )
@@ -111,8 +112,20 @@ func (a *API) editionThumbTile(w http.ResponseWriter, r *http.Request) {
 	serveFile(w, r, path)
 }
 
-func webSessionID(editionID int64) string {
-	return "web-" + strconv.FormatInt(editionID, 10)
+func webSessionID(editionID int64) (string, error) {
+	return transcode.NewSessionID("web-", editionID)
+}
+
+func parseWebSessionID(s string) (int64, bool) {
+	if !strings.HasPrefix(s, "web-") {
+		return 0, false
+	}
+	idText, suffix, ok := strings.Cut(strings.TrimPrefix(s, "web-"), "-")
+	if !ok || suffix == "" {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(idText, 10, 64)
+	return id, err == nil && id > 0
 }
 
 func browserPlayable(ed *store.EditionView) bool {
@@ -158,8 +171,13 @@ func (a *API) editionPlayback(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 503, map[string]string{"error": "transcode unavailable"})
 		return
 	}
+	sid, err := webSessionID(ed.ID)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": "session creation failed"})
+		return
+	}
 	writeJSON(w, 200, map[string]any{
-		"mode": "hls", "fileId": fileID, "sessionId": webSessionID(ed.ID),
+		"mode": "hls", "fileId": fileID, "sessionId": sid,
 	})
 }
 
@@ -210,8 +228,8 @@ func (a *API) hlsFile(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 503, map[string]string{"error": "transcode unavailable"})
 		return
 	}
-	eid := auth.Atoi64(strings.TrimPrefix(sid, "web-"))
-	if eid <= 0 {
+	eid, ok := parseWebSessionID(sid)
+	if !ok {
 		writeJSON(w, 400, map[string]string{"error": "bad session id"})
 		return
 	}
@@ -253,7 +271,11 @@ func (a *API) hlsFile(w http.ResponseWriter, r *http.Request) {
 		}
 		s.Touch()
 		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-		w.Write(rewriteHLSPlaylist(data, sid, r.URL.Query().Get("token")))
+		tok := r.URL.Query().Get("token")
+		if tok == "" {
+			tok = auth.Token(r)
+		}
+		w.Write(rewriteHLSPlaylist(data, sid, tok))
 		return
 	}
 	if !a.TC.WaitForSegmentFile(r.Context(), sid, file, 10*time.Second) {

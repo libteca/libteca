@@ -195,6 +195,10 @@ func (a *API) podcastDelete(svc *podcast.Service, w http.ResponseWriter, r *http
 		writeJSON(w, 404, map[string]string{"error": "podcast not found"})
 		return
 	}
+	if errors.Is(err, podcast.ErrRefreshBusy) {
+		writeJSON(w, 409, map[string]string{"error": "podcast refresh or download in progress"})
+		return
+	}
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return

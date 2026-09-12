@@ -204,8 +204,8 @@ func (w *Watcher) triggerAndWait(ctx context.Context, libID int64) {
 		fmt.Fprintf(os.Stderr, "libteca: watch: scan for library %d skipped: %v\n", libID, err)
 		return
 	}
-	w.waitForJob(ctx, jobID)
-	if ctx.Err() == nil {
+	status := w.waitForJob(ctx, jobID)
+	if ctx.Err() == nil && status == "done" {
 		w.reconcileMissing(libID)
 	}
 }
@@ -215,17 +215,20 @@ func (w *Watcher) scanInFlight(libID int64) bool {
 	return err == nil && len(jobs) > 0 && jobs[0].Status == "running"
 }
 
-func (w *Watcher) waitForJob(ctx context.Context, jobID int64) {
+func (w *Watcher) waitForJob(ctx context.Context, jobID int64) string {
 	t := time.NewTicker(jobPollEvery)
 	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return ""
 		case <-t.C:
 			j, err := w.db.GetScanJob(jobID)
-			if err != nil || j.Status != "running" {
-				return
+			if err != nil {
+				return ""
+			}
+			if j.Status != "running" {
+				return j.Status
 			}
 		}
 	}
@@ -233,7 +236,9 @@ func (w *Watcher) waitForJob(ctx context.Context, jobID int64) {
 
 // reconcileMissing marks file rows of a library missing when their path no
 // longer exists. The scanner never deletes state, so this is the only place
-// removals are recorded; it runs after each watch-triggered scan completes.
+// removals are recorded; it runs only after a scan that finished cleanly -
+// a failed scan says nothing about the files, and a transiently unavailable
+// root must not mark a healthy library missing.
 func (w *Watcher) reconcileMissing(libID int64) {
 	rows, err := w.db.Query(`SELECT f.id, f.path
 		FROM files f

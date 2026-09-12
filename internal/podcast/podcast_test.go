@@ -25,7 +25,15 @@ func newTestService(t *testing.T) (*Service, *store.DB) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	return New(db, t.TempDir()), db
+	s := New(db, t.TempDir())
+	local := &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: func() http.RoundTripper { tr := http.DefaultTransport.(*http.Transport).Clone(); tr.ResponseHeaderTimeout = 30 * time.Second; return tr }(),
+	}
+	s.Client = local
+	s.DLClient = local
+	s.fetcher.Client = local
+	return s, db
 }
 
 type feedItem struct {
@@ -797,5 +805,23 @@ func TestParseRSSMissingGuidFallsBackToEnclosure(t *testing.T) {
 	}
 	if len(feed.Episodes) != 1 || feed.Episodes[0].GUID != "http://example.com/x.mp3" {
 		t.Fatalf("feed = %+v", feed)
+	}
+}
+
+func TestEgressGuardRejectsLoopback(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "should never be fetched")
+	}))
+	t.Cleanup(srv.Close)
+
+	s := New(nil, t.TempDir())
+	f := Fetcher{Client: s.Client}
+	if _, err := f.FetchBytes(context.Background(), srv.URL, 1<<20); err == nil {
+		t.Fatal("expected the public-egress client to refuse a loopback URL")
+	}
+	resp, err := s.DLClient.Get(srv.URL)
+	if err == nil {
+		resp.Body.Close()
+		t.Fatal("expected the download client to refuse a loopback URL")
 	}
 }

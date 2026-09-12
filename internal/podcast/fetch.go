@@ -74,6 +74,8 @@ func (f *Fetcher) FetchFeed(ctx context.Context, url, etag, lastModified string)
 }
 
 // FetchBytes downloads a small auxiliary resource (covers) with a size cap.
+// Reading exactly the cap is a truncated file, not a successful download, so
+// one byte past the cap is read and an over-limit body is rejected whole.
 func (f *Fetcher) FetchBytes(ctx context.Context, url string, limit int64) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -88,7 +90,14 @@ func (f *Fetcher) FetchBytes(ctx context.Context, url string, limit int64) ([]by
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("fetch %s: %s", url, resp.Status)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, limit))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("fetch %s: body exceeds the %d-byte limit", url, limit)
+	}
+	return data, nil
 }
 
 type rssRoot struct {

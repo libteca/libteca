@@ -520,9 +520,12 @@ func (a *API) downloadCover(workID int64, url string) (bool, error) {
 		io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		return false, fmt.Errorf("cover download: HTTP %d", resp.StatusCode)
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, coverMaxBytes))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, coverMaxBytes+1))
 	if err != nil {
 		return false, err
+	}
+	if int64(len(data)) > coverMaxBytes {
+		return false, fmt.Errorf("cover download: body exceeds the %d-byte limit", coverMaxBytes)
 	}
 	if len(data) == 0 {
 		return false, fmt.Errorf("cover download: empty body")

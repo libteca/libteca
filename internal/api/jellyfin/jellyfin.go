@@ -111,6 +111,7 @@ func jfAuth(db *store.DB) func(http.Handler) http.Handler {
 			if token != "" {
 				if user, ok := auth.UserForToken(db, token); ok {
 					r = r.WithContext(withUser(r, user.ID))
+					r = auth.WithToken(r, token)
 					next.ServeHTTP(w, r)
 					return
 				}
@@ -135,6 +136,13 @@ func uid(r *http.Request) int64 {
 		return v
 	}
 	return 0
+}
+
+func requestToken(r *http.Request) string {
+	if t := qget(r, "api_key"); t != "" {
+		return t
+	}
+	return auth.Token(r)
 }
 
 // qget returns the first query param matching name case-insensitively.
@@ -349,6 +357,23 @@ func (a *API) userItems(w http.ResponseWriter, r *http.Request) {
 	a.respondItems(w, items, sortBy, limit, start)
 }
 
+func sliceWindow(start, limit, total int) (int, int) {
+	if total < 0 {
+		total = 0
+	}
+	if start < 0 {
+		start = 0
+	}
+	if start > total {
+		start = total
+	}
+	remaining := total - start
+	if limit <= 0 || limit > remaining {
+		limit = remaining
+	}
+	return start, start + limit
+}
+
 func (a *API) respondItems(w http.ResponseWriter, items []map[string]any, sortBy string, limit, start int) {
 	if sortBy == "runtime" {
 	} else if strings.Contains(sortBy, "date") || strings.Contains(sortBy, "created") {
@@ -361,16 +386,7 @@ func (a *API) respondItems(w http.ResponseWriter, items []map[string]any, sortBy
 		})
 	}
 	total := len(items)
-	if start > total {
-		start = total
-	}
-	if limit <= 0 {
-		limit = total - start
-	}
-	end := start + limit
-	if end > total {
-		end = total
-	}
+	start, end := sliceWindow(start, limit, total)
 	for _, it := range items {
 		delete(it, "__sort")
 		delete(it, "__created")
@@ -599,9 +615,15 @@ func (a *API) detailFor(userID int64, id string) (map[string]any, bool) {
 		return nil, false
 	}
 	if m := reSeasonItem.FindStringSubmatch(id); m != nil {
-		wv, _ := a.DB.WorkByID(auth.Atoi64(m[1]))
+		wv, err := a.DB.WorkByID(auth.Atoi64(m[1]))
+		if err != nil || wv == nil {
+			return nil, false
+		}
 		n, _ := strconv.Atoi(m[2])
-		works, _ := a.DB.WorksInLibrary(wv.LibraryID)
+		works, err := a.DB.WorksInLibrary(wv.LibraryID)
+		if err != nil {
+			return nil, false
+		}
 		for i := range works {
 			if works[i].ID == wv.ID {
 				return a.seasonItem(&works[i], n), true
@@ -855,7 +877,11 @@ func (a *API) playbackInfo(w http.ResponseWriter, r *http.Request) {
 	}
 	f := ed.Files[0]
 	fid := "f" + strconv.FormatInt(f.ID, 10)
-	playSession := "ps-" + strconv.FormatInt(ed.ID, 10)
+	playSession, err := transcode.NewSessionID("ps-", ed.ID)
+	if err != nil {
+		write(w, 500, map[string]any{"error": "internal error"})
+		return
+	}
 	mediaSource := map[string]any{
 		"Id": fid, "Path": filepath.Base(f.Path), "Protocol": "File",
 		"SupportsDirectPlay": false, "SupportsDirectStream": false, "SupportsTranscoding": true,
@@ -871,7 +897,7 @@ func (a *API) playbackInfo(w http.ResponseWriter, r *http.Request) {
 		mediaSource["SupportsDirectStream"] = true
 	} else {
 		mediaSource["TranscodingUrl"] = fmt.Sprintf("/videos/e%d/main.m3u8?MediaSourceId=%s&VideoCodec=h264&AudioCodec=aac&PlaySessionId=%s&api_key=%s",
-			ed.ID, fid, playSession, qget(r, "api_key"))
+			ed.ID, fid, playSession, requestToken(r))
 	}
 	write(w, 200, map[string]any{
 		"MediaSources":  []any{mediaSource},
@@ -971,7 +997,7 @@ func (a *API) hlsMaster(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Touch()
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-	w.Write(rewriteHLSPlaylist(data, r.PathValue("id"), sessionID, qget(r, "api_key")))
+	w.Write(rewriteHLSPlaylist(data, r.PathValue("id"), sessionID, requestToken(r)))
 }
 
 var (
@@ -1037,7 +1063,7 @@ func (a *API) hlsSegment(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-		w.Write(rewriteHLSPlaylist(data, r.PathValue("id"), sid, qget(r, "api_key")))
+		w.Write(rewriteHLSPlaylist(data, r.PathValue("id"), sid, requestToken(r)))
 		return
 	}
 	fi, _ := f.Stat()

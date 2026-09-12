@@ -2,6 +2,8 @@ package transcode
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"os"
@@ -81,6 +83,9 @@ type Manager struct {
 	mu       sync.Mutex
 	sessions map[string]*Session
 
+	stop     chan struct{}
+	stopOnce sync.Once
+
 	hwMu   sync.Mutex
 	hwSet  string
 	hwMode string
@@ -90,7 +95,7 @@ type Manager struct {
 }
 
 func New(dataDir string) *Manager {
-	m := &Manager{DataDir: dataDir, sessions: map[string]*Session{}}
+	m := &Manager{DataDir: dataDir, sessions: map[string]*Session{}, stop: make(chan struct{})}
 	m.spawn = func(argv []string) process {
 		return &realProcess{cmd: exec.Command("ffmpeg", argv...)}
 	}
@@ -101,6 +106,20 @@ func New(dataDir string) *Manager {
 	os.RemoveAll(filepath.Join(dataDir, "transcode"))
 	go m.reaper()
 	return m
+}
+
+// NewSessionID builds a playback session id that carries the edition for
+// routing but ends in an unpredictable suffix, so two viewers, tabs or seeks
+// on the same edition never share one ffmpeg process: Manager.Get returns the
+// existing session on an edition match without consulting the requested
+// start position, and a shared id means one client's stop kills the other's
+// playback mid-stream.
+func NewSessionID(prefix string, editionID int64) (string, error) {
+	var b [12]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s%d-%s", prefix, editionID, hex.EncodeToString(b[:])), nil
 }
 
 func (m *Manager) Get(sessionID string, edition int64, source string, startSecs float64) (*Session, error) {
@@ -254,21 +273,29 @@ func (m *Manager) Close(sessionID string) {
 }
 
 func (m *Manager) reaper() {
+	t := time.NewTicker(15 * time.Second)
+	defer t.Stop()
 	for {
-		time.Sleep(15 * time.Second)
-		m.mu.Lock()
-		for id, s := range m.sessions {
-			if time.Since(time.Unix(0, s.lastHit.Load())) > idleSessionTTL {
-				s.kill()
-				delete(m.sessions, id)
+		select {
+		case <-m.stop:
+			return
+		case <-t.C:
+			m.mu.Lock()
+			for id, s := range m.sessions {
+				if time.Since(time.Unix(0, s.lastHit.Load())) > idleSessionTTL {
+					s.kill()
+					delete(m.sessions, id)
+				}
 			}
+			m.mu.Unlock()
 		}
-		m.mu.Unlock()
 	}
 }
 
-// CloseAll kills every session and drops its segments (graceful shutdown).
+// CloseAll kills every session, drops its segments, and stops the reaper
+// goroutine (graceful shutdown; also safe to call more than once).
 func (m *Manager) CloseAll() {
+	m.stopOnce.Do(func() { close(m.stop) })
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for id, s := range m.sessions {

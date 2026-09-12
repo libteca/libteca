@@ -95,20 +95,14 @@ func (a *API) playlistCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "name required"})
 		return
 	}
-	id, err := a.DB.CreatePlaylist(u.ID, body.Name)
+	id, err := a.DB.CreatePlaylistWithItems(u.ID, body.Name, body.EditionIDs)
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": "internal error"})
-		return
-	}
-	for _, eid := range body.EditionIDs {
-		if _, err := a.DB.AddPlaylistItem(id, eid); err != nil {
-			if errors.Is(err, store.ErrNotFound) {
-				writeJSON(w, 404, map[string]string{"error": "edition not found"})
-				return
-			}
-			writeJSON(w, 500, map[string]string{"error": "internal error"})
+		if errors.Is(err, store.ErrNotFound) {
+			writeJSON(w, 404, map[string]string{"error": "edition not found"})
 			return
 		}
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
+		return
 	}
 	writeJSON(w, 201, map[string]any{"id": id})
 }
