@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/libteca/libteca/internal/auth"
+	"github.com/libteca/libteca/internal/podcast"
 	"github.com/libteca/libteca/internal/store"
 )
 
@@ -23,19 +24,16 @@ func (a *API) deleteLibrary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if lib.Type == "podcasts" && a.Podcasts != nil {
-		pods, err := a.DB.Podcasts()
-		if err != nil {
-			writeJSON(w, 500, map[string]string{"error": "internal error"})
-			return
-		}
-		for i := range pods {
-			if pods[i].LibraryID != id {
-				continue
-			}
-			if err := a.Podcasts.DeletePodcast(pods[i].ID); err != nil {
-				writeJSON(w, 409, map[string]string{"error": "podcast refresh or download in progress"})
+		// All-or-nothing: the per-subscription loop deleted everything up to
+		// the first busy one and THEN reported 409, permanently destroying
+		// half a library behind a "try again" response.
+		if err := a.Podcasts.DeleteLibraryPodcasts(id); err != nil {
+			if errors.Is(err, podcast.ErrRefreshBusy) {
+				writeJSON(w, 409, map[string]string{"error": "a podcast refresh or download is in progress; nothing was deleted"})
 				return
 			}
+			writeJSON(w, 500, map[string]string{"error": "internal error"})
+			return
 		}
 	}
 	err = a.DB.DeleteLibrary(id)

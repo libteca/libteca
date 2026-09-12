@@ -20,8 +20,10 @@ import (
 
 type contextKey int
 
-const userIDKey contextKey = iota
-const tokenKey contextKey = iota
+const (
+	userIDKey contextKey = iota
+	tokenKey
+)
 
 var cache sync.Map
 

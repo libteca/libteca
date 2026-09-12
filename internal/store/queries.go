@@ -103,11 +103,14 @@ func (d *DB) DeleteLibrary(id int64) error {
 		if _, err := tx.Exec(`DELETE FROM podcast_episode_progress WHERE episode_id IN (`+eps+`)`, id); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(`DELETE FROM files WHERE id IN (
-			SELECT file_id FROM podcast_episodes WHERE podcast_id IN (`+pods+`) AND file_id IS NOT NULL)`, id); err != nil {
+		// Episode rows hold the FK to files, so episodes go FIRST and the
+		// now-unreferenced file rows SECOND - the previous order tripped the
+		// foreign key on every library that still had downloaded episodes.
+		if _, err := tx.Exec(`DELETE FROM podcast_episodes WHERE podcast_id IN (`+pods+`)`, id); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(`DELETE FROM podcast_episodes WHERE podcast_id IN (`+pods+`)`, id); err != nil {
+		if _, err := tx.Exec(`DELETE FROM files WHERE id IN (
+			SELECT file_id FROM podcast_episodes WHERE podcast_id IN (`+pods+`) AND file_id IS NOT NULL)`, id); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(`DELETE FROM podcasts WHERE library_id = ?`, id); err != nil {

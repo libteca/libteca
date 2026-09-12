@@ -120,9 +120,13 @@ func parseWebSessionID(s string) (int64, bool) {
 	if !strings.HasPrefix(s, "web-") {
 		return 0, false
 	}
-	idText, suffix, ok := strings.Cut(strings.TrimPrefix(s, "web-"), "-")
-	if !ok || suffix == "" {
-		return 0, false
+	rest := strings.TrimPrefix(s, "web-")
+	idText, _, hasSuffix := strings.Cut(rest, "-")
+	// Suffixed ids are the unique-per-playback shape; a bare "web-<id>" is
+	// the legacy shape callers still send and sessions are in-memory only,
+	// so both parse and route by their edition.
+	if !hasSuffix {
+		idText = rest
 	}
 	id, err := strconv.ParseInt(idText, 10, 64)
 	return id, err == nil && id > 0

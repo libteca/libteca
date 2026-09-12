@@ -265,6 +265,120 @@ func (d *DB) DeletePodcast(id int64) error {
 	})
 }
 
+// DeletePodcastWithFiles removes the subscription, its episodes and its
+// downloaded file rows in one transaction. Episode rows reference files with
+// a foreign key, so the file ids are captured before the episodes go; doing
+// this as three separate statements across transactions could leave the
+// subscription gone while its file rows survived (or vice versa).
+func (d *DB) DeletePodcastWithFiles(id int64) ([]int64, error) {
+	var fileIDs []int64
+	err := d.Update(func(tx *Tx) error {
+		rows, err := tx.Query(
+			`SELECT file_id FROM podcast_episodes WHERE podcast_id = ? AND file_id IS NOT NULL`, id)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var fid int64
+			if err := rows.Scan(&fid); err != nil {
+				rows.Close()
+				return err
+			}
+			fileIDs = append(fileIDs, fid)
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+
+		if _, err := tx.Exec(`DELETE FROM podcast_episode_progress WHERE episode_id IN
+			(SELECT id FROM podcast_episodes WHERE podcast_id = ?)`, id); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`DELETE FROM podcast_episodes WHERE podcast_id = ?`, id); err != nil {
+			return err
+		}
+		if len(fileIDs) > 0 {
+			placeholders := strings.Repeat("?,", len(fileIDs))
+			placeholders = placeholders[:len(placeholders)-1]
+			args := make([]any, len(fileIDs))
+			for i, fid := range fileIDs {
+				args[i] = fid
+			}
+			if _, err := tx.Exec(`DELETE FROM files WHERE id IN (`+placeholders+`)`, args...); err != nil {
+				return err
+			}
+		}
+		res, err := tx.Exec(`DELETE FROM podcasts WHERE id = ?`, id)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return ErrNotFound
+		}
+		return nil
+	})
+	return fileIDs, err
+}
+
+// DeleteLibraryPodcasts removes every subscription of a podcasts library
+// with its episodes and file rows in one transaction. File ids are captured
+// before the episodes that reference them are deleted. Returns the ids so
+// callers can drop the stored media after commit.
+func (d *DB) DeleteLibraryPodcasts(libID int64) ([]int64, error) {
+	var fileIDs []int64
+	err := d.Update(func(tx *Tx) error {
+		rows, err := tx.Query(
+			`SELECT file_id FROM podcast_episodes WHERE podcast_id IN
+			(SELECT id FROM podcasts WHERE library_id = ?) AND file_id IS NOT NULL`, libID)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var fid int64
+			if err := rows.Scan(&fid); err != nil {
+				rows.Close()
+				return err
+			}
+			fileIDs = append(fileIDs, fid)
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+
+		if _, err := tx.Exec(`DELETE FROM podcast_episode_progress WHERE episode_id IN
+			(SELECT id FROM podcast_episodes WHERE podcast_id IN (SELECT id FROM podcasts WHERE library_id = ?))`, libID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`DELETE FROM podcast_episodes WHERE podcast_id IN
+			(SELECT id FROM podcasts WHERE library_id = ?)`, libID); err != nil {
+			return err
+		}
+		if len(fileIDs) > 0 {
+			placeholders := strings.Repeat("?,", len(fileIDs))
+			placeholders = placeholders[:len(placeholders)-1]
+			args := make([]any, len(fileIDs))
+			for i, fid := range fileIDs {
+				args[i] = fid
+			}
+			if _, err := tx.Exec(`DELETE FROM files WHERE id IN (`+placeholders+`)`, args...); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.Exec(`DELETE FROM podcasts WHERE library_id = ?`, libID); err != nil {
+			return err
+		}
+		return nil
+	})
+	return fileIDs, err
+}
+
+
 func (d *DB) UpsertPodcastEpisode(e *PodcastEpisode) (bool, error) {
 	added := false
 	err := d.Update(func(tx *Tx) error {

@@ -25,14 +25,11 @@ func newTestService(t *testing.T) (*Service, *store.DB) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	s := New(db, t.TempDir())
 	local := &http.Client{
 		Timeout:   30 * time.Second,
 		Transport: func() http.RoundTripper { tr := http.DefaultTransport.(*http.Transport).Clone(); tr.ResponseHeaderTimeout = 30 * time.Second; return tr }(),
 	}
-	s.Client = local
-	s.DLClient = local
-	s.fetcher.Client = local
+	s := NewWithClient(db, t.TempDir(), local)
 	return s, db
 }
 

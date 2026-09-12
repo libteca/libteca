@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/http"
 	"path/filepath"
 	"sync"
@@ -49,6 +50,11 @@ type Service struct {
 func publicHTTPClient(totalTimeout time.Duration) *http.Client {
 	dialer := &net.Dialer{Timeout: 10 * time.Second}
 	tr := http.DefaultTransport.(*http.Transport).Clone()
+	// Never inherit HTTP(S)_PROXY: with a proxy selected, DialContext sees
+	// the PROXY's address, so destination validation would vet the proxy
+	// while the proxy itself could forward anywhere - including hosts this
+	// guard exists to refuse.
+	tr.Proxy = nil
 	tr.ResponseHeaderTimeout = 30 * time.Second
 	tr.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(address)
@@ -81,24 +87,41 @@ func publicHTTPClient(totalTimeout time.Duration) *http.Client {
 	}
 }
 
+var sharedV4 = netip.MustParsePrefix("100.64.0.0/10")
+
 func publicIP(ip net.IP) bool {
-	return ip != nil &&
-		!ip.IsLoopback() &&
-		!ip.IsPrivate() &&
-		!ip.IsLinkLocalUnicast() &&
-		!ip.IsLinkLocalMulticast() &&
-		!ip.IsUnspecified() &&
-		!ip.IsMulticast()
+	if ip == nil ||
+		ip.IsLoopback() ||
+		ip.IsPrivate() ||
+		ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() ||
+		ip.IsUnspecified() ||
+		ip.IsMulticast() {
+		return false
+	}
+	// IsPrivate does not cover RFC 6598 shared address space - which is
+	// exactly the range Tailscale and carrier NAT live in, i.e. internal
+	// endpoints in this server's own deployment model.
+	if a, ok := netip.AddrFromSlice(ip); ok && sharedV4.Contains(a.Unmap()) {
+		return false
+	}
+	return true
 }
 
 func New(db *store.DB, dataDir string) *Service {
 	client := publicHTTPClient(30 * time.Second)
-	dlClient := publicHTTPClient(0)
+	return NewWithClient(db, dataDir, client)
+}
+
+// NewWithClient is the test seam: httptest servers bind loopback, which the
+// egress guard refuses by design, so fixtures inject an unrestricted client
+// through here. Production callers use New.
+func NewWithClient(db *store.DB, dataDir string, client *http.Client) *Service {
 	return &Service{
 		DB:          db,
 		DataDir:     dataDir,
 		Client:      client,
-		DLClient:    dlClient,
+		DLClient:    client,
 		fetcher:     Fetcher{Client: client},
 		inflight:    map[int64]bool{},
 		sem:         make(chan struct{}, workerPool),
@@ -235,10 +258,10 @@ func (s *Service) DeletePodcast(id int64) error {
 			paths = append(paths, f.Path)
 		}
 	}
-	if err := s.DB.DeletePodcast(id); err != nil {
-		return err
-	}
-	if err := s.DB.DeleteFilesByIDs(ids); err != nil {
+	// One transaction for the subscription, its episodes and its file rows:
+	// the old two-step committed the subscription first, so a failure on the
+	// files delete orphaned rows while reporting an error.
+	if _, err := s.DB.DeletePodcastWithFiles(id); err != nil {
 		return err
 	}
 	for _, path := range paths {
@@ -246,6 +269,73 @@ func (s *Service) DeletePodcast(id int64) error {
 	}
 	if rel := derefStr(p.CoverPath); rel != "" {
 		osRemove(filepath.Join(s.DataDir, "covers", rel))
+	}
+	return nil
+}
+
+// DeleteLibraryPodcasts removes every subscription of a podcasts library
+// atomically: all per-podcast single-flight slots are acquired BEFORE
+// anything is deleted, so a busy subscription aborts the whole operation
+// instead of leaving half a library permanently deleted behind a 409.
+func (s *Service) DeleteLibraryPodcasts(libID int64) error {
+	all, err := s.DB.Podcasts()
+	if err != nil {
+		return err
+	}
+	var ids []int64
+	var covers []string
+	for i := range all {
+		if all[i].LibraryID == libID {
+			ids = append(ids, all[i].ID)
+			if rel := derefStr(all[i].CoverPath); rel != "" {
+				covers = append(covers, filepath.Join(s.DataDir, "covers", rel))
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+
+	var paths []string
+	for _, id := range ids {
+		files, err := s.DB.FilesForPodcast(id)
+		if err != nil {
+			return err
+		}
+		for _, f := range files {
+			if s.purgeablePath(f.Path) {
+				paths = append(paths, f.Path)
+			}
+		}
+	}
+
+	s.mu.Lock()
+	for _, id := range ids {
+		if s.inflight[id] {
+			s.mu.Unlock()
+			return ErrRefreshBusy
+		}
+	}
+	for _, id := range ids {
+		s.inflight[id] = true
+	}
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		for _, id := range ids {
+			delete(s.inflight, id)
+		}
+		s.mu.Unlock()
+	}()
+
+	if _, err := s.DB.DeleteLibraryPodcasts(libID); err != nil {
+		return err
+	}
+	for _, path := range paths {
+		osRemove(path)
+	}
+	for _, cover := range covers {
+		osRemove(cover)
 	}
 	return nil
 }

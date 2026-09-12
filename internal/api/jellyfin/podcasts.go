@@ -137,7 +137,7 @@ func (a *API) podcastEpisodeItem(p *store.Podcast, e *store.PodcastEpisode, r *h
 	if e.FileID != nil {
 		if path, err := a.DB.FilePath(*e.FileID); err == nil {
 			url := "/Audio/podcast/" + epID + "/stream"
-			if key := qget(r, "api_key"); key != "" {
+			if key := requestToken(r); key != "" {
 				url += "?api_key=" + key
 			}
 			it["MediaSources"] = []any{map[string]any{
