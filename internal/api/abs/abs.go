@@ -287,14 +287,7 @@ func (a *API) items(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	total := len(results)
-	start := page * limit
-	if start > total {
-		start = total
-	}
-	end := start + limit
-	if end > total {
-		end = total
-	}
+	start, end := pageWindow(page, limit, total)
 	write(w, 200, map[string]any{
 		"results": results[start:end], "total": total, "limit": limit, "page": page,
 		"sortBy": sortMode, "sortDesc": false, "filterBy": "all",

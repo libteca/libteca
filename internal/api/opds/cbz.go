@@ -1,6 +1,7 @@
 package opds
 
 import (
+	"fmt"
 	"archive/zip"
 	"io"
 	"path/filepath"
@@ -37,7 +38,14 @@ func readZipPage(zr *zip.Reader, name string) ([]byte, error) {
 		return nil, err
 	}
 	defer rc.Close()
-	return io.ReadAll(io.LimitReader(rc, 20<<20))
+	data, err := io.ReadAll(io.LimitReader(rc, 20<<20+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > 20<<20 {
+		return nil, fmt.Errorf("page %s exceeds the 20 MB limit", name)
+	}
+	return data, nil
 }
 
 // natLess is the same natural-order comparison as internal/scan/scan.go

@@ -323,11 +323,14 @@ func (d *DB) DeletePodcastWithFiles(id int64) ([]int64, error) {
 	return fileIDs, err
 }
 
-// DeleteLibraryPodcasts removes every subscription of a podcasts library
-// with its episodes and file rows in one transaction. File ids are captured
-// before the episodes that reference them are deleted. Returns the ids so
-// callers can drop the stored media after commit.
-func (d *DB) DeleteLibraryPodcasts(libID int64) ([]int64, error) {
+// DeletePodcastsLibrary removes every subscription of a podcasts library
+// with its episodes and file rows AND the library row itself in one
+// transaction, so the lifecycle gate in the service covers the whole
+// destructive operation - core no longer deletes the library row in a
+// separate, ungated commit. File ids are captured before the episodes that
+// reference them are deleted. Returns the ids so callers can drop the stored
+// media after commit.
+func (d *DB) DeletePodcastsLibrary(libID int64) ([]int64, error) {
 	var fileIDs []int64
 	err := d.Update(func(tx *Tx) error {
 		rows, err := tx.Query(
@@ -371,6 +374,9 @@ func (d *DB) DeleteLibraryPodcasts(libID int64) ([]int64, error) {
 			}
 		}
 		if _, err := tx.Exec(`DELETE FROM podcasts WHERE library_id = ?`, libID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`DELETE FROM libraries WHERE id = ?`, libID); err != nil {
 			return err
 		}
 		return nil

@@ -45,3 +45,18 @@ Verification: go test ./... -count=1 exit 0 (17 pkgs), go test -race on podcast+
 8. HIGH ABS import slice desync - FIXED: a planned file vanishing mid-import fails the import instead of silently compacting the id slice.
 
 Verification: go test ./... -count=1 exit 0; go test -race on podcast/jellyfin/subsonic; web tsc+build - all clean (2026-09-12).
+
+## ChatGPT audit pass 4 (2026-09-12, AUDIT-CHATGPT-4.md) - all 10 fixed
+
+1. HIGH podcast-library lifecycle races - FIXED: single-flight slots acquired BEFORE path/cover snapshotting (a post-snapshot refresh could no longer orphan new bytes); store.DeletePodcastsLibrary removes podcast children AND the library row in one transaction inside the service's lifecycle gate (the separate ungated DB.DeleteLibrary call is gone).
+2. HIGH Jellyfin session ownership gaps - FIXED: WS SessionsStart pushes a per-socket filtered snapshot; body-supplied PlaySessionId in sessionStopped gets the same ownership check; hlsMaster refuses foreign u-prefixed sessions (Manager.Get would kill the victim's session on edition mismatch); deviceOwnedBy resolves ownership from the target SOCKET's authenticated user (playback rows keyed by client-supplied DeviceID were poisonable).
+3. MEDIUM subsonic limiter bucket reset - FIXED: limiter keys are principal-aware (ip|username); a success for A no longer erases V's failures.
+4. MEDIUM scan panic left job 'running' - FIXED: the recovery defer persists counts + terminal error status via FinishScanJob before finishing the in-memory run.
+5. HIGH cbr cap deadlock/truncation - FIXED: max+1 read detects oversize; the unrar child is killed instead of deadlocking Wait; the unar path size-checks the extracted file before reading; oversize is REJECTED, never silently truncated.
+6. MEDIUM pagination overflow in abs.items + jellyfin.nextUp - FIXED: both now slice via pageWindow/sliceWindow.
+7. MEDIUM truncated book images - FIXED: epub cover, cbz scan cover, and OPDS-PSE pages read max+1 and skip/reject oversize instead of persisting/serving corrupt bytes.
+8. MEDIUM subsonic updatePlaylist partial application - FIXED: the complete request (removals, additions, rename) is resolved and validated before any mutation runs.
+9. MEDIUM pdf boundary double-count - FIXED: markers fully contained in the carried tail are subtracted back out; only straddling markers survive.
+10. MEDIUM providerKeysPut partial commit - FIXED: the whole key set is validated before any write.
+
+Verification: go test ./... -count=1 exit 0; go test -race on podcast/jellyfin/subsonic/scan; web tsc - all clean (2026-09-12).

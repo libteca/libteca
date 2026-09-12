@@ -195,9 +195,11 @@ func parseEPUB(zr *zip.Reader) (*EpubInfo, error) {
 
 	if href := epubCoverHref(pkg); href != "" {
 		if f, err := zr.Open(joinZipPath(opfDir, href)); err == nil {
-			data, rerr := io.ReadAll(io.LimitReader(f, epubCoverLimit))
+			data, rerr := io.ReadAll(io.LimitReader(f, epubCoverLimit+1))
 			f.Close()
-			if rerr == nil && len(data) > 0 {
+			// Oversize covers are skipped, not truncated: a truncated image
+			// was persisted as a valid cover.
+			if rerr == nil && len(data) > 0 && len(data) <= epubCoverLimit {
 				info.Cover = data
 			}
 		}

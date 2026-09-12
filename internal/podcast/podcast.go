@@ -316,32 +316,19 @@ func (s *Service) DeleteLibraryPodcasts(libID int64) error {
 		return err
 	}
 	var ids []int64
-	var covers []string
 	for i := range all {
 		if all[i].LibraryID == libID {
 			ids = append(ids, all[i].ID)
-			if rel := derefStr(all[i].CoverPath); rel != "" {
-				covers = append(covers, filepath.Join(s.DataDir, "covers", rel))
-			}
 		}
 	}
 	if len(ids) == 0 {
 		return nil
 	}
 
-	var paths []string
-	for _, id := range ids {
-		files, err := s.DB.FilesForPodcast(id)
-		if err != nil {
-			return err
-		}
-		for _, f := range files {
-			if s.purgeablePath(f.Path) {
-				paths = append(paths, f.Path)
-			}
-		}
-	}
-
+	// The single-flight slots are taken BEFORE any path/cover snapshot: a
+	// refresh that was still running at snapshot time could link new
+	// enclosures after it, and the post-commit cleanup would then remove
+	// nothing while the transaction deleted the rows - orphaning bytes.
 	s.mu.Lock()
 	for _, id := range ids {
 		if s.inflight[id] {
@@ -361,7 +348,28 @@ func (s *Service) DeleteLibraryPodcasts(libID int64) error {
 		s.mu.Unlock()
 	}()
 
-	if _, err := s.DB.DeleteLibraryPodcasts(libID); err != nil {
+	var covers []string
+	for i := range all {
+		if all[i].LibraryID == libID {
+			if rel := derefStr(all[i].CoverPath); rel != "" {
+				covers = append(covers, filepath.Join(s.DataDir, "covers", rel))
+			}
+		}
+	}
+	var paths []string
+	for _, id := range ids {
+		files, err := s.DB.FilesForPodcast(id)
+		if err != nil {
+			return err
+		}
+		for _, f := range files {
+			if s.purgeablePath(f.Path) {
+				paths = append(paths, f.Path)
+			}
+		}
+	}
+
+	if _, err := s.DB.DeletePodcastsLibrary(libID); err != nil {
 		return err
 	}
 	for _, path := range paths {

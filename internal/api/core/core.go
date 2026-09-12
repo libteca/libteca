@@ -337,7 +337,14 @@ func (a *API) runScan(ctx context.Context, run *scanRun, lib *store.Library) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			slog.Error("scan panicked", "library", lib.ID, "panic", rec)
-			run.finish("error", fmt.Sprintf("scan panicked: %v", rec))
+			// Persist the terminal status too: an in-memory-only finish left
+			// the scan_jobs row 'running' forever - the watcher polled it
+			// endlessly and the library returned 409 until restart.
+			msg := fmt.Sprintf("scan panicked: %v", rec)
+			fin := run.snapshot()
+			a.DB.UpdateScanJobCounts(run.jobID, int64(fin.FilesSeen), int64(fin.FilesProbed), int64(fin.FilesAdded), int64(fin.FilesUpdated), int64(fin.WorksChanged))
+			a.DB.FinishScanJob(run.jobID, "error", &msg)
+			run.finish("error", msg)
 		}
 	}()
 	defer func() {

@@ -255,9 +255,13 @@ func probeCBZ(p string) (int, []byte, error) {
 		return 0, nil, err
 	}
 	defer rc.Close()
-	cover, err := io.ReadAll(io.LimitReader(rc, 20<<20))
+	cover, err := io.ReadAll(io.LimitReader(rc, 20<<20+1))
 	if err != nil {
 		return 0, nil, err
+	}
+	if len(cover) > 20<<20 {
+		// Truncating at the cap produced a corrupt cover persisted as valid.
+		return len(names), nil, nil
 	}
 	return len(names), cover, nil
 }
@@ -279,16 +283,21 @@ func pdfPageCount(p string) int {
 	markerLen := len(markerPages)
 	n := 0
 	buf := make([]byte, 1<<20)
+	// Count only in the freshly-read region; the carried tail exists so a
+	// MARKER STRADDLING the boundary is caught, and counting the whole
+	// combined string double-counted markers fully contained in the tail.
 	tail := ""
 	for {
 		nr, rerr := f.Read(buf)
 		if nr > 0 {
-			s := tail + string(buf[:nr])
-			n += strings.Count(s, markerPage) - strings.Count(s, markerPages)
-			if len(s) >= markerLen {
-				tail = s[len(s)-markerLen:]
+			chunk := string(buf[:nr])
+			combined := tail + chunk
+			n += strings.Count(combined, markerPage) - strings.Count(combined, markerPages)
+			n -= strings.Count(tail, markerPage) - strings.Count(tail, markerPages)
+			if len(combined) >= markerLen {
+				tail = combined[len(combined)-markerLen:]
 			} else {
-				tail = s
+				tail = combined
 			}
 		}
 		if rerr != nil {
@@ -380,9 +389,11 @@ func cbrPageNames(names []string) []string {
 }
 
 func cbrExtract(tool, archive, name string) ([]byte, error) {
-	// The cap is enforced WHILE READING: buffering the full decompressed
-	// page first (Output / ReadFile) let a few-hundred-MB image exhaust
-	// memory before the cap was ever consulted.
+	// The cap is enforced WHILE READING and REJECTED when exceeded: the
+	// previous shape buffered the full page (Output / ReadFile) first, and
+	// truncating at exactly the cap silently produced corrupt covers.
+	// max+1 is read so oversize is detectable; an unrar child blocked
+	// writing past the limit is killed rather than deadlocking Wait.
 	var data []byte
 	if tool == "unrar" {
 		cmd := exec.Command(tool, "p", "-inul", archive, name)
@@ -393,8 +404,15 @@ func cbrExtract(tool, archive, name string) ([]byte, error) {
 		if err := cmd.Start(); err != nil {
 			return nil, err
 		}
-		var rerr error
-		data, rerr = io.ReadAll(io.LimitReader(stdout, cbrMaxCoverBytes))
+		buf, rerr := io.ReadAll(io.LimitReader(stdout, cbrMaxCoverBytes+1))
+		if rerr == nil && len(buf) > cbrMaxCoverBytes {
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+			}
+			_ = cmd.Wait()
+			return nil, fmt.Errorf("cbr page %s decompresses past the %d MB cap", name, cbrMaxCoverBytes>>20)
+		}
+		data = buf
 		if waitErr := cmd.Wait(); rerr == nil && waitErr != nil && len(data) == 0 {
 			return nil, waitErr
 		}
@@ -407,8 +425,15 @@ func cbrExtract(tool, archive, name string) ([]byte, error) {
 		if err := exec.Command(tool, "-q", "-f", "-o", dir, archive, name).Run(); err != nil {
 			return nil, err
 		}
+		var tooBig bool
 		filepath.WalkDir(dir, func(p string, e os.DirEntry, err error) error {
 			if err != nil || e.IsDir() || data != nil {
+				return nil
+			}
+			// Size-check the extracted file BEFORE reading it: unar has no
+			// streaming mode, so the on-disk stat is the earliest signal.
+			if fi, serr := os.Stat(p); serr == nil && fi.Size() > cbrMaxCoverBytes {
+				tooBig = true
 				return nil
 			}
 			f, ferr := os.Open(p)
@@ -416,9 +441,16 @@ func cbrExtract(tool, archive, name string) ([]byte, error) {
 				return nil
 			}
 			defer f.Close()
-			data, _ = io.ReadAll(io.LimitReader(f, cbrMaxCoverBytes))
+			data, _ = io.ReadAll(io.LimitReader(f, cbrMaxCoverBytes+1))
+			if len(data) > cbrMaxCoverBytes {
+				tooBig = true
+				data = nil
+			}
 			return nil
 		})
+		if tooBig {
+			return nil, fmt.Errorf("cbr page %s exceeds the %d MB cap", name, cbrMaxCoverBytes>>20)
+		}
 		if data == nil {
 			return nil, fmt.Errorf("unar extracted nothing for %s", name)
 		}

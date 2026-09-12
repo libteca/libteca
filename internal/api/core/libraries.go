@@ -36,14 +36,19 @@ func (a *API) deleteLibrary(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	err = a.DB.DeleteLibrary(id)
-	if errors.Is(err, store.ErrNotFound) {
-		writeJSON(w, 404, map[string]string{"error": "library not found"})
-		return
-	}
-	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": "internal error"})
-		return
+	if lib.Type != "podcasts" {
+		// Podcast libraries (including their row) are deleted inside the
+		// service's gated transaction above - a separate delete here would
+		// race a subscribe in the gap after the gate released.
+		err = a.DB.DeleteLibrary(id)
+		if errors.Is(err, store.ErrNotFound) {
+			writeJSON(w, 404, map[string]string{"error": "library not found"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, 500, map[string]string{"error": "internal error"})
+			return
+		}
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})
 }

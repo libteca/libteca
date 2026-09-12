@@ -132,6 +132,14 @@ func (a *API) wrap(h func(http.ResponseWriter, *http.Request, int64)) http.Handl
 // libteca stores argon2 hashes. The plaintext is captured in settings on the
 // first successful plain/hex login and reused for token verification after.
 // corpus: Navidrome stores reversible passwords for the same reason.
+// limiterKey is principal-aware: a success for user A must not erase the
+// failure bucket accumulated against user V from the same IP (the shared
+// per-IP bucket allowed 4-guess-then-login resets to run an unbounded MD5
+// oracle).
+func limiterKey(r *http.Request, user string) string {
+	return auth.ClientIP(r) + "|" + strings.ToLower(strings.TrimSpace(user))
+}
+
 func (a *API) authenticate(r *http.Request) (int64, bool) {
 	name := r.Form.Get("u")
 	if name == "" {
@@ -149,8 +157,9 @@ func (a *API) authenticate(r *http.Request) (int64, bool) {
 		// The token branch is an online password oracle: wrong candidates
 		// cost one MD5, the right one authenticates. Without the limiter it
 		// bypassed the lockout that governs every other credential check.
+		key := limiterKey(r, name)
 		if a.LoginLimiter != nil {
-			if ok, _ := a.LoginLimiter.Allow(auth.ClientIP(r)); !ok {
+			if ok, _ := a.LoginLimiter.Allow(key); !ok {
 				return 0, false
 			}
 		}
@@ -161,12 +170,12 @@ func (a *API) authenticate(r *http.Request) (int64, bool) {
 		sum := md5.Sum([]byte(secret + salt))
 		if subtle.ConstantTimeCompare([]byte(hex.EncodeToString(sum[:])), []byte(strings.ToLower(token))) != 1 {
 			if a.LoginLimiter != nil {
-				a.LoginLimiter.Failure(auth.ClientIP(r))
+				a.LoginLimiter.Failure(key)
 			}
 			return 0, false
 		}
 		if a.LoginLimiter != nil {
-			a.LoginLimiter.Success(auth.ClientIP(r))
+			a.LoginLimiter.Success(key)
 		}
 		if !auth.Verify(secret, u.PasswordHash) {
 			a.DB.DeleteSetting(subsonicSecretKey(u.ID))
@@ -178,8 +187,9 @@ func (a *API) authenticate(r *http.Request) (int64, bool) {
 	if pass == "" {
 		return 0, false
 	}
+	plainKey := limiterKey(r, name)
 	if a.LoginLimiter != nil {
-		if ok, _ := a.LoginLimiter.Allow(auth.ClientIP(r)); !ok {
+		if ok, _ := a.LoginLimiter.Allow(plainKey); !ok {
 			return 0, false
 		}
 	}
@@ -192,12 +202,12 @@ func (a *API) authenticate(r *http.Request) (int64, bool) {
 	}
 	if !auth.Verify(pass, u.PasswordHash) {
 		if a.LoginLimiter != nil {
-			a.LoginLimiter.Failure(auth.ClientIP(r))
+			a.LoginLimiter.Failure(plainKey)
 		}
 		return 0, false
 	}
 	if a.LoginLimiter != nil {
-		a.LoginLimiter.Success(auth.ClientIP(r))
+		a.LoginLimiter.Success(plainKey)
 	}
 	if cached, has := a.DB.GetSetting(subsonicSecretKey(u.ID)); !has || cached != pass {
 		a.DB.SetSetting(subsonicSecretKey(u.ID), pass)
@@ -646,6 +656,10 @@ func (a *API) updatePlaylist(w http.ResponseWriter, r *http.Request, uid int64) 
 	if p == nil {
 		return
 	}
+	// Validate the COMPLETE request before mutating anything: removals used
+	// to commit first, and a bad songId afterwards returned an error for a
+	// request that had already permanently changed the playlist.
+	removeEditions := []int64{}
 	if idxs := r.Form["songIndexToRemove"]; len(idxs) > 0 {
 		items, err := a.DB.PlaylistItems(p.ID)
 		if err != nil {
@@ -657,26 +671,33 @@ func (a *API) updatePlaylist(w http.ResponseWriter, r *http.Request, uid int64) 
 			if err != nil || n < 0 || n >= len(items) {
 				continue // corpus: out-of-range indexes skipped, not errors
 			}
-			if err := a.DB.RemovePlaylistItem(p.ID, items[n].EditionID); err != nil {
-				a.internalError(w, r, err)
-				return
-			}
+			removeEditions = append(removeEditions, items[n].EditionID)
 		}
 	}
+	var addEditions []int64
 	if ids := r.Form["songId"]; len(ids) > 0 {
 		editions, okIDs := a.resolveSongIDs(w, r, ids)
 		if !okIDs {
 			return
 		}
-		for _, eid := range editions {
-			if _, err := a.DB.AddPlaylistItem(p.ID, eid); err != nil {
-				a.internalError(w, r, err)
-				return
-			}
+		addEditions = editions
+	}
+	newName := r.Form.Get("name")
+
+	for _, eid := range removeEditions {
+		if err := a.DB.RemovePlaylistItem(p.ID, eid); err != nil {
+			a.internalError(w, r, err)
+			return
 		}
 	}
-	if name := r.Form.Get("name"); name != "" {
-		if err := a.DB.RenamePlaylist(p.ID, name); err != nil {
+	for _, eid := range addEditions {
+		if _, err := a.DB.AddPlaylistItem(p.ID, eid); err != nil {
+			a.internalError(w, r, err)
+			return
+		}
+	}
+	if newName != "" {
+		if err := a.DB.RenamePlaylist(p.ID, newName); err != nil {
 			a.internalError(w, r, err)
 			return
 		}

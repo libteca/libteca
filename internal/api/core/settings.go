@@ -77,8 +77,10 @@ func (a *API) providerKeysPut(w http.ResponseWriter, r *http.Request) {
 	for _, d := range providerKeyDefs {
 		byName[d.Name] = d
 	}
-	changed := 0
-	for name, val := range body.Keys {
+	// Validate the whole key set before any write: map iteration order
+	// used to commit the first valid key and then 400 on a later invalid
+	// one, hiding a partial update behind an error response.
+	for name := range body.Keys {
 		d, ok := byName[name]
 		if !ok {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "unknown provider: " + name})
@@ -88,6 +90,10 @@ func (a *API) providerKeysPut(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": d.Label + " needs no key"})
 			return
 		}
+	}
+	changed := 0
+	for name, val := range body.Keys {
+		d := byName[name]
 		val = strings.TrimSpace(val)
 		var err error
 		if val == "" {

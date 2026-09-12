@@ -271,18 +271,24 @@ func (h *hub) snapshot() []*liveSession {
 }
 
 // deviceOwnedBy reports whether the target device belongs to the sender's
-// user. The sender's identity comes from its authenticated connection, not
-// from playback state: sockets exist before any session is reported.
+// user. Ownership is resolved from the TARGET SOCKET'S authenticated user -
+// never from playback rows, which are keyed by client-supplied DeviceID and
+// could be poisoned by reporting playback under someone else's device id.
 func (h *hub) deviceOwnedBy(device string, from wsClient) bool {
-	senderUser := from.user()
+	return h.socketUser(device) == from.user()
+}
+
+// socketUser returns the authenticated user of the CONNECTED socket using
+// the given device id, or -1 when no such socket exists.
+func (h *hub) socketUser(device string) int64 {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	for _, s := range h.sessions {
-		if s.DeviceID == device {
-			return s.UserID == senderUser
+	for c := range h.conns {
+		if c.device() == device {
+			return c.user()
 		}
 	}
-	return false
+	return -1
 }
 
 func (h *hub) deviceForPlaySession(psid string) string {
@@ -428,7 +434,9 @@ func (a *API) handleText(c *socketConn, payload []byte) {
 	case "KeepAlive":
 	case "SessionsStart":
 		a.hubv().subscribe(c)
-		a.hubv().push(c, a.sessionsMessage())
+		// Filtered per socket: the global snapshot leaked every user's
+		// DeviceID/PlaySessionId to any authenticated connection.
+		a.hubv().push(c, a.sessionsMessageFor(c.user()))
 	case "SessionsStop": // corpus: message name unverified
 		a.hubv().unsubscribe(c)
 	case "Play", "Playstate":
@@ -514,6 +522,22 @@ func (a *API) sessionDTOs() []wsSessionDTO {
 		dtos = append(dtos, dto)
 	}
 	return dtos
+}
+
+func (a *API) sessionsMessageFor(user int64) []byte {
+	dtos := a.sessionDTOs()
+	uidStr := strconv.FormatInt(user, 10)
+	filtered := make([]wsSessionDTO, 0, len(dtos))
+	for _, d := range dtos {
+		if d.UserId == uidStr {
+			filtered = append(filtered, d)
+		}
+	}
+	out, _ := json.Marshal(struct {
+		MessageType string `json:"MessageType"`
+		Data        any    `json:"Data"`
+	}{"Sessions", filtered})
+	return out
 }
 
 func (a *API) sessionsMessage() []byte {

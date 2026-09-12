@@ -782,13 +782,7 @@ func (a *API) nextUp(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	total := len(items)
-	if start > total {
-		start = total
-	}
-	end := start + limit
-	if end > total {
-		end = total
-	}
+	start, end := sliceWindow(start, limit, total)
 	write(w, 200, map[string]any{"Items": items[start:end], "TotalRecordCount": total, "StartIndex": start})
 }
 
@@ -1010,6 +1004,12 @@ func (a *API) hlsMaster(w http.ResponseWriter, r *http.Request) {
 	} else if !validHLSSessionID(sessionID) {
 		http.Error(w, "bad", 400)
 		return
+	} else if !ownsPlaySession(r, sessionID) {
+		// Manager.Get kills an existing session on an edition mismatch;
+		// without this, supplying a victim's session id here tore down
+		// their playback.
+		http.Error(w, "not found", 404)
+		return
 	}
 	if a.TC == nil {
 		http.Error(w, "transcode unavailable", 503)
@@ -1149,6 +1149,12 @@ func (a *API) sessionStopped(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		sid = q
+	}
+	// The body-only path resolves to the same id space; ownership applies
+	// there too, or the query check was bypassable by moving the field.
+	if sid != "" && !ownsPlaySession(r, sid) {
+		write(w, 200, map[string]bool{"ok": true})
+		return
 	}
 	if a.TC != nil && sid != "" {
 		a.TC.Close(sid)
