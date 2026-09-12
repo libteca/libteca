@@ -1,5 +1,7 @@
 # AGENTS.md
 
+Open audit items, deferred findings and their reasons live in `AUDIT_OPEN.md` at the repo root (2026-09-09→12 audit sweep). Read it before treating related work as done; update it when you close, defer, or upstream-report an item.
+
 Working on libteca? Read SPEC.md first (architecture + contracts), then
 DECISIONS.md (every non-obvious call, newest at the bottom), then PLAN.md
 status. House rules:
