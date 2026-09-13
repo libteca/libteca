@@ -482,5 +482,6 @@ backup = `libteca backup` (15g); neutron-go published (17).
    client contract, and omilator's desktop client core + settings surface.
    Edition format is `game-<platform>` (namespaced CHECK, new platforms
    need no migration). IGDB deferred (TGDB alone covers launch need).
-   Omilator library-screen browse/download/launch integration is the
-   remaining UI step (tracked in omilator's NEXT_STEPS.md).
+   Omilator library-screen browse/download/launch integration shipped
+   same day (b156761): Server page in the library pager, same grid +
+   platform filters as local games.
