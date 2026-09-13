@@ -353,10 +353,25 @@ func cbrList(p, tool string) ([]string, error) {
 	} else {
 		cmd = exec.Command("lsar", p)
 	}
-	out, err := cmd.Output()
+	// Streamed and capped: Output() buffered the extractor's complete
+	// listing, so an archive with a huge entry table consumed memory
+	// proportional to it before the page limit was ever applied.
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
 	}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	listing, rerr := io.ReadAll(io.LimitReader(stdout, 4<<20))
+	werr := cmd.Wait()
+	if rerr != nil {
+		return nil, rerr
+	}
+	if werr != nil {
+		return nil, werr
+	}
+	out := listing
 	var names []string
 	for _, line := range strings.Split(string(out), "\n") {
 		if line = strings.TrimSpace(line); line != "" {
@@ -426,15 +441,26 @@ func cbrExtract(tool, archive, name string) ([]byte, error) {
 			return nil, err
 		}
 		var tooBig bool
+		var extractedTotal int64
 		filepath.WalkDir(dir, func(p string, e os.DirEntry, err error) error {
-			if err != nil || e.IsDir() || data != nil {
+			if err != nil || e.IsDir() {
 				return nil
 			}
-			// Size-check the extracted file BEFORE reading it: unar has no
-			// streaming mode, so the on-disk stat is the earliest signal.
+			if fi, serr := e.Info(); serr == nil {
+				extractedTotal += fi.Size()
+			}
+			// unar has no streaming mode; the on-disk stat is the earliest
+			// signal, and the running total bounds multi-file spills.
+			if extractedTotal > cbrMaxCoverBytes {
+				tooBig = true
+				return filepath.SkipAll
+			}
+			if data != nil {
+				return nil
+			}
 			if fi, serr := os.Stat(p); serr == nil && fi.Size() > cbrMaxCoverBytes {
 				tooBig = true
-				return nil
+				return filepath.SkipAll
 			}
 			f, ferr := os.Open(p)
 			if ferr != nil {

@@ -1,6 +1,7 @@
 package jellyfin
 
 import (
+	"fmt"
 	"bufio"
 	"crypto/sha1"
 	"encoding/base64"
@@ -236,11 +237,51 @@ func (h *hub) broadcast(msg []byte) {
 	}
 }
 
+// broadcastPerUser fans a per-user message out to every subscribed socket:
+// the session table is user-scoped, so a global broadcast of one user's
+// view leaked other users' sessions and a global snapshot leaked everyone's.
+func (h *hub) broadcastPerUser(msgFor func(user int64) []byte) {
+	byUser := map[int64][]byte{}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for c, sub := range h.conns {
+		if !sub {
+			continue
+		}
+		u := c.user()
+		m, ok := byUser[u]
+		if !ok {
+			m = msgFor(u)
+			byUser[u] = m
+		}
+		h.deliver(c, m)
+	}
+}
+
 func (h *hub) sendTo(device string, msg []byte) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for c := range h.conns {
 		if c.device() == device {
+			h.deliver(c, msg)
+			return true
+		}
+	}
+	return false
+}
+
+// sendToOwnedBy resolves the destination socket and checks that its
+// authenticated user matches `user`, delivering in the SAME lock hold: a
+// separate authorize-then-send pair could resolve two different sockets
+// sharing one client-supplied device id.
+func (h *hub) sendToOwnedBy(device string, user int64, msg []byte) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for c := range h.conns {
+		if c.device() == device {
+			if c.user() != user {
+				return false
+			}
 			h.deliver(c, msg)
 			return true
 		}
@@ -275,20 +316,14 @@ func (h *hub) snapshot() []*liveSession {
 // never from playback rows, which are keyed by client-supplied DeviceID and
 // could be poisoned by reporting playback under someone else's device id.
 func (h *hub) deviceOwnedBy(device string, from wsClient) bool {
-	return h.socketUser(device) == from.user()
-}
-
-// socketUser returns the authenticated user of the CONNECTED socket using
-// the given device id, or -1 when no such socket exists.
-func (h *hub) socketUser(device string) int64 {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for c := range h.conns {
 		if c.device() == device {
-			return c.user()
+			return c.user() == from.user()
 		}
 	}
-	return -1
+	return false
 }
 
 func (h *hub) deviceForPlaySession(psid string) string {
@@ -462,13 +497,6 @@ func (a *API) forwardCommand(from wsClient, typ string, raw json.RawMessage) {
 	if device == "" || device == from.device() {
 		return
 	}
-	// Remote-controlling another user's device is admin territory: the
-	// session table is global, so without this check any authenticated
-	// user could drive anyone's player. The sender's own sessions define
-	// what it may target.
-	if !a.hubv().deviceOwnedBy(device, from) {
-		return
-	}
 	out, err := json.Marshal(struct {
 		MessageType string          `json:"MessageType"`
 		Data        json.RawMessage `json:"Data"`
@@ -476,7 +504,11 @@ func (a *API) forwardCommand(from wsClient, typ string, raw json.RawMessage) {
 	if err != nil {
 		return
 	}
-	a.hubv().sendTo(device, out)
+	// Remote-controlling another user's device is not any authenticated
+	// user's call. Authorization AND delivery resolve the same socket in one
+	// hub operation: separate calls could resolve two different sockets
+	// sharing a client-supplied device id.
+	a.hubv().sendToOwnedBy(device, from.user(), out)
 }
 
 type wsPlayState struct {
@@ -644,6 +676,14 @@ func (a *API) handleSocket(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(401)
 		w.Write([]byte(`{"error":"unauthorized"}`))
 		return
+	}
+	// A missing DeviceId used to fall back to a SHARED "dev-0": every
+	// idless socket of every user collided on one device id. The fallback
+	// is derived per user instead.
+	if r.URL.Query().Get("DeviceId") == "" && !reWSDeviceID.MatchString(r.Header.Get("X-Emby-Authorization")) {
+		q := r.URL.Query()
+		q.Set("DeviceId", fmt.Sprintf("dev-%d", user.ID))
+		r.URL.RawQuery = q.Encode()
 	}
 	if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") ||
 		!headerHasToken(r.Header.Get("Connection"), "upgrade") {

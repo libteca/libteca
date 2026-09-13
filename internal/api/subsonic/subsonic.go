@@ -666,12 +666,18 @@ func (a *API) updatePlaylist(w http.ResponseWriter, r *http.Request, uid int64) 
 			a.internalError(w, r, err)
 			return
 		}
+		seenRemove := map[int64]bool{}
 		for _, s := range idxs {
 			n, err := strconv.Atoi(s)
 			if err != nil || n < 0 || n >= len(items) {
 				continue // corpus: out-of-range indexes skipped, not errors
 			}
-			removeEditions = append(removeEditions, items[n].EditionID)
+			eid := items[n].EditionID
+			if seenRemove[eid] {
+				continue // duplicate index: the same row twice
+			}
+			seenRemove[eid] = true
+			removeEditions = append(removeEditions, eid)
 		}
 	}
 	var addEditions []int64
@@ -684,23 +690,16 @@ func (a *API) updatePlaylist(w http.ResponseWriter, r *http.Request, uid int64) 
 	}
 	newName := r.Form.Get("name")
 
-	for _, eid := range removeEditions {
-		if err := a.DB.RemovePlaylistItem(p.ID, eid); err != nil {
-			a.internalError(w, r, err)
-			return
-		}
-	}
-	for _, eid := range addEditions {
-		if _, err := a.DB.AddPlaylistItem(p.ID, eid); err != nil {
-			a.internalError(w, r, err)
-			return
-		}
-	}
+	// One transaction for the whole delta: duplicate removal indexes and
+	// mid-request store failures used to commit part of the request and
+	// then return an error for it.
+	var namePtr *string
 	if newName != "" {
-		if err := a.DB.RenamePlaylist(p.ID, newName); err != nil {
-			a.internalError(w, r, err)
-			return
-		}
+		namePtr = &newName
+	}
+	if err := a.DB.UpdatePlaylistDelta(p.ID, removeEditions, addEditions, namePtr); err != nil {
+		a.internalError(w, r, err)
+		return
 	}
 	a.respond(w, r, ok())
 }

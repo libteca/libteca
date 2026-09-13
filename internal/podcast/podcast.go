@@ -265,14 +265,17 @@ func (s *Service) applyFeed(ctx context.Context, p *store.Podcast, feed *Feed) e
 // pointing at already-deleted files; on-disk removal afterwards is
 // best-effort.
 func (s *Service) DeletePodcast(id int64) error {
-	p, err := s.DB.Podcast(id)
-	if err != nil {
-		return err
-	}
 	if !s.acquire(id) {
 		return ErrRefreshBusy
 	}
 	defer s.release(id)
+	// Cover state is read UNDER the slot: a refresh holding it could write a
+	// new cover after an earlier read, and the post-commit cleanup would
+	// then leave the new bytes orphaned.
+	p, err := s.DB.Podcast(id)
+	if err != nil {
+		return err
+	}
 	files, err := s.DB.FilesForPodcast(id)
 	if err != nil {
 		return err
@@ -311,6 +314,8 @@ func (s *Service) DeleteLibraryPodcasts(libID int64) error {
 	s.lifecycleMu.Lock()
 	defer s.lifecycleMu.Unlock()
 
+	// Only stable IDs are snapshotted here; covers are re-read under the
+	// slots below, after exclusion is guaranteed.
 	all, err := s.DB.Podcasts()
 	if err != nil {
 		return err
@@ -322,7 +327,11 @@ func (s *Service) DeleteLibraryPodcasts(libID int64) error {
 		}
 	}
 	if len(ids) == 0 {
-		return nil
+		// An empty podcasts library still has its row deleted: returning
+		// success here left the library undeletable once its last
+		// subscription was removed.
+		_, err := s.DB.DeletePodcastsLibrary(libID)
+		return err
 	}
 
 	// The single-flight slots are taken BEFORE any path/cover snapshot: a
@@ -349,9 +358,13 @@ func (s *Service) DeleteLibraryPodcasts(libID int64) error {
 	}()
 
 	var covers []string
-	for i := range all {
-		if all[i].LibraryID == libID {
-			if rel := derefStr(all[i].CoverPath); rel != "" {
+	fresh, err := s.DB.Podcasts()
+	if err != nil {
+		return err
+	}
+	for i := range fresh {
+		if fresh[i].LibraryID == libID {
+			if rel := derefStr(fresh[i].CoverPath); rel != "" {
 				covers = append(covers, filepath.Join(s.DataDir, "covers", rel))
 			}
 		}

@@ -60,3 +60,15 @@ Verification: go test ./... -count=1 exit 0; go test -race on podcast/jellyfin/s
 10. MEDIUM providerKeysPut partial commit - FIXED: the whole key set is validated before any write.
 
 Verification: go test ./... -count=1 exit 0; go test -race on podcast/jellyfin/subsonic/scan; web tsc - all clean (2026-09-12).
+
+## ChatGPT audit pass 5 (2026-09-12, AUDIT-CHATGPT-5.md) - all 7 fixed
+
+1. MEDIUM cover snapshot before exclusion - FIXED: DeletePodcast reads cover state under the slot; DeleteLibraryPodcasts snapshots only IDs first and re-reads covers after acquiring every slot.
+2. MEDIUM empty podcasts library undeletable - FIXED: the zero-subscription path still runs the gated DeletePodcastsLibrary transaction.
+3. HIGH session isolation residuals - FIXED: playback-update broadcasts fan out per-user (broadcastPerUser); every session id reaching Manager.Get/Close is owner-bound (bindPlaySession rewrites unprefixed ids to carry the caller's uid and drops foreign u-prefixed ids; hlsMaster's fallback mints u<uid>- ids); WS command authorization+delivery resolve the same socket in one hub operation (sendToOwnedBy); idless sockets get a per-user fallback device id instead of a shared dev-0.
+4. MEDIUM limiter bucket reset on other faces - FIXED: core, ABS, Jellyfin and OPDS all key the shared limiter by ip|username.
+5. HIGH unar/listing resource caps - FIXED: cbrList streams through a 4 MiB LimitReader; the unar walk tracks a running extracted-total ceiling and SkipAlls past the cap.
+6. MEDIUM updatePlaylist partial commit - FIXED: removals/additions/rename apply through one UpdatePlaylistDelta transaction; duplicate removal indexes dedupe against the pre-request snapshot.
+7. MEDIUM OPDS pagination overflow - FIXED: pageParam clamps to 2^26 and next-link arithmetic no longer wraps.
+
+Verification: go test ./... -count=1 exit 0; go test -race on podcast/jellyfin/subsonic/abs/opds/scan - all clean (2026-09-12).

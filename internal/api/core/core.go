@@ -136,14 +136,6 @@ var loginDummyHash = func() string {
 }()
 
 func (a *API) login(w http.ResponseWriter, r *http.Request) {
-	ip := auth.ClientIP(r)
-	if a.LoginLimiter != nil {
-		if ok, retry := a.LoginLimiter.Allow(ip); !ok {
-			auth.WriteRetryAfter(w, retry)
-			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many attempts, try again later"})
-			return
-		}
-	}
 	var body struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
@@ -151,6 +143,16 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, 400, map[string]string{"error": "bad request"})
 		return
+	}
+	// Principal-aware bucket: a success for one account must not erase the
+	// failures accumulated against another from the same IP.
+	ip := auth.ClientIP(r) + "|" + strings.ToLower(strings.TrimSpace(body.Username))
+	if a.LoginLimiter != nil {
+		if ok, retry := a.LoginLimiter.Allow(ip); !ok {
+			auth.WriteRetryAfter(w, retry)
+			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many attempts, try again later"})
+			return
+		}
 	}
 	u, err := a.DB.UserByName(body.Username)
 	if err != nil {

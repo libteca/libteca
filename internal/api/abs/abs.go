@@ -1,6 +1,7 @@
 package abs
 
 import (
+	"strings"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -49,14 +50,6 @@ func (a *API) Mount(r *neutron.Router) {
 }
 
 func (a *API) Login(w http.ResponseWriter, r *http.Request) {
-	ip := auth.ClientIP(r)
-	if a.LoginLimiter != nil {
-		if ok, retry := a.LoginLimiter.Allow(ip); !ok {
-			auth.WriteRetryAfter(w, retry)
-			fail(w, 429, "Too many attempts, try again later")
-			return
-		}
-	}
 	var body struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
@@ -64,6 +57,14 @@ func (a *API) Login(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		fail(w, 400, "Invalid request body")
 		return
+	}
+	ip := auth.ClientIP(r) + "|" + strings.ToLower(strings.TrimSpace(body.Username))
+	if a.LoginLimiter != nil {
+		if ok, retry := a.LoginLimiter.Allow(ip); !ok {
+			auth.WriteRetryAfter(w, retry)
+			fail(w, 429, "Too many attempts, try again later")
+			return
+		}
 	}
 	u, err := a.DB.UserByName(body.Username)
 	if err != nil || !auth.Verify(body.Password, u.PasswordHash) {

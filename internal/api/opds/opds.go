@@ -94,7 +94,7 @@ func (a *API) auth(h func(http.ResponseWriter, *http.Request, int64)) http.Handl
 			a.unauthorized(w)
 			return
 		}
-		ip := auth.ClientIP(r)
+		ip := auth.ClientIP(r) + "|" + strings.ToLower(strings.TrimSpace(user))
 		if a.LoginLimiter != nil {
 			if ok, retry := a.LoginLimiter.Allow(ip); !ok {
 				auth.WriteRetryAfter(w, retry)
@@ -194,6 +194,12 @@ func atomTime(ms int64) string {
 func pageParam(r *http.Request) int {
 	if v := r.URL.Query().Get("page"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			// Clamped so page*limit arithmetic cannot overflow: an int64-max
+			// page wrapped the offset negative and SQLite read from the top.
+			const maxPage = 1 << 26
+			if n > maxPage {
+				return maxPage
+			}
 			return n
 		}
 	}
@@ -269,7 +275,7 @@ func (a *API) emitAcquisition(w http.ResponseWriter, r *http.Request, id, title 
 		TotalResults: total, ItemsPerPage: pageLimit,
 	}
 	// corpus: rel="next"/"prev" follow RFC5005 names
-	if (page+1)*pageLimit < total {
+	if page*pageLimit+pageLimit < total {
 		f.Links = append(f.Links, FeedLink{Href: pageLink(r, page+1), Rel: "next", Type: typeAcq})
 	}
 	if page > 0 {

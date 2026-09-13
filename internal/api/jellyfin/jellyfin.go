@@ -146,17 +146,37 @@ func adminRequest(r *http.Request) bool {
 }
 
 // ownsPlaySession reports whether the requesting user may control a
-// generated playback session: session ids minted by playbackInfo carry
-// "u<uid>-" and belong to that user alone; admins control any.
+// playback session. EVERY session that can reach Manager.Get/Close is
+// owner-bound: ids minted by the frontend carry "u<uid>-", and any
+// client-supplied id is REBOUND to the requesting user before use, so a
+// victim's legacy/unprefixed id cannot be replayed by another user to kill
+// their transcode (Manager.Get kills on edition mismatch).
 func ownsPlaySession(r *http.Request, sid string) bool {
 	if adminRequest(r) || sid == "" {
 		return true
 	}
 	var owner int64
 	if _, err := fmt.Sscanf(sid, "u%d-", &owner); err != nil {
-		return true // not one of ours (client-generated id): legacy semantics
+		return true // rebound to this caller by bindPlaySession
 	}
 	return owner == uid(r)
+}
+
+// bindPlaySession forces owner-binding onto any session id about to reach
+// the transcode manager: foreign "u<other>-" ids are replaced outright, and
+// unprefixed/legacy ids are rewritten to carry the caller's uid.
+func bindPlaySession(r *http.Request, sid string) string {
+	if sid == "" || adminRequest(r) {
+		return sid
+	}
+	var owner int64
+	if _, err := fmt.Sscanf(sid, "u%d-", &owner); err == nil {
+		if owner == uid(r) {
+			return sid
+		}
+		return "" // foreign owned id: caller has no business touching it
+	}
+	return fmt.Sprintf("u%d-%s", uid(r), sid)
 }
 
 func requestToken(r *http.Request) string {
@@ -222,14 +242,6 @@ func (a *API) brandingStub(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) authenticate(w http.ResponseWriter, r *http.Request) {
-	ip := auth.ClientIP(r)
-	if a.LoginLimiter != nil {
-		if ok, retry := a.LoginLimiter.Allow(ip); !ok {
-			auth.WriteRetryAfter(w, retry)
-			write(w, 429, map[string]any{"error": "too many attempts, try again later"})
-			return
-		}
-	}
 	var body struct {
 		Username string `json:"Username"`
 		Pw       string `json:"Pw"`
@@ -239,6 +251,14 @@ func (a *API) authenticate(w http.ResponseWriter, r *http.Request) {
 	pass := body.Pw
 	if pass == "" {
 		pass = body.Password
+	}
+	ip := auth.ClientIP(r) + "|" + strings.ToLower(strings.TrimSpace(body.Username))
+	if a.LoginLimiter != nil {
+		if ok, retry := a.LoginLimiter.Allow(ip); !ok {
+			auth.WriteRetryAfter(w, retry)
+			write(w, 429, map[string]any{"error": "too many attempts, try again later"})
+			return
+		}
 	}
 	u, err := a.DB.UserByName(body.Username)
 	if err != nil || !auth.Verify(pass, u.PasswordHash) {
@@ -1000,16 +1020,21 @@ func (a *API) hlsMaster(w http.ResponseWriter, r *http.Request) {
 	}
 	sessionID := qget(r, "PlaySessionId")
 	if sessionID == "" {
-		sessionID = fmt.Sprintf("t%d-%d", ed.ID, time.Now().UnixMilli())
+		sessionID = fmt.Sprintf("u%d-t%d-%d", uid(r), ed.ID, time.Now().UnixMilli())
 	} else if !validHLSSessionID(sessionID) {
 		http.Error(w, "bad", 400)
 		return
-	} else if !ownsPlaySession(r, sessionID) {
-		// Manager.Get kills an existing session on an edition mismatch;
-		// without this, supplying a victim's session id here tore down
-		// their playback.
-		http.Error(w, "not found", 404)
-		return
+	} else {
+		var owner int64
+		if n, err := fmt.Sscanf(sessionID, "u%d-", &owner); err == nil && n == 1 && owner != uid(r) && !adminRequest(r) {
+			// Manager.Get kills an existing session on an edition mismatch;
+			// without this, supplying a victim's session id here tore down
+			// their playback.
+			http.Error(w, "not found", 404)
+			return
+		}
+		// Every id that reaches the manager carries the caller's uid.
+		sessionID = bindPlaySession(r, sessionID)
 	}
 	if a.TC == nil {
 		http.Error(w, "transcode unavailable", 503)
@@ -1155,6 +1180,9 @@ func (a *API) sessionStopped(w http.ResponseWriter, r *http.Request) {
 	if sid != "" && !ownsPlaySession(r, sid) {
 		write(w, 200, map[string]bool{"ok": true})
 		return
+	}
+	if sid != "" {
+		sid = bindPlaySession(r, sid)
 	}
 	if a.TC != nil && sid != "" {
 		a.TC.Close(sid)

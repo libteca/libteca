@@ -89,6 +89,35 @@ func (d *DB) CreatePlaylistWithItems(userID int64, name string, editionIDs []int
 	return playlistID, nil
 }
 
+// UpdatePlaylistDelta applies removals, additions and an optional rename in
+// ONE transaction: separate per-item commits could fail halfway (a duplicate
+// removal index, a disk error) and leave a permanently modified playlist
+// behind an error response.
+func (d *DB) UpdatePlaylistDelta(id int64, removeEditions, addEditions []int64, newName *string) error {
+	return d.Update(func(tx *Tx) error {
+		for _, eid := range removeEditions {
+			if _, err := tx.Exec(`DELETE FROM playlist_items WHERE playlist_id = ? AND edition_id = ?`, id, eid); err != nil {
+				return err
+			}
+		}
+		now := nowMilli()
+		for _, eid := range addEditions {
+			if _, err := tx.Exec(`INSERT INTO playlist_items (playlist_id, edition_id, position, added_at)
+				VALUES (?,?,coalesce((SELECT max(position) + 1 FROM playlist_items WHERE playlist_id = ?), 1), ?)
+				ON CONFLICT(playlist_id, edition_id) DO NOTHING`, id, eid, id, now); err != nil {
+				return err
+			}
+		}
+		if newName != nil {
+			if _, err := tx.Exec(`UPDATE playlists SET name = ?, updated_at = ? WHERE id = ?`, *newName, now, id); err != nil {
+				return err
+			}
+		}
+		_, err := tx.Exec(`UPDATE playlists SET updated_at = ? WHERE id = ?`, now, id)
+		return err
+	})
+}
+
 // ReplacePlaylist renames and swaps a playlist's items in one transaction:
 // the previous clear-then-add sequence destroyed the original playlist first,
 // so a later failure left it empty or partly filled with no way back.
