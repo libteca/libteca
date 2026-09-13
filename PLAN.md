@@ -267,9 +267,8 @@ client-supplied path.
 
 ## 14. Open (founder owes)
 
-0. Games library type: **PARKED, designed** — see `PLAN-GAMES.md` (DECISIONS
-   #37). Build only after gates + launch; omilator-as-RomM-client may make it
-   moot.
+0. Games library type: **SHIPPED (G1-G4, 2026-09-13)** — see `PLAN-GAMES.md`
+
 
 1. media-hub: **KEEP PARKED** (decided 2026-09-11 — no urgency).
 2. Public: **PUBLIC NOW** (decided 2026-09-11 — Subsonic face

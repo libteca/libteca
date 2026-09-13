@@ -282,7 +282,13 @@ error), no fsnotify, no providers/network metadata, no multi-user UI polish
 beyond create/revoke, no podcasts, no OPDS, no backups tooling (document
 `data/` copy), no Docker image (bare binary + systemd doc).
 
-## 9. Current state (2026-09-11, consolidated)
+## 9. Current state (2026-09-13, consolidated)
+
+Games library type added (PLAN-GAMES): fifth library type, scanner with
+platform detection (omilator-ported table), TheGamesDB provider,
+`game-<platform>` edition format namespace, core-API-only serving
+(`docs/omilator-client-contract.md`), face exclusions (Jellyfin/ABS/OPDS/
+Subsonic do not list games libraries). Omilator is the client.
 
 §1–8 above is the frozen Slice 0 contract (chi/sqlc/`/api/`/`libteca scan`
 are historical). Live ledgers: this section, PLAN status, DECISIONS,
