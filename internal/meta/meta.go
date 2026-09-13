@@ -37,7 +37,7 @@ type Provider interface {
 	Fetch(ctx context.Context, id string) (*Result, error)
 }
 
-// Kinds: movie, tv, audiobook, book, comic, music. Providers return
+// Kinds: movie, tv, audiobook, book, comic, music, game. Providers return
 // (nil, nil) for queries outside their kind.
 
 var tmdbDisabledLogOnce sync.Once
@@ -51,6 +51,9 @@ func Registry() []Provider {
 	}
 	out = append(out, NewAudible(), NewMusicBrainz(), NewOpenLibrary())
 	if p := NewComicVine(); p != nil {
+		out = append(out, p)
+	}
+	if p := NewTheGamesDB(); p != nil {
 		out = append(out, p)
 	}
 	return out

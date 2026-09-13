@@ -14,6 +14,7 @@ type providerKeyDef struct {
 var providerKeyDefs = []providerKeyDef{
 	{Name: "tmdb", Label: "TMDB", Env: "LIBTECA_TMDB_KEY", Setting: "provider:tmdb"},
 	{Name: "comicvine", Label: "ComicVine", Env: "LIBTECA_COMICVINE_KEY", Setting: "provider:comicvine"},
+	{Name: "thegamesdb", Label: "TheGamesDB", Env: "LIBTECA_THEGAMESDB_KEY", Setting: "provider:thegamesdb"},
 	{Name: "audible", Label: "Audible", Env: "", Setting: ""},
 	{Name: "musicbrainz", Label: "MusicBrainz", Env: "", Setting: ""},
 	{Name: "openlibrary", Label: "OpenLibrary", Env: "", Setting: ""},

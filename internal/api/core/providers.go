@@ -77,6 +77,8 @@ func kindForLibrary(t string) string {
 		return "book"
 	case "comics":
 		return "comic"
+	case "games":
+		return "game"
 	default:
 		return "audiobook"
 	}

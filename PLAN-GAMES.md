@@ -120,6 +120,24 @@ against fetched DAT sets → refine/merge editions. That is a future DECISIONS
 entry with its own treadmill cost stated. Until then: filenames + providers,
 95% of the value at 5% of the cost.
 
+## 0. Build record
+
+- **G1 shipped 2026-09-13** (`405b086`): scanner + migration 0011 + face
+  exclusions + web; live-binary smoke green. Migration notes that cost real
+  debugging: goose wraps migrations in a transaction where `PRAGMA
+  foreign_keys` is a no-op — `-- +goose NO TRANSACTION` makes the rebuild's
+  FK toggle real; the editions rebuild must preserve 0008's `description`
+  column and re-create 0009's `idx_editions_work` (a table drop takes its
+  indexes with it) or every later `goose down` in tests breaks.
+- **G2 shipped 2026-09-13**: TheGamesDB provider (key-gated
+  `LIBTECA_THEGAMESDB_KEY`, x-api-key header, platform tags mapped into
+  `Extra["platform"]`, boxart as cover source), `game` kind wired through
+  matching/apply, provider-key registry entry. IGDB deferred (DECISIONS
+  candidate): TGDB alone covers the launch need.
+- **G3 shipped 2026-09-13**: `docs/omilator-client-contract.md`; Range
+  verified against a 1 GiB file on a live binary (206 head/tail exact, full
+  200 exact byte count).
+
 ## 7. Size sketch (SPEC task-table style)
 
 | Phase | Content | Est. (days) |
