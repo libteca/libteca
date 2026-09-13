@@ -11,7 +11,7 @@ import {
   gridFor, libToolbar, muted, selectChevron, selectWrap, tab, tabActive, tabRow,
 } from "../styles";
 
-const TYPE_ORDER = ["movies", "tv", "music", "audiobooks", "books", "comics", "podcasts"];
+const TYPE_ORDER = ["movies", "tv", "music", "audiobooks", "books", "comics", "podcasts", "games"];
 
 const SORTS = [
   { value: "title", label: "Title" },

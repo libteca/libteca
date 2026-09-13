@@ -307,6 +307,10 @@ func (a *API) views(w http.ResponseWriter, r *http.Request) {
 	libs, _ := a.DB.Libraries()
 	items := make([]map[string]any, 0, len(libs))
 	for _, l := range libs {
+		if l.Type == "games" {
+			// No Jellyfin protocol shape for games; omilator is the client.
+			continue
+		}
 		items = append(items, map[string]any{
 			"Id": "lib" + strconv.FormatInt(l.ID, 10), "Name": l.Name,
 			"Type": "CollectionFolder", "CollectionType": collectionType(l.Type),

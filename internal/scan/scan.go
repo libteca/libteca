@@ -71,6 +71,8 @@ func Library(ctx context.Context, db *store.DB, lib *store.Library, coversDir st
 		return scanBooksLibrary(ctx, db, lib, coversDir, tr)
 	case "podcasts":
 		return 0, nil
+	case "games":
+		return scanGamesLibrary(ctx, db, lib, coversDir, tr)
 	}
 	return scanAudioLibrary(ctx, db, lib, coversDir, tr)
 }

@@ -42,7 +42,7 @@ export function debounce<A extends unknown[]>(fn: (...args: A) => void, ms: numb
 
 const TYPE_LABELS: Record<string, string> = {
   movies: "Movies", tv: "TV", music: "Music", audiobooks: "Audiobooks",
-  books: "Books", comics: "Comics", podcasts: "Podcasts",
+  books: "Books", comics: "Comics", podcasts: "Podcasts", games: "Games",
 };
 
 export function typeLabel(t: string) {
@@ -56,6 +56,11 @@ export function coverRatio(type?: string): "poster" | "square" {
 const FORMAT_LABELS: Record<string, string> = {
   m4b: "M4B", mp3: "MP3", audio: "AUDIO", video: "VIDEO",
   epub: "EPUB", cbz: "CBZ", pdf: "PDF",
+  "game-nes": "NES", "game-snes": "SNES", "game-gb": "GB", "game-gbc": "GBC",
+  "game-gba": "GBA", "game-genesis": "Genesis", "game-n64": "N64",
+  "game-psx": "PS1", "game-nds": "DS", "game-psp": "PSP",
+  "game-gamecube": "GameCube", "game-wii": "Wii", "game-n3ds": "3DS",
+  "game-ps2": "PS2", "game-dreamcast": "Dreamcast", "game-saturn": "Saturn",
 };
 
 export function formatLabel(f: string) {

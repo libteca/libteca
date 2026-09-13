@@ -161,6 +161,10 @@ func (a *API) libraries(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]map[string]any, 0, len(libs))
 	for i, l := range libs {
+		if l.Type == "games" {
+			// No ABS protocol shape for games; omilator is the client.
+			continue
+		}
 		mediaType, icon := "book", "audiobook" // corpus: 'podcast' mediaType per ABS enum, icon unverified
 		if l.Type == "podcasts" {
 			mediaType, icon = "podcast", "podcast"

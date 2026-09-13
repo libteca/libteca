@@ -72,3 +72,22 @@ Verification: go test ./... -count=1 exit 0; go test -race on podcast/jellyfin/s
 7. MEDIUM OPDS pagination overflow - FIXED: pageParam clamps to 2^26 and next-link arithmetic no longer wraps.
 
 Verification: go test ./... -count=1 exit 0; go test -race on podcast/jellyfin/subsonic/abs/opds/scan - all clean (2026-09-12).
+
+## Games library type — PLAN-GAMES G1 shipped (2026-09-13)
+
+Built per the parked design after DECISIONS #38 unparked it: scanner
+(internal/scan/games.go, platform table + disambiguation ported from
+omilator's GameSystem with its documented shared-extension preference),
+migration 0011 (libraries type CHECK widened; editions format gains the
+'game-<platform>' namespace so new platforms never need a migration — both
+tables rebuilt with NO TRANSACTION so the FK toggle is real, and the 0008
+description column + 0009 editions index are preserved both directions),
+faces exclude games libraries (jellyfin views + ABS listings; OPDS and
+Subsonic were already type-scoped), web gains the Games tab + platform
+format labels. Edition.Title carries the platform display name; the bare
+platform tag rides on files.container; work titles come from
+omilator-derived ROM filename cleanup (region/revision/tag stripping).
+
+Runtime smoke: 3 fake ROMs across sfc/gba/gen → 3 works on correct
+platforms, rescan no-op, Jellyfin views show only the book library,
+Subsonic unaffected, zero panics.
