@@ -468,4 +468,5 @@ backup = `libteca backup` (15g); neutron-go published (17).
     is the client; its RomM client mode may land first and could make this
     type unnecessary. Precondition: G1–G3 gates and launch.
     Reverse: if omilator-as-RomM-client covers the need, this never gets
-    built — and that is the preferred outcome.
+    built — and that is the preferred outcome. (Design frozen same day in
+    `PLAN-GAMES.md` — parked, not scheduled.)
