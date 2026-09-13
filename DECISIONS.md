@@ -434,3 +434,23 @@ backup = `libteca backup` (15g); neutron-go published (17).
     file rows as defense in depth.
     Reverse: none of these three reverts cleanly without reintroducing the
     audited defect.
+35. **Audit passes 3-5 closed 2026-09-12 (26 further findings).** Decisions
+    worth recording beyond the registers (`AUDIT_OPEN.md`, passes 3-5):
+    (a) Podcast-library deletion is one gated store transaction
+    (`DeletePodcastsLibrary`) covering podcast children AND the library row -
+    the API no longer deletes the row separately; single-flight slots are
+    acquired before any path/cover snapshot. (b) Jellyfin session model:
+    every playback session id is owner-bound ("u<uid>-" prefix minted by the
+    frontend, or rebound at the handler), /Sessions and WS session updates
+    are per-user views, and WS command authorization resolves and delivers to
+    the same socket in one hub operation. (c) The shared login limiter keys
+    are principal-aware (ip|username) on every face - a success for one
+    account can no longer erase another's failure bucket. (d) CBR/PDF
+    resource caps are enforced during extraction/read (kill oversize
+    children, reject instead of truncate). Reverse: each reopens a
+    demonstrated attack or resource-exhaustion path recorded in the reports.
+36. **Subsonic face verified against real clients per PLAN G-gates; runtime
+    smoke 2026-09-12 covers all four faces on a real binary** (scan of a
+    generated CBZ, watch auto-scan, core/ABS/OPDS/Subsonic/Jellyfin answers,
+    overflow guards 200-not-500, restart persistence, zero panics). Founder
+    gates G1-G3 remain the arbiter for release claims.
