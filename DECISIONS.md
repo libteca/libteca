@@ -470,3 +470,10 @@ backup = `libteca backup` (15g); neutron-go published (17).
     Reverse: if omilator-as-RomM-client covers the need, this never gets
     built — and that is the preferred outcome. (Design frozen same day in
     `PLAN-GAMES.md` — parked, not scheduled.)
+38. **PLAN-GAMES unparked by founder call (2026-09-13).** The G1
+    precondition is dropped as a blocker: the provider layer G1 would have
+    routed toward is already built and enabled, so G1's residual role is
+    acceptance testing (run after, together with G2/G3 which remain
+    founder-owned and empirical). Coupling risk accepted as low: the games
+    scanner is a new case on a staged pipeline, not shared-spine surgery;
+    worst case is a discarded scanner. Building Phase G1 now.
