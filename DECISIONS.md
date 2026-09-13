@@ -454,3 +454,18 @@ backup = `libteca backup` (15g); neutron-go published (17).
     generated CBZ, watch auto-scan, core/ABS/OPDS/Subsonic/Jellyfin answers,
     overflow guards 200-not-500, restart persistence, zero panics). Founder
     gates G1-G3 remain the arbiter for release claims.
+37. **Games as a fifth library type — PARKED, not scheduled (deliberated
+    2026-09-13).** Post-launch v2 direction only, and only at the
+    Gameyfin-simple end: game/ROM folders scanned like any other library,
+    TheGamesDB/IGDB providers via the existing provider pattern,
+    work/edition/file mapping unchanged, served over the API for
+    download-then-play. Explicitly out: DAT fingerprinting (No-Intro/Redump
+    identity) — that treadmill is RomM's forever, never libteca's; and a
+    libteca-shipped viewer app — killed in deliberation because Linux is
+    covered (Playnite runs under Wine with a bridge plugin, a native
+    Playnite port is in the works, ES-DE/Lutris are mature) and the only
+    durable gap, macOS, belongs to omilator desktop. Player story: omilator
+    is the client; its RomM client mode may land first and could make this
+    type unnecessary. Precondition: G1–G3 gates and launch.
+    Reverse: if omilator-as-RomM-client covers the need, this never gets
+    built — and that is the preferred outcome.
