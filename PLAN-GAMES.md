@@ -137,6 +137,12 @@ entry with its own treadmill cost stated. Until then: filenames + providers,
 - **G3 shipped 2026-09-13**: `docs/omilator-client-contract.md`; Range
   verified against a 1 GiB file on a live binary (206 head/tail exact, full
   200 exact byte count).
+- **G4 shipped 2026-09-13 (desktop client core)**: omilator
+  `data-library/.../LibtecaLibrarySource.kt` — contract client (discovery,
+  paging, Range-resumed download cache keyed on fileId+size, covers,
+  playtime POST) with a fake-server contract smoke on the client side.
+  Remaining: UI wiring into omilator's library screen + settings surface
+  for server URL/token (tracked in omilator's NEXT_STEPS.md).
 
 ## 7. Size sketch (SPEC task-table style)
 
