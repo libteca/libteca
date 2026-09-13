@@ -1,7 +1,7 @@
 # libteca
 
-One library, one UI. Movies, TV, music, audiobooks, podcasts, books, and comics
-from a single Go binary with an embedded SQLite store. The product is the
+One library, one UI. Movies, TV, music, audiobooks, podcasts, books, comics,
+and games from a single Go binary with an embedded SQLite store. The product is the
 first-party web UI. Four protocol faces (Jellyfin, Audiobookshelf, OPDS,
 Subsonic) are optional — existing apps are a nicety, not the target.
 
@@ -10,6 +10,13 @@ Status: RELEASE-READY (public, MIT). All codeable v1 work closed through the
 race/tx fixes, motion system, PWA, Docker image, provider keys in Admin.
 The live gate is Gate W - daily use of the web UI on a real library. No
 inherited-client cell below says "works" (Gate F pending).
+
+## Games (new)
+
+Games is a fifth library type (PLAN-GAMES): ROM folders scanned with
+platform detection, TheGamesDB metadata, and download-then-play serving
+over the core API. Omilator is the client (`docs/omilator-client-contract.md`).
+No face protocol — games are core-API only by design.
 
 ## The four faces
 

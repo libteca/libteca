@@ -477,3 +477,10 @@ backup = `libteca backup` (15g); neutron-go published (17).
     founder-owned and empirical). Coupling risk accepted as low: the games
     scanner is a new case on a staged pipeline, not shared-spine surgery;
     worst case is a discarded scanner. Building Phase G1 now.
+39. **Games library type SHIPPED 2026-09-13 (PLAN-GAMES G1-G4).** Scanner,
+   migration 0011, face exclusions, web Games tab, TheGamesDB provider,
+   client contract, and omilator's desktop client core + settings surface.
+   Edition format is `game-<platform>` (namespaced CHECK, new platforms
+   need no migration). IGDB deferred (TGDB alone covers launch need).
+   Omilator library-screen browse/download/launch integration is the
+   remaining UI step (tracked in omilator's NEXT_STEPS.md).
