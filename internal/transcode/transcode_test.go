@@ -181,7 +181,7 @@ func newSleepProcess() *sleepProcess {
 	return &sleepProcess{killed: make(chan struct{})}
 }
 func (p *sleepProcess) start() error { return nil }
-func (p *sleepProcess) wait() error  {
+func (p *sleepProcess) wait() error {
 	<-p.killed
 	return nil
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/libteca/libteca/internal/scan"
 	"github.com/libteca/libteca/internal/server"
 	"github.com/libteca/libteca/internal/store"
+	"github.com/libteca/libteca/internal/transcode"
 	"github.com/libteca/libteca/internal/watch"
 )
 
@@ -40,6 +41,7 @@ func main() {
 	}
 
 	data := flag.String("data", "./data", "data directory")
+	host := flag.String("host", "", "listen host (default all interfaces)")
 	port := flag.Int("port", 8096, "listen port")
 	initAdmin := flag.String("init-admin", "", "create admin as name:password")
 	scanOnly := flag.Bool("scan", false, "scan all libraries then exit")
@@ -51,6 +53,34 @@ func main() {
 	if *showVersion {
 		fmt.Println(version)
 		return
+	}
+
+	// An explicitly supplied flag wins over the environment: the old
+	// block let LIBTECA_WATCH overwrite a deliberate --watch=false, and
+	// invalid env values were silently ignored.
+	watchWasSet := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "watch" {
+			watchWasSet = true
+		}
+	})
+	if !watchWasSet {
+		if raw, ok := os.LookupEnv("LIBTECA_WATCH"); ok {
+			parsed, err := strconv.ParseBool(raw)
+			if err != nil {
+				fatal(fmt.Errorf("LIBTECA_WATCH: %w", err))
+			}
+			*watchEnabled = parsed
+		}
+	}
+	if *port < 1 || *port > 65535 {
+		fatal(fmt.Errorf("port must be 1..65535"))
+	}
+	if *hwaccel == "" {
+		*hwaccel = os.Getenv("LIBTECA_HWACCEL")
+	}
+	if *hwaccel != "" && !transcode.ValidAccel(*hwaccel) {
+		fatal(fmt.Errorf("unknown hwaccel %q", *hwaccel))
 	}
 
 	abs, err := filepath.Abs(*data)
@@ -117,14 +147,14 @@ func main() {
 	}
 	startWorker(func() { podcasts.Run(ctx) })
 
-	if v := os.Getenv("LIBTECA_WATCH"); v != "" {
-		if parsed, err := strconv.ParseBool(v); err == nil {
-			*watchEnabled = parsed
-		}
-	}
 	if *watchEnabled {
 		sweep := 6 * time.Hour
-		if v, err := strconv.Atoi(os.Getenv("LIBTECA_SWEEP")); err == nil && v >= 0 {
+		if raw, ok := os.LookupEnv("LIBTECA_SWEEP"); ok {
+			v, err := strconv.ParseInt(raw, 10, 64)
+			maxSeconds := int64(^uint64(0) >> 1 / uint64(time.Second))
+			if err != nil || v < 0 || v > maxSeconds {
+				fatal(fmt.Errorf("LIBTECA_SWEEP must be a nonnegative, representable number of seconds"))
+			}
 			if v == 0 {
 				sweep = 0
 			} else {
@@ -136,7 +166,7 @@ func main() {
 	}
 
 	h := &http.Server{
-		Addr: fmt.Sprintf(":%d", *port),
+		Addr: net.JoinHostPort(*host, strconv.Itoa(*port)),
 		// Requests get the shutdown context: in-flight work observes
 		// cancellation instead of running past the close sequence below.
 		BaseContext: func(net.Listener) context.Context { return ctx },
@@ -154,7 +184,7 @@ func main() {
 	// shutdown, worker drain and transcode cleanup with process exit.
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- h.ListenAndServe() }()
-	fmt.Printf("libteca %s listening on :%d (data: %s)\n", version, *port, abs)
+	fmt.Printf("libteca %s listening on %s (data: %s)\n", version, h.Addr, abs)
 
 	var listenErr error
 	select {
