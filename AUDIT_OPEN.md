@@ -147,16 +147,23 @@ Deferred (product/architecture decisions, not contained fixes):
   revocable Subsonic-only app secret - is a deliberate protocol/credential
   migration that needs a founder decision and client-compat verification.
   Interim posture: the captured secret is hash-validated on every use and
-  dropped on rotation (already the case).
+  dropped on rotation (already the case). Audit 7's F02 re-raises this with
+  the same evidence base; the deferral stands.
 - **F09 token digests at rest + expiry policy (MEDIUM):** storing sha256
   instead of raw values requires rewriting every token reader/writer plus a
   data migration in one atomic pass (half-applied = lockout), and an expiry
   policy for interactive vs device tokens is a product decision. Revisit
-  together with F04's credential work.
+  together with F04's credential work. Audit 7's F14 (binding ABS playback
+  session URLs to their issuing token plus a fixed expiry) is the same
+  credential-lifecycle family; that deferral covers it too.
 - **F15 per-snapshot cover generations (MEDIUM, durability half fixed):**
   switching backups/ to generation directories changes the on-disk layout,
   restore procedure and retention docs - a product decision. Durability
-  (fsync, checked closes, non-regular rejection) is fixed in place.
+  (fsync, checked closes, non-regular rejection) is fixed in place. Audit
+  7's F05 adds materially to the in-place half - publication now happens
+  only after the covers copy completes, per-cover copies are atomic
+  replaces, and the whole snapshot/retention operation holds a cross-process
+  flock - so the residual is purely the shared-covers layout decision.
 - **F25 durable scan-terminal outbox:** bounded retry + startup
   reconciliation (FailRunningScanJobs) already bound the stuck-job window
   to one restart; an outbox is beyond a single-node server's needs.
@@ -171,3 +178,106 @@ pre-existing and untouched.
 Verification: go vet ./... clean; go test ./... -count=1 green across
 repeated full runs; go test -race ./... -timeout 600s green; web npx tsc
 --noEmit + npm run build clean (2026-09-17).
+
+## ChatGPT audit pass 7 (2026-09-17, AUDIT-CHATGPT-7.md) - 41 of 50 fixed, 6 partial, 3 deferred
+
+Fixed (verified against source first; `audit 7-NN` commits):
+
+1. F01 HIGH unbounded login bodies - FIXED: 32 KiB MaxBytesReader + checked decode (413 on overflow, 400 on malformed) on ABS login and Jellyfin authenticate; 1 MiB caps on the mutating ABS/Jellyfin bodies.
+2. F03 HIGH library path escape - FIXED: scanners register only regular files (symlinks/FIFOs skipped, walk errors fail the scan); every media open goes through os.Root confinement (internal/mediafs) resolved from the file's library - core stream/subtitles, ABS tracks + podcast episodes, Jellyfin streams. Residual: ffmpeg/ffprobe children open source paths directly, bounded by the scan-time regular-file check.
+3. F04 HIGH concurrent retention removes all backups - FIXED: snapshot/publication/retention under a cross-process flock on a kept .backup.lock.
+4. F06 HIGH podcast filename fallback overwrite - FIXED: ownership checked at every fallback (errors fail the download), final fallback is a random nonce name, publication is link-no-replace; only self-owned or orphan files may be replaced.
+5. F07 HIGH CBR listing deadlock - FIXED: cap+1 read, overflow/read error kills the child, 30s deadline, Wait called exactly once.
+6. F10 HIGH trickplay bypasses limits - FIXED: process-wide 2-slot generation budget shared by all Generator instances (ErrBusy -> 503 + Retry-After), widths restricted to 160/320 (others 400).
+7. F11 HIGH HLS resume timeline - FIXED (web): no server-side start truncation; hls.js resumes via startPosition, native HLS via seekable-range restore against the full edition timeline.
+8. F12 MEDIUM sign-out leaves token valid - FIXED: POST /api/core/logout revokes the exact request token; web sign-out calls it (with an offline warning) before clearing storage.
+9. F13 MEDIUM stale password change - FIXED: RotatePasswordChecked does hash-CAS update + token revocation + session close + subsonic secret drop in one tx; self-service passes the verified hash (409 on stale), only admin resets pass nil; both user-delete variants drop the secret too.
+10. F15 MEDIUM username-cycling limiter bypass - FIXED: per-IP aggregate bucket (30 failures, not cleared by success) on core/ABS/Jellyfin/OPDS/Subsonic; Subsonic's unknown-user and bad-enc branches now register failures like every other path.
+11. F16 MEDIUM public cache-control on authenticated assets - FIXED: OPDS covers/thumbs/PSE pages and the ABS cover answer `private, max-age` (query-keyed Jellyfin image URLs keep public, matching upstream Jellyfin).
+12. F18 MEDIUM disc interleave - FIXED: audiobook groups sort by natural root-relative path.
+13. F20 MEDIUM warm-music ordinals - FIXED: positions come from the complete ordered album; unchanged tracks get their stored edition's position repaired in the same tx; UpsertEdition updates position only when provided.
+14. F21 MEDIUM game update reorders discs - FIXED: same-edition updates keep their seq; max(seq)+1 only for genuinely new files.
+15. F22 HIGH failed walks as success - FIXED: walk/info errors fail the scan; unavailable or non-directory roots are refused before enumeration.
+16. F23 MEDIUM reconcile only in watcher - FIXED: reconciliation (MarkMissingLibraryFiles, ErrNotExist-only) runs inside the shared scan path after every complete scan - HTTP, watcher and CLI alike.
+17. F24 MEDIUM sampled hash as identity - FIXED (bounded): relink requires same library + equal recorded size + row already flagged missing by reconciliation; ambiguous matches insert fresh rows. Residual: the old bytes are gone by then, so a same-size/same-ends collision on a missing row cannot be content-verified - documented rather than hidden.
+18. F25 MEDIUM stat errors as disappearance - FIXED: only fs.ErrNotExist counts; other stat errors abort the relink; candidates scoped to the destination library.
+19. F26 MEDIUM overlapping roots - FIXED: addLibrary rejects duplicate/ancestor/descendant roots (symlink-resolved + SameFile), 409.
+20. F28 MEDIUM killed launch skips Wait - FIXED: launch/kill serialized by a lifecycle mutex; a waiter starts after EVERY successful start; kill waits (bounded 2s) for exit before removing output and preserves the directory on timeout.
+21. F29 MEDIUM expired session silently recreated - FIXED: Manager.Existing for segment fetches; expired sessions answer 410 and the client's retry bootstraps a fresh session.
+22. F30 MEDIUM direct resume gated on HLS capability - FIXED (web): resume keyed on the selected playback mode.
+23. F31 MEDIUM blank hls.js player - FIXED (web): bounded network/media error recovery, fatal errors surface with a retry action, loading/error UI no longer depends on a literal src, boot rejections render.
+24. F32 MEDIUM rewind stops periodic saves - FIXED (web): wall-clock 10s cadence + forced save on seeked.
+25. F33 MEDIUM false-success saves - FIXED (web): apiChecked throws on error-shaped responses; reader saver and video save use it; video dedup watermark advances only after ack.
+26. F34 MEDIUM PDF close undoes finished - FIXED: Finished is *bool with PATCH semantics (omission preserves, explicit false reopens) atomic in the upsert; the PDF reader only posts after real user edits.
+27. F35 MEDIUM CBZ ordering divergence - FIXED: one byte-based natural comparator (internal/natural) in scan/OPDS/importer and its exact TypeScript port in the reader; .jxl dropped from the web list (server never counted it).
+28. F36 LOW unguarded localStorage - FIXED (web): guarded boot token read and validated playback-rate init.
+29. F37 MEDIUM close-before-progress - FIXED: CloseSessionWithProgress commits final progress + close (+ listened delta) in one idempotent transaction.
+30. F38 MEDIUM truncated track offsets + duplicate chapter ids - FIXED: float-second cumulative offsets in play() and itemPayload; chapter ids unique across the whole response.
+31. F39 MEDIUM season zero = no filter - FIXED: *int sentinel; specials requests return only season 0; malformed SeasonId is 400.
+32. F40 MEDIUM double JSON document - FIXED: saveFromSession owns the response; rejection branches just skip teardown.
+33. F41 MEDIUM compat progress without validation - FIXED: shared store.ValidPosition (non-finite/negative rejection, duration bound +5s tolerance, 30-day unknown-duration cap) on ABS progress/sync/close and Jellyfin session saves; progress fraction > 1 rejected before multiplication.
+34. F42 MEDIUM importer 10 before 2 - FIXED via internal/natural (regression-tested).
+35. F43 LOW unescaped foreign DSN - FIXED: net/url-built file URI; read-only verified behind URI-significant filenames.
+36. F45 MEDIUM parallel release embeds stale web - FIXED: release-% depends on web directly.
+37. F46 MEDIUM unknown-length downloads at 90s - FIXED: unknown Content-Length gets the 2h ceiling; size-derived deadlines round up.
+38. F47 LOW inconsistent admin-creation validation - FIXED: shared ValidateCredentials/ValidatePassword (trim/bounds/control chars, password 8-1024) in initialization, creation and rotation; validation failures are 400, only real KDF capacity is 429.
+39. F48 LOW watcher overflow unhandled - FIXED: fsnotify overflow marks every library dirty (lost events recover via rescan); child watches are retried even when the root is armed.
+40. F49 LOW README password rejected - FIXED: quick start uses a valid placeholder and states the minimum.
+41. F50 MEDIUM false metadata success - FIXED: episode title/description write failures surface (joined error + partial counts); cover summary requires the DB link; an existing cover file now repairs a missing link instead of reporting nothing-to-do.
+
+Partial (in-place fixes shipped, remainder needs product/schema work):
+
+- **F05 backup generations:** DB snapshots publish only after the covers copy
+  completes and each cover is replaced atomically; generations still SHARE
+  one covers/ directory (pass-6 F15 deferral above).
+- **F08 cancellable/bounded probes:** ffprobe is context-bound with a 60s
+  deadline and a 4 MiB output cap that kills the child; CBR listing and the
+  unar extraction are deadline-bound; cover extraction carries a 2-minute
+  deadline. The transcode hwaccel startup probe and a real disk quota for
+  unar extraction (vs the post-hoc total cap) remain.
+- **F09 cover decode budget:** OPDS thumbnails preflight dimensions via
+  DecodeConfig (16384px/16MP caps), read bounded, and decode under a
+  2-slot budget with pass-through degradation; scanner sidecar reads are
+  bounded. Re-encoding arbitrary stored cover bytes to their true format
+  (vs the .jpg naming convention) is not done.
+- **F17 identity collapse:** root-level media files now group per-file
+  instead of collapsing into the library identity, but the full
+  source-key/edition-identity redesign (same-title editions, tag-driven
+  reparenting) is architectural - see below.
+- **F27 same-second changes:** files carry mtime_ns (migration 0012; legacy
+  rows re-probe once). A sidecar fingerprint (NFO/cover-only edits) needs a
+  per-type definition of relevant sidecars and is deferred with F17's
+  metadata work.
+- **F44 derived assets:** trickplay publishes behind a COMPLETE marker and
+  regenerates partial directories instead of treating 0.jpg as done.
+  Versioned cache keys (stale thumbnails/trickplay after source changes)
+  remain open - they tie into F17's content-versioning.
+
+Deferred (architectural/product decisions, not contained fixes):
+
+- **F02 plaintext subsonic password (HIGH):** pass-6 F04 deferral stands
+  (see above).
+- **F14 ABS playback URLs not bound to token/expiry (MEDIUM):** pass-6 F09
+  credential-lifecycle deferral covers it (see above).
+- **F17 scanner identity redesign (HIGH, library integrity):** title/author
+  match keys currently define work and edition identity (works unique
+  index on lower(title)+author; editions matched on format+title). Moving
+  to source keys means a schema migration, a repair plan for already
+  collapsed records (progress cannot be split blindly), and retiring the
+  title-match unique index across every upsert caller - a founder-level
+  data-model decision, not a contained fix. The contained root-level
+  grouping defect IS fixed (item 2 above).
+- **F19 alternate encodings concatenated / M4A mislabel (MEDIUM):** proper
+  variant partition (complete M4B vs MP3 track set of the same book) is the
+  same identity work as F17; the edition format CHECK constraint also gates
+  new format values behind a migration.
+
+Also noted: audit 7's H01-H08 are engineering recommendations rather than
+findings; H02 (container USER), H03 (npm ci in Docker/Make), H04 (browser
+E2E suite) and H06 (provider artwork egress policy) remain open ideas, H05
+disk/memory budgets partially follow from F10, H07 (data-dir lock) and H08
+(work-scoped progress reads) are candidates for the next pass.
+
+Verification: go vet ./... clean; go test ./... -count=1 green; go test
+-race ./... -timeout 600s green; web npx tsc --noEmit + npm run build clean
+(2026-09-17).
