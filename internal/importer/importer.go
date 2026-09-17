@@ -10,12 +10,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/libteca/libteca/internal/auth"
+	"github.com/libteca/libteca/internal/natural"
 	"github.com/libteca/libteca/internal/store"
 	_ "modernc.org/sqlite"
 )
@@ -56,7 +58,16 @@ func (p *Plan) warnf(format string, args ...any) {
 // server holding a hot WAL can block recovery on a read-only handle; stop the
 // server (or import a copy) in that case.
 func openForeign(path string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro&_pragma=busy_timeout(5000)")
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	u := &url.URL{Scheme: "file", Path: filepath.ToSlash(absolute)}
+	q := url.Values{}
+	q.Set("mode", "ro")
+	q.Add("_pragma", "busy_timeout(5000)")
+	u.RawQuery = q.Encode()
+	db, err := sql.Open("sqlite", u.String())
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +116,7 @@ func audioPathsIn(dir string) []string {
 		}
 		return nil
 	})
-	sort.Slice(names, func(i, j int) bool { return natLess(names[i], names[j]) })
+	sort.Slice(names, func(i, j int) bool { return natural.Less(names[i], names[j]) })
 	out := make([]string, 0, len(names))
 	for _, n := range names {
 		if _, err := os.Stat(n); err == nil {
@@ -114,41 +125,6 @@ func audioPathsIn(dir string) []string {
 	}
 	return out
 }
-
-func natLess(a, b string) bool {
-	for i := 0; i < len(a) && i < len(b); i++ {
-		ca, cb := a[i], b[i]
-		if ca == cb {
-			continue
-		}
-		ai, bi := isDigit(ca), isDigit(cb)
-		switch {
-		case ai && bi:
-			na := natNum(a[i:])
-			nb := natNum(b[i:])
-			if na != nb {
-				return na < nb
-			}
-		case ai:
-			return false
-		case bi:
-			return true
-		default:
-			return ca < cb
-		}
-	}
-	return len(a) < len(b)
-}
-
-func natNum(s string) string {
-	i := 0
-	for i < len(s) && isDigit(s[i]) {
-		i++
-	}
-	return strings.TrimLeft(s[:i], "0") + "|" + s[i:]
-}
-
-func isDigit(c byte) bool { return c >= '0' && c <= '9' }
 
 func tempPassword() string {
 	b := make([]byte, 6)

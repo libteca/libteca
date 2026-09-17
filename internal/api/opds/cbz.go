@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/libteca/libteca/internal/natural"
 )
 
 // CBZ page listing/extraction. Mirrors probeCBZ in internal/scan/books.go
@@ -28,7 +30,7 @@ func cbzPageNames(zr *zip.Reader) []string {
 		}
 		names = append(names, f.Name)
 	}
-	sort.Slice(names, func(i, j int) bool { return natLess(names[i], names[j]) })
+	sort.Slice(names, func(i, j int) bool { return natural.Less(names[i], names[j]) })
 	return names
 }
 
@@ -47,38 +49,3 @@ func readZipPage(zr *zip.Reader, name string) ([]byte, error) {
 	}
 	return data, nil
 }
-
-// natLess is the same natural-order comparison as internal/scan/scan.go
-// (digit runs compare numerically after stripping leading zeros).
-func natLess(a, b string) bool {
-	ai, bi := 0, 0
-	for ai < len(a) && bi < len(b) {
-		ca, cb := a[ai], b[bi]
-		if isDigit(ca) && isDigit(cb) {
-			na, nj := ai, bi
-			for na < len(a) && isDigit(a[na]) {
-				na++
-			}
-			for nj < len(b) && isDigit(b[nj]) {
-				nj++
-			}
-			da, db := strings.TrimLeft(a[ai:na], "0"), strings.TrimLeft(b[bi:nj], "0")
-			if len(da) != len(db) {
-				return len(da) < len(db)
-			}
-			if da != db {
-				return da < db
-			}
-			ai, bi = na, nj
-			continue
-		}
-		if ca != cb {
-			return ca < cb
-		}
-		ai++
-		bi++
-	}
-	return len(a)-ai < len(b)-bi
-}
-
-func isDigit(c byte) bool { return c >= '0' && c <= '9' }

@@ -12,6 +12,7 @@ import (
 	"github.com/cespare/xxhash/v2"
 
 	"github.com/libteca/libteca/internal/audio"
+	"github.com/libteca/libteca/internal/natural"
 	"github.com/libteca/libteca/internal/store"
 )
 
@@ -146,7 +147,7 @@ func scanAudioLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 			return count, cerr
 		}
 		group := groups[top]
-		sort.Slice(group, func(i, j int) bool { return natLess(group[i].name, group[j].name) })
+		sort.Slice(group, func(i, j int) bool { return natural.Less(relPath(top, group[i].path), relPath(top, group[j].path)) })
 		if err := scanBook(db, lib, top, group, coversDir, tr); err != nil {
 			fmt.Fprintf(os.Stderr, "libteca: skip %s: %v\n", top, err)
 			continue
@@ -342,38 +343,15 @@ func titleAuthor(top string, f bookFile) (string, string) {
 	return base, ""
 }
 
-func natLess(a, b string) bool {
-	ai, bi := 0, 0
-	for ai < len(a) && bi < len(b) {
-		ca, cb := a[ai], b[bi]
-		if isDigit(ca) && isDigit(cb) {
-			na, nj := ai, bi
-			for na < len(a) && isDigit(a[na]) {
-				na++
-			}
-			for nj < len(b) && isDigit(b[nj]) {
-				nj++
-			}
-			da, db := strings.TrimLeft(a[ai:na], "0"), strings.TrimLeft(b[bi:nj], "0")
-			if len(da) != len(db) {
-				return len(da) < len(db)
-			}
-			if da != db {
-				return da < db
-			}
-			ai, bi = na, nj
-			continue
-		}
-		if ca != cb {
-			return ca < cb
-		}
-		ai++
-		bi++
-	}
-	return len(a)-ai < len(b)-bi
-}
+func natLess(a, b string) bool { return natural.Less(a, b) }
 
-func isDigit(c byte) bool { return c >= '0' && c <= '9' }
+func relPath(base, path string) string {
+	rel, err := filepath.Rel(base, path)
+	if err != nil {
+		return path
+	}
+	return filepath.ToSlash(rel)
+}
 
 func nullable(s string) string {
 	if s == "" {
