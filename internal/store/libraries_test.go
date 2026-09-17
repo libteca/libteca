@@ -150,20 +150,59 @@ func TestDeleteLibraryPodcasts(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	fileID, err := db.InsertPodcastFile("/data/podcasts/1/ep.mp3", 10, 0, "h", 0, "mp3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.LinkEpisodeFile(eps[0].ID, fileID); err != nil {
+		t.Fatal(err)
+	}
+	otherLib, err := db.AddLibrary("pods2", "podcasts", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherPod, err := db.AddPodcast(&store.Podcast{LibraryID: otherLib, FeedURL: "http://x/2", Title: "P2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	title2 := "ep2"
+	if _, err := db.UpsertPodcastEpisode(&store.PodcastEpisode{PodcastID: otherPod, GUID: "g2", Title: &title2, EnclosureURL: "http://x/2.mp3"}); err != nil {
+		t.Fatal(err)
+	}
+	otherEps, err := db.PodcastEpisodes(otherPod)
+	if err != nil || len(otherEps) != 1 {
+		t.Fatalf("other episodes = %v %v", otherEps, err)
+	}
+	otherFileID, err := db.InsertPodcastFile("/data/podcasts/2/ep.mp3", 10, 0, "h2", 0, "mp3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.LinkEpisodeFile(otherEps[0].ID, otherFileID); err != nil {
+		t.Fatal(err)
+	}
+
 	if err := db.DeleteLibrary(libID); err != nil {
 		t.Fatal(err)
 	}
 	var n int
 	db.QueryRow(`SELECT COUNT(*) FROM podcasts`).Scan(&n)
-	if n != 0 {
-		t.Fatalf("podcasts = %d", n)
+	if n != 1 {
+		t.Fatalf("podcasts = %d, want the other library's podcast", n)
 	}
-	db.QueryRow(`SELECT COUNT(*) FROM podcast_episodes`).Scan(&n)
+	db.QueryRow(`SELECT COUNT(*) FROM podcast_episodes WHERE podcast_id = ?`, podID).Scan(&n)
 	if n != 0 {
 		t.Fatalf("episodes = %d", n)
 	}
 	db.QueryRow(`SELECT COUNT(*) FROM podcast_episode_progress`).Scan(&n)
 	if n != 0 {
 		t.Fatalf("episode_progress = %d", n)
+	}
+	db.QueryRow(`SELECT COUNT(*) FROM files WHERE id = ?`, fileID).Scan(&n)
+	if n != 0 {
+		t.Fatal("deleted library's episode-linked file row orphaned in files")
+	}
+	db.QueryRow(`SELECT COUNT(*) FROM files WHERE id = ?`, otherFileID).Scan(&n)
+	if n != 1 {
+		t.Fatal("other library's podcast file must survive")
 	}
 }

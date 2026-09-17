@@ -103,15 +103,37 @@ func (d *DB) DeleteLibrary(id int64) error {
 		if _, err := tx.Exec(`DELETE FROM podcast_episode_progress WHERE episode_id IN (`+eps+`)`, id); err != nil {
 			return err
 		}
-		// Episode rows hold the FK to files, so episodes go FIRST and the
-		// now-unreferenced file rows SECOND - the previous order tripped the
-		// foreign key on every library that still had downloaded episodes.
+		// File ids MUST be captured before the episode rows go: episode rows
+		// hold the FK to files, and selecting file_id from already-deleted
+		// episodes matched nothing, leaving podcast file rows orphaned
+		// (podcast files have edition_id NULL, so the edition-based delete
+		// never covered them).
+		frows, err := tx.Query(`SELECT DISTINCT file_id FROM podcast_episodes
+			WHERE podcast_id IN (`+pods+`) AND file_id IS NOT NULL`, id)
+		if err != nil {
+			return err
+		}
+		var fileIDs []int64
+		for frows.Next() {
+			var fid int64
+			if err := frows.Scan(&fid); err != nil {
+				frows.Close()
+				return err
+			}
+			fileIDs = append(fileIDs, fid)
+		}
+		frows.Close()
+		if err := frows.Err(); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(`DELETE FROM podcast_episodes WHERE podcast_id IN (`+pods+`)`, id); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(`DELETE FROM files WHERE id IN (
-			SELECT file_id FROM podcast_episodes WHERE podcast_id IN (`+pods+`) AND file_id IS NOT NULL)`, id); err != nil {
-			return err
+		for _, fid := range fileIDs {
+			if _, err := tx.Exec(`DELETE FROM files WHERE id = ? AND edition_id IS NULL
+				AND NOT EXISTS (SELECT 1 FROM podcast_episodes WHERE file_id = files.id)`, fid); err != nil {
+				return err
+			}
 		}
 		if _, err := tx.Exec(`DELETE FROM podcasts WHERE library_id = ?`, id); err != nil {
 			return err
