@@ -31,6 +31,23 @@ type Response struct {
 	SearchResult3 *SearchResult3     `xml:"searchResult3,omitempty" json:"searchResult3,omitempty"`
 	Playlists     *Playlists         `xml:"playlists,omitempty" json:"playlists,omitempty"`
 	Playlist      *PlaylistWithSongs `xml:"playlist,omitempty" json:"playlist,omitempty"`
+	Starred2      *Starred2          `xml:"starred2,omitempty" json:"starred2,omitempty"`
+	AlbumInfo     *AlbumInfo         `xml:"albumInfo,omitempty" json:"albumInfo,omitempty"`
+}
+
+type Starred2 struct {
+	Artist []ArtistID3 `xml:"artist,omitempty" json:"artist,omitempty"`
+	Album  []AlbumID3  `xml:"album,omitempty" json:"album,omitempty"`
+	Song   []Child     `xml:"song,omitempty" json:"song,omitempty"`
+}
+
+type AlbumInfo struct {
+	Notes          *string `xml:"notes,omitempty" json:"notes,omitempty"`
+	MusicBrainzID  *string `xml:"musicBrainzId,omitempty" json:"musicBrainzId,omitempty"`
+	LastFmUrl      *string `xml:"lastFmUrl,omitempty" json:"lastFmUrl,omitempty"`
+	SmallImageUrl  *string `xml:"smallImageUrl,omitempty" json:"smallImageUrl,omitempty"`
+	MediumImageUrl *string `xml:"mediumImageUrl,omitempty" json:"mediumImageUrl,omitempty"`
+	LargeImageUrl  *string `xml:"largeImageUrl,omitempty" json:"largeImageUrl,omitempty"`
 }
 
 type Error struct {

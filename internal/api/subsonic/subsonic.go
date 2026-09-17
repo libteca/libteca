@@ -279,20 +279,29 @@ func (a *API) ping(w http.ResponseWriter, r *http.Request, _ int64) {
 	a.respond(w, r, ok())
 }
 
+// savePlayQueue is not persisted: reporting ok() let clients trust a save
+// that never happened. Until queue storage exists, the honest answer is the
+// protocol's unsupported-operation error.
 func (a *API) savePlayQueue(w http.ResponseWriter, r *http.Request, _ int64) {
-	a.respond(w, r, ok())
+	a.respond(w, r, errResponse(errNotImplemented, "Play queue persistence is not implemented"))
 }
 
+// Nothing is ever starred server-side, so the truthful payload is an empty
+// starred set rather than a bare ok() that omits the element clients parse.
 func (a *API) getStarred2(w http.ResponseWriter, r *http.Request, _ int64) {
-	a.respond(w, r, ok())
+	resp := ok()
+	resp.Starred2 = &Starred2{}
+	a.respond(w, r, resp)
 }
 
 func (a *API) getPlayQueue(w http.ResponseWriter, r *http.Request, _ int64) {
-	a.respond(w, r, ok())
+	a.respond(w, r, errResponse(errNotImplemented, "Play queue retrieval is not implemented"))
 }
 
 func (a *API) getAlbumInfo2(w http.ResponseWriter, r *http.Request, _ int64) {
-	a.respond(w, r, ok())
+	resp := ok()
+	resp.AlbumInfo = &AlbumInfo{}
+	a.respond(w, r, resp)
 }
 
 func (a *API) getOpenSubsonicExtensions(w http.ResponseWriter, r *http.Request, _ int64) {

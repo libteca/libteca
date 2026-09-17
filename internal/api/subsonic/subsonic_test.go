@@ -760,3 +760,44 @@ func TestPlaylistMissingIDReturns70(t *testing.T) {
 		}
 	}
 }
+
+func TestQueueEndpointsHonest(t *testing.T) {
+	e := newEnv(t)
+	if rec := e.get(t, "/rest/ping.view?"+plainAuth+"&f=json"); decode(t, rec)["status"] != "ok" {
+		t.Fatalf("plain login failed: %s", rec.Body.String())
+	}
+	salt := "NaCl"
+	token := fmt.Sprintf("%x", md5.Sum([]byte("secret"+salt)))
+	authQ := "u=tyler&t=" + token + "&s=" + salt
+
+	rec := e.get(t, "/rest/savePlayQueue.view?"+authQ+"&id=so-1&position=10&f=json")
+	sr := decode(t, rec)
+	if sr["status"] != "failed" || subMap(t, sr, "error")["code"].(float64) != 50 {
+		t.Fatalf("savePlayQueue must report not-implemented: %s", rec.Body.String())
+	}
+	rec = e.get(t, "/rest/getPlayQueue.view?"+authQ+"&f=json")
+	sr = decode(t, rec)
+	if sr["status"] != "failed" || subMap(t, sr, "error")["code"].(float64) != 50 {
+		t.Fatalf("getPlayQueue must report not-implemented: %s", rec.Body.String())
+	}
+}
+
+func TestStarred2AndAlbumInfoShape(t *testing.T) {
+	e := newEnv(t)
+	rec := e.rest(t, "getStarred2", "f=json")
+	sr := decode(t, rec)
+	if sr["status"] != "ok" {
+		t.Fatalf("getStarred2: %s", rec.Body.String())
+	}
+	if _, ok := sr["starred2"].(map[string]any); !ok {
+		t.Fatalf("getStarred2 must carry a starred2 element: %s", rec.Body.String())
+	}
+	rec = e.rest(t, "getAlbumInfo2", "f=json&id=al-1")
+	sr = decode(t, rec)
+	if sr["status"] != "ok" {
+		t.Fatalf("getAlbumInfo2: %s", rec.Body.String())
+	}
+	if _, ok := sr["albumInfo"].(map[string]any); !ok {
+		t.Fatalf("getAlbumInfo2 must carry an albumInfo element: %s", rec.Body.String())
+	}
+}
