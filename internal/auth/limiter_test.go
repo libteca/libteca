@@ -118,10 +118,13 @@ func TestLimiterSeparateIPs(t *testing.T) {
 }
 
 func TestLimiterMaxIPs(t *testing.T) {
-	l, _ := newTestLimiter()
+	l, c := newTestLimiter()
 	l.maxIPs = 3
+	// Distinct timestamps: identical lastSeen values made eviction depend on
+	// map iteration order and the test flake on the oldest-entry assertion.
 	for _, ip := range []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"} {
 		l.Failure(ip)
+		c.advance(time.Minute)
 	}
 	l.Failure("10.0.0.4")
 	if len(l.entries) != l.maxIPs {
