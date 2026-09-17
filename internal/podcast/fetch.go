@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -205,28 +206,36 @@ func parseDateMs(s string) int64 {
 	return 0
 }
 
-// parseDurationSecs accepts "SS", "MM:SS", "HH:MM:SS" (fractional allowed).
+// parseDurationSecs accepts "SS", "MM:SS", "HH:MM:SS" (fractional allowed,
+// one to three fields). Non-finite, negative, over-59 sub-fields, more than
+// three components and totals beyond 30 days parse as 0 - the established
+// unknown-duration convention: a feed-supplied "NaN" used to flow straight
+// into episode metadata and progress arithmetic.
 func parseDurationSecs(s string) float64 {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return 0
 	}
-	if strings.Contains(s, ":") {
-		var total float64
-		for _, part := range strings.Split(s, ":") {
-			v, err := strconv.ParseFloat(strings.TrimSpace(part), 64)
-			if err != nil {
-				return 0
-			}
-			total = total*60 + v
-		}
-		return total
-	}
-	v, err := strconv.ParseFloat(s, 64)
-	if err != nil {
+	parts := strings.Split(s, ":")
+	if len(parts) > 3 {
 		return 0
 	}
-	return v
+	const maxDuration = 30 * 24 * 60 * 60
+	total := 0.0
+	for i, part := range parts {
+		v, err := strconv.ParseFloat(strings.TrimSpace(part), 64)
+		if err != nil || math.IsNaN(v) || math.IsInf(v, 0) || v < 0 {
+			return 0
+		}
+		if len(parts) > 1 && i > 0 && v >= 60 {
+			return 0
+		}
+		total = total*60 + v
+		if math.IsNaN(total) || math.IsInf(total, 0) || total > maxDuration {
+			return 0
+		}
+	}
+	return total
 }
 
 func firstNonEmpty(vals ...string) string {

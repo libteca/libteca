@@ -26,8 +26,12 @@ func newTestService(t *testing.T) (*Service, *store.DB) {
 	}
 	t.Cleanup(func() { db.Close() })
 	local := &http.Client{
-		Timeout:   30 * time.Second,
-		Transport: func() http.RoundTripper { tr := http.DefaultTransport.(*http.Transport).Clone(); tr.ResponseHeaderTimeout = 30 * time.Second; return tr }(),
+		Timeout: 30 * time.Second,
+		Transport: func() http.RoundTripper {
+			tr := http.DefaultTransport.(*http.Transport).Clone()
+			tr.ResponseHeaderTimeout = 30 * time.Second
+			return tr
+		}(),
 	}
 	return NewWithClient(db, t.TempDir(), local, local), db
 }
@@ -691,13 +695,21 @@ func TestSubscribeNormalizesFeedURL(t *testing.T) {
 
 func TestParseDurationSecs(t *testing.T) {
 	cases := map[string]float64{
-		"1:02:03":   3723,
-		"02:03":     123,
-		"83":        83,
-		"0":         0,
-		"":          0,
-		"1:00:00.5": 3600.5,
-		"bogus":     0,
+		"1:02:03":                  3723,
+		"02:03":                    123,
+		"83":                       83,
+		"0":                        0,
+		"":                         0,
+		"1:00:00.5":                3600.5,
+		"bogus":                    0,
+		"NaN":                      0,
+		"+Inf":                     0,
+		"-Inf":                     0,
+		"-30":                      0,
+		"1:-02:03":                 0,
+		"00:75":                    0,
+		"1:02:03:04":               0,
+		"999999999999999999999999": 0,
 	}
 	for in, want := range cases {
 		if got := parseDurationSecs(in); got != want {
@@ -819,5 +831,193 @@ func TestEgressGuardRejectsLoopback(t *testing.T) {
 	if err == nil {
 		resp.Body.Close()
 		t.Fatal("expected the download client to refuse a loopback URL")
+	}
+}
+
+func TestRefreshDoesNotAdvanceValidatorsPastFailedDownloads(t *testing.T) {
+	svc, db := newTestService(t)
+	fs := newFeedServer(t, "Test Cast")
+	p, err := svc.Subscribe(context.Background(), fs.URL+"/feed", true, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enclosureOK := true
+	fs2 := newFeedServer(t, "Test Cast")
+	fs2.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/feed"):
+			w.Header().Set("ETag", "v2")
+			fmt.Fprint(w, `<?xml version="1.0"?><rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"><channel><title>Test Cast</title>`+
+				`<item><title>Broken</title><guid>broken-1</guid><enclosure url="`+fs2.URL+`/enclosure/broken.mp3" length="10" type="audio/mpeg"/></item></channel></rss>`)
+		case strings.HasSuffix(r.URL.Path, ".mp3"):
+			if enclosureOK {
+				w.Header().Set("Content-Type", "audio/mpeg")
+				io.WriteString(w, "audio-bytes")
+				return
+			}
+			http.Error(w, "boom", http.StatusInternalServerError)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	if _, err := db.Exec(`UPDATE podcasts SET feed_url = ? WHERE id = ?`, fs2.URL+"/feed", p.ID); err != nil {
+		t.Fatal(err)
+	}
+	enclosureOK = false
+	if _, _, err := svc.RefreshPodcast(context.Background(), p.ID); err == nil {
+		t.Fatal("refresh with a failing enclosure must report the download failure")
+	}
+	stored, err := db.Podcast(p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.ETag != nil && *stored.ETag == "v2" {
+		t.Fatal("validators advanced past a failed feed application")
+	}
+	enclosureOK = true
+	if _, _, err := svc.RefreshPodcast(context.Background(), p.ID); err != nil {
+		t.Fatalf("recovery refresh: %v", err)
+	}
+	eps, _ := db.PodcastEpisodes(p.ID)
+	var linked int
+	for _, ep := range eps {
+		if ep.GUID == "broken-1" && ep.FileID != nil {
+			linked++
+		}
+	}
+	if linked != 1 {
+		t.Fatal("episode from the previously failed apply was never ingested")
+	}
+}
+
+func TestDownloadEpisodeRejectsOversizedContentLength(t *testing.T) {
+	svc, db := newTestService(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", strconv.FormatInt(maxEpisodeBytes+1, 10))
+	}))
+	t.Cleanup(srv.Close)
+	libID, err := db.EnsurePodcastsLibrary(filepath.Join(svc.DataDir, "podcasts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := db.AddPodcast(&store.Podcast{LibraryID: libID, FeedURL: srv.URL + "/feed", Title: "Cast", AutoDownload: true, MaxEpisodes: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := db.Podcast(pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ep := &store.PodcastEpisode{PodcastID: pid, GUID: "big-1", Title: strPtr("Big"), EnclosureURL: srv.URL + "/e.mp3"}
+	if _, err := db.UpsertPodcastEpisode(ep); err != nil {
+		t.Fatal(err)
+	}
+	err = svc.downloadEpisode(context.Background(), p, ep)
+	if err == nil || !strings.Contains(err.Error(), "limit") {
+		t.Fatalf("oversized declared length = %v, want limit error", err)
+	}
+	dir := filepath.Join(svc.DataDir, "podcasts", strconv.FormatInt(pid, 10))
+	if entries, err := os.ReadDir(dir); err == nil {
+		for _, e := range entries {
+			if strings.HasSuffix(e.Name(), ".part") || strings.HasSuffix(e.Name(), ".mp3") {
+				t.Fatalf("leftover file %s after rejected download", e.Name())
+			}
+		}
+	}
+}
+
+func TestDownloadEpisodeCollisionFallbackNeverOverwrites(t *testing.T) {
+	svc, db := newTestService(t)
+	fs := newFeedServer(t, "Cast")
+	libID, err := db.EnsurePodcastsLibrary(filepath.Join(svc.DataDir, "podcasts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := db.AddPodcast(&store.Podcast{LibraryID: libID, FeedURL: fs.URL + "/feed", Title: "Cast", AutoDownload: true, MaxEpisodes: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := db.Podcast(pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mkEpisode := func(guid, title string) *store.PodcastEpisode {
+		t.Helper()
+		ep := &store.PodcastEpisode{PodcastID: pid, GUID: guid, Title: strPtr(title), EnclosureURL: fs.URL + "/enclosure/" + guid + ".mp3"}
+		if _, err := db.UpsertPodcastEpisode(ep); err != nil {
+			t.Fatal(err)
+		}
+		fresh, err := db.PodcastEpisodes(pid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range fresh {
+			if fresh[i].GUID == guid {
+				return &fresh[i]
+			}
+		}
+		t.Fatal("episode not found after upsert")
+		return nil
+	}
+	if err := svc.downloadEpisode(context.Background(), p, mkEpisode("g1", "A")); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.downloadEpisode(context.Background(), p, mkEpisode("g2", "A-3")); err != nil {
+		t.Fatal(err)
+	}
+	victimPath := filepath.Join(svc.DataDir, "podcasts", strconv.FormatInt(pid, 10), "A-3.mp3")
+	before, err := os.ReadFile(victimPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.downloadEpisode(context.Background(), p, mkEpisode("g3", "A")); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(victimPath)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("episode 2's file was overwritten: before=%q after=%q err=%v", before, after, err)
+	}
+	var files int
+	db.QueryRow(`SELECT COUNT(*) FROM files f JOIN podcast_episodes e ON e.file_id = f.id WHERE e.podcast_id = ?`, pid).Scan(&files)
+	if files != 3 {
+		t.Fatalf("episode-linked files = %d, want 3 distinct", files)
+	}
+}
+
+func TestRefresh304RunsPendingAfterAutoDownloadEnabled(t *testing.T) {
+	svc, db := newTestService(t)
+	fs := newFeedServer(t, "Test Cast")
+	p, err := svc.Subscribe(context.Background(), fs.URL+"/feed", false, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eps, _ := db.PodcastEpisodes(p.ID)
+	for _, ep := range eps {
+		if ep.FileID != nil {
+			t.Fatal("auto-download-off subscribe must not download")
+		}
+	}
+	if _, err := db.Exec(`UPDATE podcasts SET auto_download = 1 WHERE id = ?`, p.ID); err != nil {
+		t.Fatal(err)
+	}
+	fresh, changed, err := svc.RefreshPodcast(context.Background(), p.ID)
+	if err != nil {
+		t.Fatalf("304 refresh with newly enabled auto-download: %v", err)
+	}
+	if changed {
+		t.Fatal("unchanged feed reported changed")
+	}
+	if fresh.AutoDownload != true {
+		t.Fatal("settings not reloaded")
+	}
+	eps, _ = db.PodcastEpisodes(p.ID)
+	downloaded := 0
+	for _, ep := range eps {
+		if ep.FileID != nil {
+			downloaded++
+		}
+	}
+	if downloaded != 2 {
+		t.Fatalf("pending episodes downloaded on 304 = %d, want 2", downloaded)
 	}
 }

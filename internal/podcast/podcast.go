@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/netip"
 	"net/http"
+	"net/netip"
 	"path/filepath"
 	"sync"
 	"time"
@@ -34,9 +34,9 @@ type Service struct {
 	Client   *http.Client // feeds + covers, 30s whole-request timeout
 	DLClient *http.Client // enclosures: no total timeout, ctx-cancellable
 
-	fetcher     Fetcher
-	mu          sync.Mutex
-	inflight    map[int64]bool
+	fetcher  Fetcher
+	mu       sync.Mutex
+	inflight map[int64]bool
 	// lifecycleMu serializes subscription creation against library
 	// deletion: a subscribe that inserts its row between a deletion's ID
 	// snapshot and its transaction was deleted mid-download without ever
@@ -181,7 +181,6 @@ func (s *Service) Subscribe(ctx context.Context, feedURL string, autoDownload bo
 		}
 		return nil, err
 	}
-	s.DB.UpdatePodcastFetch(p.ID, nilOrEmpty(etag), nilOrEmpty(lastModified), nowMs())
 	acquired := s.acquire(p.ID)
 	s.lifecycleMu.Unlock()
 	if !acquired {
@@ -192,6 +191,11 @@ func (s *Service) Subscribe(ctx context.Context, feedURL string, autoDownload bo
 		s.fetchCover(ctx, p.ID, feed.ImageURL)
 	}
 	if err := s.applyFeed(ctx, p, feed); err != nil {
+		return p, err
+	}
+	// Validators are a commit marker: writing them before the feed was
+	// applied made a later 304 skip episodes a failed apply never ingested.
+	if err := s.DB.UpdatePodcastFetch(p.ID, nilOrEmpty(etag), nilOrEmpty(lastModified), nowMs()); err != nil {
 		return p, err
 	}
 	return s.DB.Podcast(p.ID)
@@ -215,21 +219,45 @@ func (s *Service) refresh(ctx context.Context, p *store.Podcast) (*store.Podcast
 	etag, lastMod := derefStr(p.ETag), derefStr(p.LastModified)
 	feed, changed, newETag, newMod, err := s.fetcher.FetchFeed(ctx, p.FeedURL, etag, lastMod)
 	if err != nil {
-		s.DB.UpdatePodcastFetch(p.ID, p.ETag, p.LastModified, nowMs())
+		if ferr := s.DB.UpdatePodcastFetch(p.ID, p.ETag, p.LastModified, nowMs()); ferr != nil {
+			return p, false, ferr
+		}
 		return p, false, err
 	}
-	s.DB.UpdatePodcastFetch(p.ID, nilOrEmpty(newETag), nilOrEmpty(newMod), nowMs())
 	if !changed {
+		// Episode delivery is work independent of feed representation:
+		// pending downloads (e.g. auto-download enabled after the last
+		// apply) must run even when the feed answered 304, and so must
+		// retention after a recovered download.
+		if p.AutoDownload {
+			if err := s.downloadPending(ctx, p); err != nil {
+				return p, false, err
+			}
+		}
+		if err := s.enforceRetention(p); err != nil {
+			return p, false, err
+		}
+		if err := s.DB.UpdatePodcastFetch(p.ID, p.ETag, p.LastModified, nowMs()); err != nil {
+			return p, false, err
+		}
 		return p, false, nil
 	}
 	if feed.Title != "" {
-		s.DB.UpdatePodcastMeta(p.ID, feed.Title, strPtr(feed.Author), strPtr(feed.Description))
+		if err := s.DB.UpdatePodcastMeta(p.ID, feed.Title, strPtr(feed.Author), strPtr(feed.Description)); err != nil {
+			return p, true, err
+		}
 		p.Title = feed.Title
 	}
 	if derefStr(p.CoverPath) == "" && feed.ImageURL != "" {
 		s.fetchCover(ctx, p.ID, feed.ImageURL)
 	}
 	if err := s.applyFeed(ctx, p, feed); err != nil {
+		return p, true, err
+	}
+	// Validators advance only after the feed applied successfully: an
+	// early write made the next conditional fetch answer 304 and skip the
+	// episodes the failed apply never ingested.
+	if err := s.DB.UpdatePodcastFetch(p.ID, nilOrEmpty(newETag), nilOrEmpty(newMod), nowMs()); err != nil {
 		return p, true, err
 	}
 	fresh, err := s.DB.Podcast(p.ID)
@@ -239,7 +267,8 @@ func (s *Service) refresh(ctx context.Context, p *store.Podcast) (*store.Podcast
 // applyFeed upserts all feed episodes, then (if auto-download is on)
 // downloads the newest pending episodes up to maxEpisodes — the rest are
 // marked seen so the back catalog is not re-chewed every refresh — and
-// finally enforces retention.
+// finally enforces retention. A failed download surfaces as an error so the
+// caller does not advance the feed validators past unapplied work.
 func (s *Service) applyFeed(ctx context.Context, p *store.Podcast, feed *Feed) error {
 	for i := range feed.Episodes {
 		ep := &feed.Episodes[i]
@@ -254,7 +283,9 @@ func (s *Service) applyFeed(ctx context.Context, p *store.Podcast, feed *Feed) e
 		}
 	}
 	if p.AutoDownload {
-		s.downloadPending(ctx, p)
+		if err := s.downloadPending(ctx, p); err != nil {
+			return err
+		}
 	}
 	return s.enforceRetention(p)
 }
