@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import { api, getToken, setToken } from "./api";
+import { api, apiChecked, clearStoredToken, getToken, readStoredToken, setToken } from "./api";
 import { globalCss, brand, c, center, content, headerBar, headerInner, input, linkBtn, muted, nav, navLink, page, primaryBtn } from "./styles";
 import { Login } from "./views/login";
 import { Home } from "./views/home";
@@ -85,7 +85,7 @@ export function App() {
   };
 
   useEffect(() => {
-    setToken(localStorage.getItem("libteca-token") || "");
+    setToken(readStoredToken());
     if (location.hash) {
       const h = location.hash.replace(/^#\/?/, "").split("?")[0];
       if (!ROUTE_NAMES.includes(h)) history.replaceState(null, "", "#/home");
@@ -182,7 +182,11 @@ export function App() {
                 </button>
                 <button
                   role="menuitem"
-                  onClick={() => { localStorage.removeItem("libteca-token"); setToken(""); location.hash = "#/"; location.reload(); }}
+                  onClick={() => {
+                    apiChecked("/logout", { method: "POST" })
+                      .catch(() => toast("Could not reach the server; the token stays valid until revoked", "error"))
+                      .finally(() => { clearStoredToken(); location.hash = "#/"; location.reload(); });
+                  }}
                 >
                   Sign out
                 </button>
@@ -262,7 +266,7 @@ function ChangePassModal(props: { userId: number; isAdmin: boolean; onClose: () 
       });
       if (res.error) { setErr(res.error); return; }
       toast("Password updated — signing you in again", "success");
-      setTimeout(() => { localStorage.removeItem("libteca-token"); setToken(""); location.hash = "#/"; location.reload(); }, 900);
+      setTimeout(() => { clearStoredToken(); location.hash = "#/"; location.reload(); }, 900);
     } catch {
       setErr("Failed to update password.");
     } finally {

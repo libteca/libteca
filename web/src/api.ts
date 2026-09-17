@@ -95,6 +95,23 @@ export const api = async (path: string, opts: RequestInit = {}) => {
   return payload;
 };
 
+export class APIError extends Error {
+  constructor(message: string, readonly status: number) { super(message); }
+}
+
+// api() resolves error-shaped objects for callers that inspect them; a
+// mutation whose completion means success must go through apiChecked, which
+// turns those shapes into real rejections. Without this a failed save was
+// indistinguishable from a successful one.
+export const apiChecked = async <T = unknown>(path: string, opts: RequestInit = {}): Promise<T> => {
+  const value = await api(path, opts);
+  if (value !== null && typeof value === "object" && typeof (value as Record<string, unknown>).error === "string") {
+    const rec = value as Record<string, unknown>;
+    throw new APIError(rec.error as string, typeof rec.status === "number" ? rec.status : 0);
+  }
+  return value as T;
+};
+
 // Media elements (img/video/audio/track) and EventSource cannot send
 // Authorization headers. The server's auth middleware falls back to a
 // `token` query parameter (see internal/auth/auth.go), so media URLs
@@ -102,4 +119,13 @@ export const api = async (path: string, opts: RequestInit = {}) => {
 export function media(path: string) {
   const p = path.startsWith("/api/core") ? path.slice("/api/core".length) : path;
   return `/api/core${p}${p.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}`;
+}
+
+export function readStoredToken(): string {
+  try { return localStorage.getItem("libteca-token") || ""; } catch { return ""; }
+}
+
+export function clearStoredToken(): void {
+  setToken("");
+  try { localStorage.removeItem("libteca-token"); } catch { /* storage unavailable */ }
 }

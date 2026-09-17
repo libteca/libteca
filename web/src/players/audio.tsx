@@ -28,7 +28,14 @@ export function AudioPlayer(props: {
   const pendingOffset = useRef(0);
   const [playing, setPlaying] = useState(false);
   const [abs, setAbs] = useState(0);
-  const [rate, setRate] = useState(() => Number(localStorage.getItem("libteca-rate")) || 1);
+  const [rate, setRate] = useState(() => {
+    try {
+      const v = Number(localStorage.getItem("libteca-rate"));
+      return Number.isFinite(v) && v >= 0.25 && v <= 3 ? v : 1;
+    } catch {
+      return 1;
+    }
+  });
   const [sleepMin, setSleepMin] = useState(0);
   const [sleepLeft, setSleepLeft] = useState(0);
   const [hoverT, setHoverT] = useState<number | null>(null);
@@ -37,7 +44,10 @@ export function AudioPlayer(props: {
   const [artErr, setArtErr] = useState(false);
   const [bufAbs, setBufAbs] = useState(0);
   const sleepAt = useRef(0);
-  const lastSent = useRef(0);
+  // Wall-clock save cadence: keying periodic saves on forward progress
+  // stopped them entirely after a rewind until playback passed the old
+  // position again.
+  const lastSentAt = useRef(0);
   const absRef = useRef(0);
   const queueEnded = useRef(false);
   const chWrap = useRef<HTMLDivElement | null>(null);
@@ -72,7 +82,7 @@ export function AudioPlayer(props: {
   });
 
   const filesKey = props.files.map((f) => f.id).join(",");
-  useEffect(() => { load(0, 0, false); }, [filesKey]);
+  useEffect(() => { load(0, 0, false); lastSentAt.current = 0; }, [filesKey]);
 
   useEffect(() => {
     if (audioRef.current) audioRef.current.playbackRate = rate;
@@ -233,13 +243,20 @@ export function AudioPlayer(props: {
           const a = audioRef.current;
           if (a && props.onPos && a.currentTime > 1) props.onPos(cumBefore(curIdx.current) + a.currentTime);
         }}
+        onSeeked={() => {
+          const a = audioRef.current;
+          if (!a || !onPosRef.current) return;
+          lastSentAt.current = performance.now();
+          onPosRef.current(cumBefore(curIdx.current) + a.currentTime);
+        }}
         onTimeUpdate={() => {
           const a = audioRef.current;
           if (!a) return;
           const pos = cumBefore(curIdx.current) + a.currentTime;
           absRef.current = pos;
           setAbs(pos);
-          if (onPosRef.current && pos - lastSent.current > 10) { lastSent.current = pos; onPosRef.current(pos); }
+          const now = performance.now();
+          if (onPosRef.current && now - lastSentAt.current >= 10_000) { lastSentAt.current = now; onPosRef.current(pos); }
           if ("mediaSession" in navigator && navigator.mediaSession.setPositionState && total > 0) {
             try { navigator.mediaSession.setPositionState({ duration: total, playbackRate: rate, position: Math.min(pos, total) }); } catch { /* invalid state */ }
           }

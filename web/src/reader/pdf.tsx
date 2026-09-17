@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import { api, media } from "../api";
+import { apiChecked, media } from "../api";
 import { c, ghostBtn } from "../styles";
 import { toast } from "../toast";
 import { IconCheckSmall, IconDownload, isTypingTarget, pagePercent, readerOverlay, TopBar, type ProgressPost, type ReadingProgress } from "./shared";
@@ -24,7 +24,9 @@ export function PdfReader(props: { editionId: number; title: string; isFinished:
   };
 
   const postPage = (n: number) => {
-    void api(`/progress/${props.editionId}`, { method: "POST", body: JSON.stringify(bodyFor(n)) }).catch(() => {});
+    // No `finished` field: the server treats an omitted flag as "preserve",
+    // so closing the reader after Mark finished cannot reopen the item.
+    void apiChecked(`/progress/${props.editionId}`, { method: "POST", body: JSON.stringify(bodyFor(n)) }).catch(() => {});
   };
 
   const commit = (raw: string) => {
@@ -45,14 +47,15 @@ export function PdfReader(props: { editionId: number; title: string; isFinished:
 
   useEffect(() => {
     let alive = true;
-    api(`/progress/${props.editionId}`).then((p: ReadingProgress & { pageCount?: number }) => {
+    apiChecked<ReadingProgress & { pageCount?: number }>(`/progress/${props.editionId}`).then((p) => {
       if (!alive) return;
       const n = p?.page && p.page >= 1 ? Math.floor(p.page) : 0;
       if (n >= 1) {
         setDraft(String(n));
         if (!p.isFinished) setOpenPage(n);
         pageRef.current = n;
-        dirty.current = true;
+        // Restoring a page from the server is not a user edit: posting it
+        // back on close used to clobber progress state untouched by hand.
       }
       const pc = p?.pageCount;
       if (typeof pc === "number" && pc > 0) {
@@ -86,11 +89,10 @@ export function PdfReader(props: { editionId: number; title: string; isFinished:
   const markFinished = async () => {
     setBusy(true);
     try {
-      const res = await api(`/progress/${props.editionId}`, { method: "POST", body: JSON.stringify({ finished: true }) });
-      if (res && res.error) { toast(res.error, "error"); return; }
+      await apiChecked(`/progress/${props.editionId}`, { method: "POST", body: JSON.stringify({ finished: true }) });
       setFinished(true);
-    } catch {
-      toast("Couldn't reach the server.", "error");
+    } catch (err) {
+      toast(err instanceof Error && err.message ? err.message : "Couldn't reach the server.", "error");
     } finally {
       setBusy(false);
     }

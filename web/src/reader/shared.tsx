@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import type { ComponentChildren, CSSProperties } from "preact";
-import { api, media } from "../api";
+import { api, apiChecked, media } from "../api";
 import { c, font, iconBtn } from "../styles";
 
 export type ReaderMode = "single" | "double" | "webtoon";
@@ -21,7 +21,46 @@ export function clamp01(n: number): number {
   return n < 0 ? 0 : n > 1 ? 1 : n;
 }
 
-const PAGE_IMAGE_RE = /\.(jpe?g|png|gif|webp|avif|bmp|jxl)$/i;
+const PAGE_IMAGE_RE = /\.(jpe?g|png|gif|webp|avif|bmp)$/i;
+
+// Byte-based natural comparison identical to the server's natural.Less
+// (digit runs compare numerically, everything else bytewise). The previous
+// locale-aware Intl.Collator ordered pages differently from Go for mixed
+// case, so page numbers and saved progress could identify different images
+// depending on the client. The extension set matches the server exactly.
+const pageEncoder = new TextEncoder();
+
+export function comparePages(left: string, right: string): number {
+  const a = pageEncoder.encode(left);
+  const b = pageEncoder.encode(right);
+  const digit = (n: number) => n >= 48 && n <= 57;
+  let i = 0, j = 0;
+  while (i < a.length && j < b.length) {
+    if (digit(a[i]) && digit(b[j])) {
+      let ei = i, ej = j;
+      while (ei < a.length && digit(a[ei])) ei++;
+      while (ej < b.length && digit(b[ej])) ej++;
+      let si = i, sj = j;
+      while (si < ei && a[si] === 48) si++;
+      while (sj < ej && b[sj] === 48) sj++;
+      if (ei - si !== ej - sj) return (ei - si) - (ej - sj);
+      for (let k = 0; k < ei - si; k++) {
+        if (a[si + k] !== b[sj + k]) return a[si + k] - b[sj + k];
+      }
+      i = ei;
+      j = ej;
+    } else {
+      if (a[i] !== b[j]) return a[i] - b[j];
+      i++;
+      j++;
+    }
+  }
+  if (a.length - i !== b.length - j) return (a.length - i) - (b.length - j);
+  for (let k = 0; k < Math.min(a.length, b.length); k++) {
+    if (a[k] !== b[k]) return a[k] - b[k];
+  }
+  return a.length - b.length;
+}
 
 export function pageImageNames(names: readonly string[]): string[] {
   const keep = names.filter((n) => {
@@ -31,8 +70,7 @@ export function pageImageNames(names: readonly string[]): string[] {
     if (base.startsWith(".") || base.startsWith("._")) return false;
     return !n.toUpperCase().includes("__MACOSX");
   });
-  const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
-  return keep.sort(collator.compare);
+  return keep.sort(comparePages);
 }
 
 export function pagePercent(page: number, count: number): number {
@@ -89,7 +127,7 @@ export function useProgressSaver(editionId: number) {
     }
     setState("saving");
     try {
-      await api(`/progress/${editionId}`, { method: "POST", body: JSON.stringify(body) });
+      await apiChecked(`/progress/${editionId}`, { method: "POST", body: JSON.stringify(body) });
       setState("saved");
       window.setTimeout(() => setState((s) => (s === "saved" ? "idle" : s)), 1600);
     } catch {

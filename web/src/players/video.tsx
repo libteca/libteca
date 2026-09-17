@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import { api, media, type EditionDetail, type PlaybackInfo, type WorkDetail } from "../api";
+import { api, apiChecked, media, type EditionDetail, type PlaybackInfo, type WorkDetail } from "../api";
 import { fmtClock } from "../util";
 import { c, ghostBtn, muted } from "../styles";
 import {
@@ -8,6 +8,16 @@ import {
 } from "../components/svg";
 
 const RATES = [1, 1.25, 1.5, 2];
+
+function restoreWhenSeekable(video: HTMLVideoElement, target: number): boolean {
+  for (let i = 0; i < video.seekable.length; i++) {
+    if (target >= video.seekable.start(i) && target <= video.seekable.end(i)) {
+      video.currentTime = target;
+      return true;
+    }
+  }
+  return target === 0;
+}
 
 type Thumbs = {
   Width: number; Height: number; TileWidth: number; TileHeight: number;
@@ -59,6 +69,7 @@ export function VideoPlayer(props: {
   const [dur, setDur] = useState(ed.duration || 0);
   const [buffered, setBuffered] = useState(0);
   const [src, setSrc] = useState<string | undefined>(undefined);
+  const [active, setActive] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [uiVis, setUiVis] = useState(true);
   const [rate, setRate] = useState(1);
@@ -68,6 +79,9 @@ export function VideoPlayer(props: {
   const [waiting, setWaiting] = useState(false);
   const [thumbs, setThumbs] = useState<Thumbs | null>(null);
   const [fatal, setFatal] = useState("");
+  const [bootKey, setBootKey] = useState(0);
+  const modeRef = useRef<"direct" | "hls">("direct");
+  const resumeRef = useRef(0);
   const [pip, setPip] = useState(false);
   const [fsOn, setFsOn] = useState(false);
   const pipOK = typeof document !== "undefined" && document.pictureInPictureEnabled;
@@ -80,8 +94,15 @@ export function VideoPlayer(props: {
     let alive = true;
     let hlsSid = "";
     setSrc(undefined);
+    setActive(false);
+    setFatal("");
     saved.current = 0;
     lastSave.current = { pos: 0, fin: false };
+    // The HLS resource is the FULL edition: the old &start= parameter asked
+    // the server to truncate the timeline at the resume point, and the
+    // browser then saved currentTime as if it were absolute - resuming at
+    // 600s and playing 15s saved ~15. Resume is purely client-side now.
+    resumeRef.current = ed.position && ed.position > 0 && !ed.isFinished ? ed.position : 0;
     const boot = async () => {
       let info: PlaybackInfo = { mode: "direct", fileId };
       try {
@@ -89,10 +110,11 @@ export function VideoPlayer(props: {
         if (p && (p.mode === "direct" || p.mode === "hls")) info = p;
       } catch {}
       if (!alive) return;
+      modeRef.current = info.mode;
+      setActive(true);
       if (info.mode === "hls" && info.sessionId) {
         hlsSid = info.sessionId;
-        const start = ed.position && ed.position > 0 && !ed.isFinished ? `&start=${Math.floor(ed.position)}` : "";
-        const url = media(`/hls/${info.sessionId}/index.m3u8`) + start;
+        const url = media(`/hls/${info.sessionId}/index.m3u8`);
         const v = ref.current;
         if (v && v.canPlayType("application/vnd.apple.mpegurl")) {
           setSrc(url);
@@ -101,12 +123,29 @@ export function VideoPlayer(props: {
         const { default: Hls } = await import("hls.js");
         if (!alive) return;
         if (Hls.isSupported() && v) {
-          const hls = new Hls();
+          const hls = new Hls({ startPosition: resumeRef.current });
           if (!alive) {
             hls.destroy();
             return;
           }
           hlsRef.current = hls;
+          let networkRetries = 0;
+          let mediaRetries = 0;
+          hls.on(Hls.Events.ERROR, (_event, data) => {
+            if (!alive || !data.fatal) return;
+            if (data.type === Hls.ErrorTypes.NETWORK_ERROR && networkRetries++ < 1) {
+              hls.startLoad();
+              return;
+            }
+            if (data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaRetries++ < 1) {
+              hls.recoverMediaError();
+              return;
+            }
+            hls.destroy();
+            if (hlsRef.current === hls) hlsRef.current = null;
+            setWaiting(false);
+            setFatal("Playback failed. Reload playback to create a new session.");
+          });
           hls.loadSource(url);
           hls.attachMedia(v);
           return;
@@ -116,7 +155,11 @@ export function VideoPlayer(props: {
       }
       setSrc(media(`/stream/${info.fileId || fileId}`));
     };
-    void boot();
+    boot().catch((error: unknown) => {
+      if (!alive) return;
+      setWaiting(false);
+      setFatal(error instanceof Error ? error.message : "Playback could not start");
+    });
     return () => {
       alive = false;
       hlsRef.current?.destroy();
@@ -125,7 +168,7 @@ export function VideoPlayer(props: {
         void fetch(media(`/hls/${hlsSid}`), { method: "DELETE", keepalive: true }).catch(() => {});
       }
     };
-  }, [props.editionId, fileId]);
+  }, [props.editionId, fileId, bootKey]);
 
   useEffect(() => {
     let alive = true;
@@ -190,11 +233,13 @@ export function VideoPlayer(props: {
     if (pos <= 0 && !finished) return;
     if (lastSave.current.fin && !finished) return;
     if (lastSave.current.fin === finished && Math.abs(lastSave.current.pos - pos) < 0.5) return;
-    lastSave.current = { pos, fin: finished };
     const cur = edRef.current;
     try {
-      await api(`/progress/${cur.id}`, { method: "POST", body: JSON.stringify({ position: pos, duration: cur.duration, finished }) });
-    } catch { /* offline; last write wins when reconnecting */ }
+      await apiChecked(`/progress/${cur.id}`, { method: "POST", body: JSON.stringify({ position: pos, duration: cur.duration, finished }) });
+      // The deduplication watermark only advances after the server
+      // acknowledged the write; on failure a same-position retry stays due.
+      lastSave.current = { pos, fin: finished };
+    } catch { /* offline; the watermark is kept so the retry re-sends */ }
   };
 
   const showUI = () => {
@@ -347,7 +392,12 @@ export function VideoPlayer(props: {
     return (
       <div style={{ position: "fixed", inset: 0, zIndex: 35, background: "#000", display: "flex", flexDirection: "column", gap: "1rem", alignItems: "center", justifyContent: "center", padding: "1rem" }}>
         <p style={{ ...muted, margin: 0, fontSize: "0.95rem", maxWidth: "26rem", textAlign: "center", lineHeight: 1.5 }}>{fatal || "This edition is no longer available."}</p>
-        <button className="press" style={ghostBtn} onClick={props.onClose}>Back</button>
+        <div style={{ display: "flex", gap: "0.6rem" }}>
+          {fatal ? (
+            <button className="press" style={ghostBtn} onClick={() => { setFatal(""); setBootKey((k) => k + 1); }}>Retry</button>
+          ) : null}
+          <button className="press" style={ghostBtn} onClick={props.onClose}>Back</button>
+        </div>
       </div>
     );
   }
@@ -455,9 +505,32 @@ export function VideoPlayer(props: {
             const v = ref.current;
             if (!v) return;
             setDur(v.duration || ed.duration || 0);
-            if (ed.position && ed.position > 0 && ed.position < (ed.duration || Infinity) - 5 && v.src && !v.src.startsWith("blob:") && !v.canPlayType("application/vnd.apple.mpegurl")) {
-              v.currentTime = ed.position;
+            const target = resumeRef.current;
+            if (target <= 0) return;
+            if (modeRef.current === "direct") {
+              // Direct files resume on EVERY browser: the old condition
+              // consulted the browser's unrelated HLS capability instead of
+              // the mode actually selected for this resource.
+              if (target < (v.duration || Infinity) - 5) {
+                v.currentTime = target;
+                resumeRef.current = 0;
+              }
+              return;
             }
+            // Native HLS: the seekable range grows as segments arrive, so
+            // the restore retries until the target lies inside it.
+            const started = Date.now();
+            const tryRestore = () => {
+              const cur = ref.current;
+              if (!cur || resumeRef.current <= 0) return;
+              if (restoreWhenSeekable(cur, resumeRef.current)) {
+                resumeRef.current = 0;
+                return;
+              }
+              if (Date.now() - started > 10000) return;
+              window.setTimeout(tryRestore, 250);
+            };
+            tryRestore();
           }}
           onTimeUpdate={() => {
             const v = ref.current;
@@ -488,13 +561,13 @@ export function VideoPlayer(props: {
           {subs ? <track kind="subtitles" src={media(`/subtitles/${fileId}`)} srcLang="en" label="Subtitles" /> : null}
         </video>
 
-        {waiting && src && (
+        {waiting && active && (
           <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
             <span className="spin" style={{ color: "rgba(255,255,255,0.9)", filter: "drop-shadow(0 2px 8px rgba(0,0,0,0.5))" }}><IconSpinner size={38} /></span>
           </div>
         )}
 
-        {(glyph || skip) && !waiting && src && (
+        {(glyph || skip) && !waiting && active && (
           <div aria-hidden style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
             <div style={{
               width: skip ? "104px" : "72px", height: skip ? "104px" : "72px", borderRadius: "50%",
@@ -509,7 +582,7 @@ export function VideoPlayer(props: {
           </div>
         )}
 
-        {src && !playing && !glyph && !skip && !waiting && (
+        {active && !playing && !glyph && !skip && !waiting && (
           <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
             <div style={{
               width: "84px", height: "84px", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center",
