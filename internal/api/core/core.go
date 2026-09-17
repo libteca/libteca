@@ -51,6 +51,9 @@ type API struct {
 
 	tpMu sync.Mutex
 	tp   *trickplay.Generator
+
+	ticketMu sync.Mutex
+	tickets  map[string]webTicket
 }
 
 func New(db *store.DB, dataDir string) *API {

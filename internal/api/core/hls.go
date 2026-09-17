@@ -2,6 +2,8 @@ package core
 
 import (
 	"errors"
+	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -108,20 +110,64 @@ func webSessionID(editionID int64) (string, error) {
 	return transcode.NewSessionID("web-", editionID)
 }
 
-func parseWebSessionID(s string) (int64, bool) {
-	if !strings.HasPrefix(s, "web-") {
+// webSessionID stays available for ticket issuance, but a session id alone
+// no longer authorizes work: ids are issued only through the ticket
+// registry, which binds each id to its user and edition.
+
+type webTicket struct {
+	userID    int64
+	editionID int64
+	expires   time.Time
+}
+
+const (
+	webTicketTTL  = 10 * time.Minute
+	webTicketsMax = 256
+)
+
+func (a *API) issueWebTicket(userID, editionID int64) (string, error) {
+	sid, err := webSessionID(editionID)
+	if err != nil {
+		return "", err
+	}
+	a.ticketMu.Lock()
+	defer a.ticketMu.Unlock()
+	if a.tickets == nil {
+		a.tickets = make(map[string]webTicket)
+	}
+	now := time.Now()
+	for key, ticket := range a.tickets {
+		if !now.Before(ticket.expires) {
+			delete(a.tickets, key)
+		}
+	}
+	if len(a.tickets) >= webTicketsMax {
+		return "", fmt.Errorf("playback ticket capacity exhausted")
+	}
+	a.tickets[sid] = webTicket{userID: userID, editionID: editionID, expires: now.Add(webTicketTTL)}
+	return sid, nil
+}
+
+// checkWebTicket validates id ownership. Non-removing checks refresh the
+// expiry so an active viewing session keeps its ticket; remove consumes it.
+func (a *API) checkWebTicket(sid string, userID int64, remove bool) (int64, bool) {
+	a.ticketMu.Lock()
+	defer a.ticketMu.Unlock()
+	ticket, ok := a.tickets[sid]
+	if !ok || ticket.userID != userID {
 		return 0, false
 	}
-	rest := strings.TrimPrefix(s, "web-")
-	idText, _, hasSuffix := strings.Cut(rest, "-")
-	// Suffixed ids are the unique-per-playback shape; a bare "web-<id>" is
-	// the legacy shape callers still send and sessions are in-memory only,
-	// so both parse and route by their edition.
-	if !hasSuffix {
-		idText = rest
+	if !time.Now().Before(ticket.expires) {
+		delete(a.tickets, sid)
+		return 0, false
 	}
-	id, err := strconv.ParseInt(idText, 10, 64)
-	return id, err == nil && id > 0
+	if remove {
+		delete(a.tickets, sid)
+	} else {
+		ticket.expires = time.Now().Add(webTicketTTL)
+		a.tickets[sid] = ticket
+	}
+	return ticket.editionID, true
 }
 
 func browserPlayable(ed *store.EditionView) bool {
@@ -151,6 +197,19 @@ func browserPlayable(ed *store.EditionView) bool {
 	return (vcodec == "h264" || vcodec == "vp9" || vcodec == "av1") && audioOK && containerOK
 }
 
+// streamable reports whether an edition carries audio or video a transcoder
+// could consume. Games are download-then-play by design; routing a ROM or a
+// book toward ffmpeg spawned a process that could never produce segments.
+func streamable(ed *store.EditionView) bool {
+	if len(ed.Files) == 0 || strings.HasPrefix(ed.Format, "game-") {
+		return false
+	}
+	f := ed.Files[0]
+	hasVideo := f.VideoCodec != nil && *f.VideoCodec != ""
+	hasAudio := f.Codec != nil && *f.Codec != ""
+	return hasVideo || hasAudio
+}
+
 func (a *API) editionPlayback(w http.ResponseWriter, r *http.Request) {
 	id := auth.Atoi64(r.PathValue("id"))
 	ed, err := a.DB.EditionByID(id)
@@ -163,13 +222,18 @@ func (a *API) editionPlayback(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"mode": "direct", "fileId": fileID})
 		return
 	}
+	if !streamable(ed) {
+		writeJSON(w, 415, map[string]string{"error": "edition is not streamable audio/video"})
+		return
+	}
 	if a.TC == nil {
 		writeJSON(w, 503, map[string]string{"error": "transcode unavailable"})
 		return
 	}
-	sid, err := webSessionID(ed.ID)
+	sid, err := a.issueWebTicket(auth.UserID(r), ed.ID)
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": "session creation failed"})
+		w.Header().Set("Retry-After", "5")
+		writeJSON(w, 503, map[string]string{"error": "session creation failed"})
 		return
 	}
 	writeJSON(w, 200, map[string]any{
@@ -203,6 +267,12 @@ func (a *API) hlsStop(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "bad session id"})
 		return
 	}
+	// Ownership check through the ticket registry: knowing (or guessing)
+	// another user's session id must not close their playback.
+	if _, ok := a.checkWebTicket(sid, auth.UserID(r), true); !ok {
+		writeJSON(w, 404, map[string]string{"error": "session not found"})
+		return
+	}
 	if a.TC != nil {
 		a.TC.Close(sid)
 	}
@@ -224,21 +294,31 @@ func (a *API) hlsFile(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 503, map[string]string{"error": "transcode unavailable"})
 		return
 	}
-	eid, ok := parseWebSessionID(sid)
+	// The edition comes from the caller's own ticket, never from parsing a
+	// client-constructed id: a syntactically valid "web-<edition>..." used
+	// to spawn work for any edition without any proof of issuance.
+	eid, ok := a.checkWebTicket(sid, auth.UserID(r), false)
 	if !ok {
-		writeJSON(w, 400, map[string]string{"error": "bad session id"})
+		writeJSON(w, 404, map[string]string{"error": "session not found"})
 		return
 	}
 	ed, err := a.DB.EditionByID(eid)
-	if err != nil || len(ed.Files) == 0 {
+	if err != nil || len(ed.Files) == 0 || !streamable(ed) {
 		writeJSON(w, 404, map[string]string{"error": "edition not found"})
 		return
 	}
 	start := 0.0
-	if s := r.URL.Query().Get("start"); s != "" {
-		if v, err := strconv.ParseFloat(s, 64); err == nil && v > 0 {
-			start = v
+	if raw := r.URL.Query().Get("start"); raw != "" {
+		value, err := strconv.ParseFloat(raw, 64)
+		if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+			writeJSON(w, 400, map[string]string{"error": "invalid start position"})
+			return
 		}
+		if duration := ed.TotalDuration(); duration > 0 && value > duration {
+			writeJSON(w, 400, map[string]string{"error": "start exceeds duration"})
+			return
+		}
+		start = value
 	}
 	s, err := a.TC.Get(sid, ed.ID, ed.Files[0].Path, start)
 	if err != nil {
@@ -287,13 +367,5 @@ func (a *API) hlsFile(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 404, map[string]string{"error": "segment not found"})
 		return
 	}
-	path := filepath.Join(a.DataDir, "transcode", sid, file)
-	f, err := os.Open(path)
-	if err != nil {
-		writeJSON(w, 404, map[string]string{"error": "segment not found"})
-		return
-	}
-	defer f.Close()
-	fi, _ := f.Stat()
-	http.ServeContent(w, r, file, fi.ModTime(), f)
+	serveFile(w, r, filepath.Join(a.DataDir, "transcode", sid, file))
 }

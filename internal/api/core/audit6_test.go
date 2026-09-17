@@ -13,6 +13,7 @@ import (
 
 	"github.com/libteca/libteca/internal/auth"
 	"github.com/libteca/libteca/internal/store"
+	"github.com/libteca/libteca/internal/transcode"
 	"github.com/neutron-build/neutron/go/neutron"
 )
 
@@ -49,6 +50,7 @@ type progressEnv struct {
 	a    *API
 	db   *store.DB
 	h    http.Handler
+	wid  int64
 	eid  int64
 	user int64
 }
@@ -89,7 +91,7 @@ func newProgressEnv(t *testing.T) *progressEnv {
 	a := New(db, t.TempDir())
 	app := neutron.New()
 	a.Mount(app.Router())
-	return &progressEnv{a: a, db: db, h: app.Handler(), eid: eid, user: uid}
+	return &progressEnv{a: a, db: db, h: app.Handler(), wid: wid, eid: eid, user: uid}
 }
 
 func (e *progressEnv) post(t *testing.T, body string) *httptest.ResponseRecorder {
@@ -204,5 +206,138 @@ func TestAddLibraryValidatesType(t *testing.T) {
 		if n != 0 {
 			t.Fatal("whitespace type must not be insertable")
 		}
+	}
+}
+
+func TestHLSSessionsRequireOwnedTickets(t *testing.T) {
+	e := newProgressEnv(t)
+	eres, err := e.db.Exec(`INSERT INTO editions (work_id, format, title, duration_secs, created_at)
+		VALUES (?, 'video', 'Video', 100, 0)`, e.wid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	veid, _ := eres.LastInsertId()
+	media := filepath.Join(t.TempDir(), "v.mkv")
+	if err := os.WriteFile(media, []byte("xx"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.Exec(`INSERT INTO files (edition_id, path, seq, size_bytes, mtime_secs, video_codec, codec, container, duration_secs, chapters, embedded_meta, missing, probed_at)
+		VALUES (?,?,1,2,0,'h264','aac','mkv',100,'[]','{}',0,0)`, veid, media); err != nil {
+		t.Fatal(err)
+	}
+	e.a.TC = transcode.New(e.a.DataDir)
+	t.Cleanup(e.a.TC.CloseAll)
+
+	req := auth.WithUser(httptest.NewRequest("GET", "/editions/"+strconv.FormatInt(veid, 10)+"/playback", nil), e.user)
+	rec := httptest.NewRecorder()
+	e.h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("playback = %d %s", rec.Code, rec.Body.String())
+	}
+	var pb struct {
+		Mode      string `json:"mode"`
+		SessionID string `json:"sessionId"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &pb); err != nil || pb.Mode != "hls" || pb.SessionID == "" {
+		t.Fatalf("playback body = %s err=%v", rec.Body.String(), err)
+	}
+
+	other, err := e.db.CreateUser("intruder", "hash", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged := httptest.NewRequest("GET", "/hls/web-"+strconv.FormatInt(veid, 10)+"-deadbeef/index.m3u8", nil)
+	forged.SetPathValue("sid", "web-"+strconv.FormatInt(veid, 10)+"-deadbeef")
+	forged.SetPathValue("file", "index.m3u8")
+	rec = httptest.NewRecorder()
+	e.a.hlsFile(rec, auth.WithUser(forged, e.user))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("forged session id = %d, want 404", rec.Code)
+	}
+
+	stop := httptest.NewRequest("DELETE", "/hls/"+pb.SessionID, nil)
+	stop.SetPathValue("sid", pb.SessionID)
+	rec = httptest.NewRecorder()
+	e.a.hlsStop(rec, auth.WithUser(stop, other))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("foreign stop = %d, want 404", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	e.a.hlsStop(rec, auth.WithUser(stop, e.user))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("own stop = %d, want 200", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	e.a.hlsStop(rec, auth.WithUser(stop, e.user))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("replayed stop = %d, want 404 (ticket consumed)", rec.Code)
+	}
+}
+
+func TestHLSSegmentsRejectBadStartAndGameEditions(t *testing.T) {
+	e := newProgressEnv(t)
+	media := filepath.Join(t.TempDir(), "v.mkv")
+	if err := os.WriteFile(media, []byte("xx"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	eres, err := e.db.Exec(`INSERT INTO editions (work_id, format, title, duration_secs, created_at)
+		VALUES (?, 'video', 'Video', 100, 0)`, e.wid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	veid, _ := eres.LastInsertId()
+	if _, err := e.db.Exec(`INSERT INTO files (edition_id, path, seq, size_bytes, mtime_secs, video_codec, codec, container, duration_secs, chapters, embedded_meta, missing, probed_at)
+		VALUES (?,?,1,2,0,'h264','aac','mkv',100,'[]','{}',0,0)`, veid, media); err != nil {
+		t.Fatal(err)
+	}
+	gres, err := e.db.Exec(`INSERT INTO editions (work_id, format, title, created_at)
+		VALUES (?, 'game-sfc', 'Rom', 0)`, e.wid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	geid, _ := gres.LastInsertId()
+	rom := filepath.Join(t.TempDir(), "zelda.sfc")
+	if err := os.WriteFile(rom, []byte("xx"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.Exec(`INSERT INTO files (edition_id, path, seq, size_bytes, mtime_secs, container, duration_secs, chapters, embedded_meta, missing, probed_at)
+		VALUES (?,?,1,2,0,'sfc',0,'[]','{}',0,0)`, geid, rom); err != nil {
+		t.Fatal(err)
+	}
+	e.a.TC = transcode.New(e.a.DataDir)
+	t.Cleanup(e.a.TC.CloseAll)
+
+	sid, err := e.a.issueWebTicket(e.user, veid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, start := range []string{"NaN", "inf", "-1", "101"} {
+		req := httptest.NewRequest("GET", "/hls/"+sid+"/index.m3u8?start="+start, nil)
+		req.SetPathValue("sid", sid)
+		req.SetPathValue("file", "index.m3u8")
+		rec := httptest.NewRecorder()
+		e.a.hlsFile(rec, auth.WithUser(req, e.user))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("start=%s = %d %s, want 400", start, rec.Code, rec.Body.String())
+		}
+	}
+
+	gsid, err := e.a.issueWebTicket(e.user, geid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("GET", "/hls/"+gsid+"/index.m3u8", nil)
+	req.SetPathValue("sid", gsid)
+	req.SetPathValue("file", "index.m3u8")
+	rec := httptest.NewRecorder()
+	e.a.hlsFile(rec, auth.WithUser(req, e.user))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("game hls = %d, want 404", rec.Code)
+	}
+	preq := auth.WithUser(httptest.NewRequest("GET", "/editions/"+strconv.FormatInt(geid, 10)+"/playback", nil), e.user)
+	rec = httptest.NewRecorder()
+	e.h.ServeHTTP(rec, preq)
+	if rec.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("game playback = %d %s, want 415", rec.Code, rec.Body.String())
 	}
 }
