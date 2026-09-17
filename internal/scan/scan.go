@@ -39,10 +39,6 @@ func cancelErr(ctx context.Context) error {
 	return nil
 }
 
-// validateScanRoot refuses to enumerate an unavailable root: a WalkDir that
-// swallowed the root error reported a clean EMPTY scan, and the missing-file
-// reconciliation that follows a "done" job would then mark the whole healthy
-// library missing.
 func validateScanRoot(root string) error {
 	st, err := os.Stat(root)
 	if err != nil {

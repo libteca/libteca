@@ -257,8 +257,6 @@ func upsertEdition(q dbtx, e *Edition) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	// Position updates only when the caller provides one: book editions have
-	// no meaningful position and must not be zeroed by a warm rescan.
 	_, err = q.Exec(`UPDATE editions SET language = ?, abridged = ?, duration_secs = ?, position = CASE WHEN ? > 0 THEN ? ELSE position END WHERE id = ?`,
 		e.Language, e.Abridged, e.DurationSecs, e.Position, e.Position, id)
 	return id, err
@@ -318,18 +316,6 @@ func relinkFile(q dbtx, hash string, f *FileRec) (bool, error) {
 	return true, nil
 }
 
-// relinkableFileID resolves the file row a moved file should adopt. The
-// sampled scan hash is only a candidate filter, never identity evidence on
-// its own: candidates are scoped to the destination library, must match the
-// recorded size, the old path must be VERIFIABLY gone (only fs.ErrNotExist
-// counts - an EACCES or EIO stat says nothing about the file having moved),
-// and only rows already flagged missing by a prior reconciliation are
-// adopted. Live-flagged rows with vanished paths wait for that
-// reconciliation instead. Ambiguous multi-candidate matches insert a fresh
-// row rather than picking arbitrarily. Full-content verification is
-// impossible here by construction (the old bytes are gone), so the residual
-// sampled-hash ambiguity for same-size/same-ends files is accepted and
-// documented rather than hidden.
 func relinkableFileID(q dbtx, hash string, f *FileRec) (int64, bool, error) {
 	var libID int64
 	if err := q.QueryRow(`SELECT w.library_id FROM editions e JOIN works w ON w.id = e.work_id WHERE e.id = ?`, f.EditionID).Scan(&libID); err != nil {

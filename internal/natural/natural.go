@@ -4,10 +4,6 @@ import "strings"
 
 func digit(c byte) bool { return c >= '0' && c <= '9' }
 
-// Less compares strings in natural order: digit runs compare numerically
-// after stripping leading zeros, everything else bytewise. It is the single
-// ordering contract shared by the scanner, OPDS CBZ listing and importer so
-// page numbers, file sequences and progress mapping agree across faces.
 func Less(a, b string) bool {
 	ai, bi := 0, 0
 	for ai < len(a) && bi < len(b) {

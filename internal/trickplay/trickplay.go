@@ -27,9 +27,6 @@ var (
 	ErrBusy      = errors.New("trickplay: generation capacity exhausted")
 )
 
-// generationSlots is a PROCESS-WIDE budget: core and Jellyfin each build
-// their own Generator, and every distinct item/width pair is an independent
-// full-video ffmpeg job the transcode session cap never saw.
 var generationSlots = make(chan struct{}, 2)
 
 func supportedWidth(width int) bool {
@@ -186,9 +183,6 @@ func (g *Generator) ensure(ctx context.Context, itemID, source string, width int
 	return call.err
 }
 
-// complete reports whether a generation finished writing its completion
-// marker. 0.jpg existing proves nothing: ffmpeg may still be mid-run, or a
-// crash may have left a partial sheet set behind.
 func (g *Generator) complete(itemID string, width int) bool {
 	_, err := os.Stat(filepath.Join(g.widthDir(itemID, width), "COMPLETE"))
 	return err == nil
@@ -208,8 +202,6 @@ func (g *Generator) generate(ctx context.Context, itemID, source string, width i
 		return ErrBusy
 	}
 	dir := g.widthDir(itemID, width)
-	// A partial directory from an interrupted run is discarded: sheets from
-	// it were served as if the generation had finished.
 	os.RemoveAll(dir)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err

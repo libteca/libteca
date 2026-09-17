@@ -256,9 +256,6 @@ func (d *DB) FileByID(id int64) (*FileRec, error) {
 	return &f, err
 }
 
-// LibraryRootForEdition resolves the on-disk root a file of this edition must
-// be served from: media opens are confined to it (mediafs.OpenWithin) so a
-// path recorded against a symlinked entry cannot reach outside the library.
 func (d *DB) LibraryRootForEdition(editionID int64) (string, error) {
 	var root string
 	err := d.QueryRow(`SELECT l.path

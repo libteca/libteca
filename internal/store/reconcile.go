@@ -6,12 +6,6 @@ import (
 	"os"
 )
 
-// MarkMissingLibraryFiles reconciles removals after a COMPLETE scan
-// enumeration: file rows of the library whose paths no longer exist are
-// marked missing. Only fs.ErrNotExist counts as disappearance - permission
-// and I/O errors say nothing about the file being gone, and marking a
-// transiently unreadable mount missing would hide a healthy library.
-// Podcast episode files (edition_id NULL) are deliberately out of scope.
 func (d *DB) MarkMissingLibraryFiles(libraryID int64) (int, error) {
 	rows, err := d.Query(`SELECT f.id, f.path
 		FROM files f

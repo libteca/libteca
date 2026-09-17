@@ -443,9 +443,6 @@ func scanMusicLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 			if v := info.Meta["title"]; v != "" {
 				trackTitle = v
 			}
-			// The ordinal comes from the COMPLETE ordered track list:
-			// enumerating only the changed subset gave a newly added track 3
-			// position 1.
 			probedTracks = append(probedTracks, probedTrack{t: t, title: trackTitle, info: info, hash: hashFile(t.path, t.size), ordinal: int64(i + 1)})
 		}
 		var workID int64
@@ -462,8 +459,6 @@ func scanMusicLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 				if !skip[i] {
 					continue
 				}
-				// Unchanged tracks keep their stored probe data but their
-				// album position is repaired from the complete order.
 				var edID int64
 				if qerr := tx.QueryRow(`SELECT edition_id FROM files WHERE path = ?`, group[i].path).Scan(&edID); qerr == nil {
 					if _, uerr := tx.Exec(`UPDATE editions SET position = ? WHERE id = ?`, int64(i+1), edID); uerr != nil {

@@ -176,9 +176,6 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Principal-aware bucket: a success for one account must not erase the
-	// failures accumulated against another from the same IP. The aggregate
-	// per-IP bucket bounds username-cycling: a fresh principal bucket per
-	// guess otherwise defeats the limiter entirely.
 	principal := auth.ClientIP(r) + "|" + strings.ToLower(strings.TrimSpace(body.Username))
 	ip := auth.ClientIP(r)
 	if a.LoginLimiter != nil {
@@ -304,9 +301,6 @@ func (a *API) addLibrary(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "path is not a directory"})
 		return
 	}
-	// Files are globally unique by path and the watcher maps each directory
-	// to one library, so overlapping roots are refused: an ancestor root
-	// silently swallowed or reparented the other library's files.
 	libs, err := a.DB.Libraries()
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": "internal error"})
@@ -489,10 +483,6 @@ func (a *API) runScan(ctx context.Context, run *scanRun, lib *store.Library) {
 		return
 	}
 	_, _ = a.DB.PruneProviderCache()
-	// Reconciliation runs inside the shared scan path so EVERY entry point
-	// (HTTP, watcher, CLI) records removals - not just whichever one happened
-	// to go through the watcher. It only ever runs after a complete,
-	// successful enumeration.
 	if n, rerr := a.DB.MarkMissingLibraryFiles(lib.ID); rerr != nil {
 		slog.Warn("libteca: scan reconciliation failed", "library", lib.ID, "err", rerr)
 	} else if n > 0 {
@@ -784,10 +774,6 @@ func writeSSE(w http.ResponseWriter, fl http.Flusher, ev scanEvent) bool {
 
 func nowMilli() int64 { return time.Now().UnixMilli() }
 
-// rootsOverlap reports duplicate/ancestor/descendant library roots, after
-// best-effort symlink resolution and an inode identity check for
-// case-insensitive or bind-mounted aliases. Either direction of containment
-// counts.
 func rootsOverlap(a, b string) bool {
 	if ea, err := filepath.EvalSymlinks(a); err == nil {
 		a = ea
@@ -1089,10 +1075,6 @@ func (a *API) setProgress(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
-// confinedRoot resolves the serving root for a recorded file: edition files
-// serve from their library root, podcast episode files (edition_id 0) from
-// the podcasts data directory. Every media open goes through mediafs so a
-// database path pointing past its root never reads outside it.
 func (a *API) confinedRoot(editionID int64) (string, error) {
 	if editionID == 0 {
 		return filepath.Join(a.DataDir, "podcasts"), nil

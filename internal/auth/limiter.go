@@ -47,10 +47,6 @@ func NewLimiter() *Limiter {
 	}
 }
 
-// AllowIP checks the per-IP aggregate bucket. Principal buckets are keyed by
-// ip|username, so cycling usernames minted a fresh bucket per guess; the
-// aggregate bucket bounds total failures from one source regardless of the
-// names tried. A successful login must NOT clear it (see SuccessIP).
 func (l *Limiter) AllowIP(ip string) (bool, time.Duration) {
 	return l.Allow(ipKeyPrefix + ip)
 }
@@ -115,8 +111,6 @@ func (l *Limiter) Success(ip string) {
 	delete(l.entries, ip)
 }
 
-// SuccessIP deliberately does not clear the aggregate bucket: one valid login
-// must not reset the failure history of a source still guessing other names.
 func (l *Limiter) SuccessIP(ip string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()

@@ -517,8 +517,6 @@ func (a *API) play(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tracks := make([]map[string]any, 0, len(ctx.ed.Files))
-	// Float accumulation: int(f.DurationSecs) truncated every track, so the
-	// hundredth 60.9s track was advertised 89.1 seconds early.
 	cum := 0.0
 	for i, f := range ctx.ed.Files {
 		start := cum
@@ -695,8 +693,6 @@ func (a *API) sessionClose(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "invalid timeListened")
 		return
 	}
-	// Close and final progress commit atomically: closing first made the
-	// retry a no-op when the progress write failed, losing the final position.
 	if body.CurrentTime > 0 {
 		fileID, offset := ed.Locate(body.CurrentTime)
 		dur := body.Duration

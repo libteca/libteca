@@ -7,11 +7,6 @@ import (
 	"math"
 )
 
-// ValidPosition is the numeric progress policy the core face enforces,
-// shared with the ABS and Jellyfin adapters: non-finite or negative
-// positions are rejected, a known duration bounds the position with a small
-// end-of-track tolerance, and unknown durations accept a bounded policy
-// limit instead of any finite value.
 func ValidPosition(position, total float64) error {
 	if math.IsNaN(position) || math.IsInf(position, 0) || position < 0 {
 		return fmt.Errorf("invalid position")
@@ -143,10 +138,6 @@ func (d *DB) CloseSession(id string, position, listened float64) error {
 	return err
 }
 
-// CloseSessionWithProgress commits the final progress row and the session
-// close in ONE transaction: closing first left a retry with nothing to
-// update when the progress write failed, silently losing the final position.
-// Idempotent - an already-closed session is a no-op.
 func (d *DB) CloseSessionWithProgress(s *Session, p *Progress, listenedDelta float64) error {
 	return d.Update(func(tx *Tx) error {
 		var owner, edition int64

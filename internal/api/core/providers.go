@@ -199,8 +199,6 @@ func (a *API) applyEpisodes(w http.ResponseWriter, r *http.Request) {
 	}
 	updated, skipped, err := a.applyEpisodesToWork(r.Context(), id, body.Provider, body.ID)
 	if err != nil {
-		// Partial result: per-episode write failures are surfaced with the
-		// counts that actually landed instead of an all-or-nothing claim.
 		writeJSON(w, 502, map[string]any{"error": err.Error(), "updated": updated, "skipped": skipped})
 		return
 	}
@@ -352,9 +350,6 @@ func (a *API) applyResult(ctx context.Context, w *store.Work, libType string, re
 	if res.CoverURL != "" && (w.CoverPath == nil || *w.CoverPath == "") {
 		saved, cerr := a.downloadCover(w.ID, res.CoverURL)
 		if cerr == nil && saved {
-			// The link is part of "cover applied": a successful download
-			// whose DB link failed must not be reported as success - the
-			// next attempt would see the file on disk and do nothing.
 			if lerr := a.DB.SetWorkCover(w.ID, fmt.Sprintf("%d.jpg", w.ID)); lerr != nil {
 				return nil, fmt.Errorf("link cover to work: %w", lerr)
 			}
@@ -519,9 +514,6 @@ func (a *API) downloadCover(workID int64, url string) (bool, error) {
 	name := fmt.Sprintf("%d.jpg", workID)
 	dst := filepath.Join(dir, name)
 	if _, err := os.Stat(dst); err == nil {
-		// Bytes already present counts as saved: the caller re-links the DB
-		// row, which repairs a previous "file written, link failed" run
-		// that an existing-destination no-op could never recover from.
 		return true, nil
 	}
 	req, err := http.NewRequest(http.MethodGet, url, nil)

@@ -7,10 +7,6 @@ import (
 	"path/filepath"
 )
 
-// OpenWithin opens path confined to root: the relative path must stay local
-// to root and the open goes through os.OpenRoot, so an escaping symlink
-// recorded in the database (or racing replacement of a path component) can
-// never reach bytes outside the library. Only regular files are returned.
 func OpenWithin(root, path string) (*os.File, fs.FileInfo, error) {
 	rel, err := filepath.Rel(root, path)
 	if err != nil || rel == "." || !filepath.IsLocal(rel) {

@@ -231,9 +231,6 @@ func storeGame(db *store.DB, lib *store.Library, d *gameDoc, coversDir string, t
 			return err
 		}
 
-		// An updated existing file KEEPS its sequence: recomputing
-		// max(seq)+1 for an update moved the first of two discs to the end
-		// and changed the default selected file.
 		var seq int64
 		err = tx.QueryRow(`SELECT seq FROM files WHERE path = ? AND edition_id = ?`, d.path, editionID).Scan(&seq)
 		if errors.Is(err, sql.ErrNoRows) {

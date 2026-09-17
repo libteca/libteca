@@ -761,8 +761,6 @@ func (a *API) episodes(w http.ResponseWriter, r *http.Request) {
 		write(w, 200, map[string]any{"Items": []any{}, "TotalRecordCount": 0})
 		return
 	}
-	// Zero is the valid specials season, so absence is modelled separately:
-	// an int zero sentinel made a specials request match every season.
 	var seasonFilter *int
 	if sid := qget(r, "SeasonId"); sid != "" {
 		if m := reSeasonItem.FindStringSubmatch(sid); m != nil {
@@ -1230,9 +1228,6 @@ func (a *API) sessionProgress(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) sessionStopped(w http.ResponseWriter, r *http.Request) {
-	// saveFromSession owns the response: writing a second document from the
-	// ownership-rejection branches produced "{}{...}" bodies that clients
-	// could not parse. Rejection simply skips teardown.
 	sid := a.saveFromSession(w, r)
 	if q := qget(r, "PlaySessionId"); q != "" {
 		if !ownsPlaySession(r, q) {

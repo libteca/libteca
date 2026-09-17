@@ -194,9 +194,6 @@ func (w *Watcher) fire(libID int64) {
 }
 
 func (w *Watcher) triggerAndWait(ctx context.Context, libID int64) {
-	// Missing-file reconciliation lives inside the shared scan path:
-	// HTTP-, CLI- and watch-triggered scans all record removals
-	// identically, instead of only whichever one went through the watcher.
 	if _, err := w.scan.TriggerScan(ctx, libID); err != nil {
 		// A change that arrived while a scan was already running must not be
 		// dropped: its debounce timer fired into the running scan and was
@@ -214,9 +211,6 @@ func (w *Watcher) scanInFlight(libID int64) bool {
 	return err == nil && len(jobs) > 0 && jobs[0].Status == "running"
 }
 
-// markAllDirty schedules a scan of every configured library: an fsnotify
-// overflow means events were LOST, and logging it without recovery left the
-// changes invisible until the next sweep.
 func (w *Watcher) markAllDirty() {
 	libs, err := w.db.Libraries()
 	if err != nil {
@@ -293,8 +287,6 @@ func (w *Watcher) watchTree(root string, libID int64) bool {
 	w.mu.Lock()
 	_, wasWatched := w.dirs[root]
 	w.mu.Unlock()
-	// Children are always revisited even when the root is already armed: a
-	// subdirectory whose fw.Add once failed was previously never retried.
 	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil || !d.IsDir() {
 			return nil

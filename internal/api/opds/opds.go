@@ -543,10 +543,6 @@ func (a *API) cover(w http.ResponseWriter, r *http.Request, _ int64) {
 
 const thumbWidth = 160
 
-// Decoding a hostile cover allocates width*height*4 bytes regardless of the
-// compressed size, so decodes are dimension-preflighted via DecodeConfig and
-// run under a small process-wide budget; when the budget is exhausted the
-// original bytes pass through unscaled instead of piling on allocations.
 var decodeSlots = make(chan struct{}, 2)
 
 const (

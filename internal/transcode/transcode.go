@@ -82,9 +82,6 @@ type Session struct {
 	killed          bool
 	lastHit         atomic.Int64
 	mu              sync.Mutex
-	// lifecycle serializes launch against kill: the software-fallback
-	// launcher runs on its own goroutine, so a teardown overlapping fallback
-	// startup could observe a started process the waiter never owns.
 	lifecycle sync.Mutex
 }
 
@@ -226,9 +223,6 @@ func (s *Session) launch(startSecs float64, accel string) error {
 	s.done = done
 	s.exitErr = nil
 	s.mu.Unlock()
-	// A waiter is registered after EVERY successful start: the old
-	// killed-after-start branch returned without one, so the child was never
-	// reaped and done never closed.
 	go func() {
 		err := p.wait()
 		s.mu.Lock()
@@ -291,9 +285,6 @@ func (s *Session) kill() {
 		select {
 		case <-done:
 		case <-time.After(2 * time.Second):
-			// Bounded wait so shutdown cannot hang on a process stuck in
-			// kernel I/O; its output directory is then preserved rather
-			// than removed under a still-writing child.
 			slog.Warn("transcode exit pending; preserving output directory", "session", s.ID)
 			return
 		}
@@ -303,9 +294,6 @@ func (s *Session) kill() {
 	}
 }
 
-// Existing returns the live session for (id, edition) WITHOUT creating one.
-// Segment serving must never spawn an encoder: a reaped session's URL would
-// otherwise silently restart at position zero under the old namespace.
 func (m *Manager) Existing(sessionID string, edition int64) (*Session, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

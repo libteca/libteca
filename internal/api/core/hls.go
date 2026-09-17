@@ -303,10 +303,6 @@ func (a *API) hlsFile(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 404, map[string]string{"error": "edition not found"})
 		return
 	}
-	// Segment fetches must never (re)create an encoder: after idle expiry a
-	// segment URL used to respawn the session at default start zero and
-	// serve a different timeline under the old segment namespace. Expired
-	// sessions answer 410 so the client bootstraps a fresh one.
 	if !strings.HasSuffix(file, ".m3u8") {
 		if _, live := a.TC.Existing(sid, ed.ID); !live {
 			w.Header().Set("Cache-Control", "no-store")

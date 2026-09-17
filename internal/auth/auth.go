@@ -35,8 +35,6 @@ var (
 	ErrInvalidPassword    = errors.New("password must be 8 to 1024 bytes")
 )
 
-// ValidatePassword is the password half of ValidateCredentials for paths
-// that do not create a name.
 func ValidatePassword(password string) error {
 	if len(password) < 8 || len(password) > 1024 {
 		return ErrInvalidPassword
@@ -44,10 +42,6 @@ func ValidatePassword(password string) error {
 	return nil
 }
 
-// ValidateCredentials is the one name/password policy shared by
-// initialization, administrative creation and imports: trimmed bounded UTF-8
-// names without control characters, bounded byte-length passwords. Passwords
-// are never trimmed.
 func ValidateCredentials(name, password string) (string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" || len(name) > 128 || !utf8.ValidString(name) {

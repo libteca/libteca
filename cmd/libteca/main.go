@@ -121,8 +121,6 @@ func main() {
 			}
 			fatal(err)
 		}
-		// Same reconciliation the server's scan path runs, so CLI- and
-		// HTTP-triggered scans record removals identically.
 		if libs, lerr := db.Libraries(); lerr == nil {
 			for _, lib := range libs {
 				if marked, merr := db.MarkMissingLibraryFiles(lib.ID); merr != nil {

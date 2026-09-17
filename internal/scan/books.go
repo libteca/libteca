@@ -216,9 +216,6 @@ func storeBook(db *store.DB, lib *store.Library, d *bookDoc, coversDir string, t
 
 const sidecarCoverMax = 20 << 20
 
-// readSidecar reads a cover candidate fully bounded: the whole file was
-// materialized before any size check, so an oversized "cover" beside the
-// media blew the scan's memory budget.
 func readSidecar(path string) ([]byte, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -235,9 +232,6 @@ func readSidecar(path string) ([]byte, error) {
 	return data, nil
 }
 
-// writeCoverFile publishes atomically: a direct WriteFile exposes partially
-// written bytes to concurrent readers and never repairs a torn file from a
-// previous crash.
 func writeCoverFile(dst string, data []byte) error {
 	tmp, err := os.CreateTemp(filepath.Dir(dst), ".cover-*")
 	if err != nil {
@@ -399,9 +393,6 @@ func probeCBR(ctx context.Context, p, tool string) (int, []byte, error) {
 	return len(pages), cover, nil
 }
 
-// cbrList runs the extractor listing with a hard deadline and an output cap
-// that KILLS the child: reading exactly the cap and then calling Wait left
-// the child blocked on a full pipe forever for listings past the cap.
 func cbrList(ctx context.Context, p, tool string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()

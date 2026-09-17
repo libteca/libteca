@@ -39,11 +39,6 @@ func (d *DB) RotatePassword(id int64, passwordHash string) error {
 
 var ErrCredentialsChanged = errors.New("credentials changed; authenticate again")
 
-// RotatePasswordChecked swaps the hash, revokes tokens, closes open playback
-// sessions and drops the legacy Subsonic secret in ONE transaction. A
-// self-service change passes the hash that was actually verified so a request
-// paused between verification and rotation cannot overwrite a newer reset;
-// only the administrative reset path passes nil.
 func (d *DB) RotatePasswordChecked(id int64, expected *string, passwordHash string) error {
 	return d.Update(func(tx *Tx) error {
 		now := nowMilli()
@@ -80,8 +75,6 @@ func (d *DB) RotatePasswordChecked(id int64, expected *string, passwordHash stri
 	})
 }
 
-// RevokeTokenByValue revokes the exact token used for the current request;
-// server-side sign-out must not depend on the client discovering a token id.
 func (d *DB) RevokeTokenByValue(value string) error {
 	if value == "" {
 		return nil

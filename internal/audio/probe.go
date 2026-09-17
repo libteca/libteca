@@ -60,9 +60,6 @@ type ffprobeOut struct {
 
 const probeOutputLimit = 4 << 20
 
-// boundedBuffer caps retained output while still draining the pipe: a plain
-// LimitReader reader that stops at the cap wedges a child still writing, and
-// Output() buffers whatever the file says. Over budget cancels the command.
 type boundedBuffer struct {
 	bytes.Buffer
 	limit  int
@@ -88,9 +85,6 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// ProbeContext runs ffprobe bounded and cancellable: a plain
-// exec.Command().Output() could outlive a cancelled scan, block shutdown, or
-// buffer unbounded metadata output.
 func ProbeContext(parent context.Context, path string) (*Info, error) {
 	ctx, cancel := context.WithTimeout(parent, 60*time.Second)
 	defer cancel()

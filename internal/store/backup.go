@@ -22,12 +22,6 @@ func (d *DB) BackupTo(dest string) error {
 	return err
 }
 
-// withBackupLock serializes snapshot/publication/retention across processes:
-// two concurrent keep=1 runs each protected only their own file, so each
-// pruned the other's backup and zero generations survived. A DB mutex cannot
-// help separate CLI processes; the flock on a kept lock file does. The lock
-// file is never deleted - unlinking while another holder has it open mints
-// two independent locks.
 func withBackupLock(dir string, fn func() error) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
@@ -44,12 +38,6 @@ func withBackupLock(dir string, fn func() error) error {
 	return fn()
 }
 
-// Snapshot writes data/backups/libteca-<date>.db (VACUUM INTO), mirrors
-// coversDir into backupsDir/covers (skipping the thumb cache), prunes the
-// oldest libteca-*.db backups beyond keep, and returns the new db path.
-// The database snapshot is published only AFTER the covers copy completed,
-// so an interrupted backup never advertises a database generation whose
-// assets were never written.
 func (d *DB) Snapshot(coversDir, backupsDir string, keep int) (string, error) {
 	var published string
 	err := withBackupLock(backupsDir, func() error {
@@ -142,9 +130,6 @@ func copyTree(src, dst string) error {
 			err = inErr
 		}
 		if err == nil {
-			// Replace, never truncate in place: generations share this
-			// covers directory, and an interrupted copy must not tear a
-			// file an older backup still references.
 			err = os.Rename(tmp.Name(), filepath.Join(dst, rel))
 		}
 		if err != nil {

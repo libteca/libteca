@@ -159,9 +159,6 @@ func (a *API) authenticate(r *http.Request) (int64, bool, error) {
 	ip := auth.ClientIP(r)
 	principal := limiterKey(r, name)
 	if a.LoginLimiter != nil {
-		// The aggregate bucket is checked first for every branch: the
-		// unknown-user path previously ran its dummy burn before any
-		// limiter consultation and registered no failure at all.
 		if ok, _ := a.LoginLimiter.AllowIP(ip); !ok {
 			return 0, false, nil
 		}

@@ -65,10 +65,6 @@ func (s *Service) downloadEpisode(ctx context.Context, p *store.Podcast, ep *sto
 	}
 	ext := enclosureExt(ep.EnclosureURL)
 	path := filepath.Join(dir, name+"."+ext)
-	// Ownership checks are mandatory at EVERY fallback level: the old final
-	// fallback (bare episode id) had no check, and a check error was treated
-	// as proof the name was unused. Both let one download REPLACE another
-	// episode's file on POSIX rename.
 	used := func(candidate string) (bool, error) {
 		otherID, err := s.DB.EpisodeUsingFilePath(candidate)
 		if errors.Is(err, store.ErrNotFound) {
@@ -94,9 +90,6 @@ func (s *Service) downloadEpisode(ctx context.Context, p *store.Podcast, ep *sto
 			if _, rerr := rand.Read(nonce[:]); rerr != nil {
 				return rerr
 			}
-			// Immutable service-generated name: never collides with another
-			// episode's file, so publication can never overwrite foreign
-			// bytes.
 			path = filepath.Join(dir, fmt.Sprintf("%s-%d-%s.%s", name, ep.ID, hex.EncodeToString(nonce[:]), ext))
 		}
 	}
@@ -149,11 +142,6 @@ func (s *Service) downloadEpisode(ctx context.Context, p *store.Podcast, ep *sto
 	if err != nil {
 		return err
 	}
-	// No-replace publication: os.Rename REPLACES on POSIX, and every
-	// candidate above was verified unowned - a hard link fails with EEXIST
-	// instead of clobbering whatever appeared in the meantime. Replacement is
-	// allowed only for a file this episode already owns (redownload) or a
-	// truly orphaned file with no episode link.
 	if err := os.Link(tmpPath, path); err != nil {
 		otherID, lerr := s.DB.EpisodeUsingFilePath(path)
 		if lerr != nil && !errors.Is(lerr, store.ErrNotFound) {
@@ -186,10 +174,6 @@ func (s *Service) downloadEpisode(ctx context.Context, p *store.Podcast, ep *sto
 }
 
 func (s *Service) downloadTimeout(contentLength int64) time.Duration {
-	// Unknown length gets the maximum overall deadline, not the floor: a
-	// legitimate chunked transfer making steady progress was capped at ~90s
-	// regardless of progress. Idle/stalled bodies are still closed by the
-	// watchdog goroutine when the deadline fires.
 	if contentLength < 0 {
 		return maxEpisodeReadTime
 	}

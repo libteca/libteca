@@ -58,11 +58,6 @@ func (d *DB) SetReadingProgress(p *ReadingProgress) error {
 	return d.SetReadingProgressPatch(p, true)
 }
 
-// SetReadingProgressPatch gives progress updates PATCH semantics for
-// completion: an omitted finished flag PRESERVES the stored value (a
-// page-only update from a reader must not reopen a finished item), while an
-// explicit false does. The CASE is atomic inside the upsert, not a
-// read-then-write race.
 func (d *DB) SetReadingProgressPatch(p *ReadingProgress, finishedProvided bool) error {
 	_, err := d.Exec(`INSERT INTO progress (user_id, edition_id, file_id, file_offset_secs, edition_position_secs, duration_secs, is_finished, device, updated_at, page, percent, locator)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
@@ -181,8 +176,6 @@ func (d *DB) EditionFile(editionID int64) (*FileRec, string, error) {
 }
 
 // FileStatByPath reports the recorded size/mtime so the scanner can skip
-// probing unchanged book files. mtimeNs is 0 for legacy rows, which forces
-// exactly one refresh after the 0012 migration.
 func (d *DB) FileStatByPath(path string) (int64, int64, int64, bool, error) {
 	var size, mtime, mtimeNs int64
 	err := d.QueryRow(`SELECT size_bytes, mtime_secs, mtime_ns FROM files WHERE path = ? AND missing = 0`, path).Scan(&size, &mtime, &mtimeNs)
