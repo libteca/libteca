@@ -5,8 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
-	"github.com/libteca/libteca/internal/api/opds"
 	"github.com/libteca/libteca/internal/auth"
 	"github.com/libteca/libteca/internal/store"
 	"github.com/neutron-build/neutron/go/neutron"
@@ -98,7 +98,13 @@ func (a *API) userCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 409, map[string]string{"error": "user exists"})
 		return
 	}
-	id, err := a.DB.CreateUser(body.Name, auth.Hash(body.Password), body.IsAdmin)
+	hash, err := auth.HashRequest(r.Context(), body.Password)
+	if err != nil {
+		auth.WriteRetryAfter(w, time.Second)
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "server busy, try again later"})
+		return
+	}
+	id, err := a.DB.CreateUser(body.Name, hash, body.IsAdmin)
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
@@ -115,23 +121,18 @@ func (a *API) userDelete(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "cannot delete self"})
 		return
 	}
-	values, err := a.DB.DeleteUserGuarded(id)
-	if errors.Is(err, store.ErrLastAdmin) {
-		writeJSON(w, 400, map[string]string{"error": "cannot delete last admin"})
-		return
-	}
-	if errors.Is(err, store.ErrNotFound) {
-		writeJSON(w, 404, map[string]string{"error": "user not found"})
-		return
-	}
-	if err != nil {
+	if _, err := a.DB.DeleteUserGuarded(id); err != nil {
+		if errors.Is(err, store.ErrLastAdmin) {
+			writeJSON(w, 400, map[string]string{"error": "cannot delete last admin"})
+			return
+		}
+		if errors.Is(err, store.ErrNotFound) {
+			writeJSON(w, 404, map[string]string{"error": "user not found"})
+			return
+		}
 		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
-	for _, v := range values {
-		auth.InvalidateToken(v)
-	}
-	opds.InvalidateUser(id)
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
@@ -154,30 +155,35 @@ func (a *API) userSetPassword(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "password must be at least 8 characters"})
 		return
 	}
-	if !cur.IsAdmin && !auth.Verify(body.OldPassword, cur.PasswordHash) {
-		writeJSON(w, 403, map[string]string{"error": "wrong password"})
-		return
+	if !cur.IsAdmin {
+		oldOK, err := auth.VerifyRequest(r.Context(), body.OldPassword, cur.PasswordHash)
+		if err != nil && !errors.Is(err, auth.ErrKDFBusy) {
+			writeJSON(w, 500, map[string]string{"error": "internal error"})
+			return
+		}
+		if err != nil || !oldOK {
+			if err != nil {
+				auth.WriteRetryAfter(w, time.Second)
+				writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "server busy, try again later"})
+				return
+			}
+			writeJSON(w, 403, map[string]string{"error": "wrong password"})
+			return
+		}
 	}
 	if _, err := a.DB.User(id); err != nil {
 		writeJSON(w, 404, map[string]string{"error": "user not found"})
 		return
 	}
-	if err := a.DB.UpdateUserPassword(id, auth.Hash(body.Password)); err != nil {
-		writeJSON(w, 500, map[string]string{"error": "internal error"})
-		return
-	}
-	opds.InvalidateUser(id)
-	values, err := a.DB.UserTokenValues(id)
+	hash, err := auth.HashRequest(r.Context(), body.Password)
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": "internal error"})
+		auth.WriteRetryAfter(w, time.Second)
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "server busy, try again later"})
 		return
 	}
-	if err := a.DB.RevokeUserTokens(id); err != nil {
+	if err := a.DB.RotatePassword(id, hash); err != nil {
 		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
-	}
-	for _, v := range values {
-		auth.InvalidateToken(v)
 	}
 	if err := a.DB.DeleteSetting("subsonic.pw." + strconv.FormatInt(id, 10)); err != nil {
 		writeJSON(w, 500, map[string]string{"error": "internal error"})
@@ -225,8 +231,12 @@ func (a *API) tokenIssue(w http.ResponseWriter, r *http.Request) {
 	if label == "" {
 		label = r.UserAgent()
 	}
-	value, err := auth.IssueToken(a.DB, cur.ID, label)
+	value, err := auth.IssueTokenFromParent(a.DB, cur.ID, label, auth.Token(r))
 	if err != nil {
+		if errors.Is(err, auth.ErrCredentialsChanged) {
+			writeJSON(w, 401, map[string]string{"error": "unauthorized"})
+			return
+		}
 		writeJSON(w, 500, map[string]string{"error": "token issue failed"})
 		return
 	}
@@ -249,11 +259,9 @@ func (a *API) tokenRevoke(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]string{"error": "admin required"})
 		return
 	}
-	value, err := a.DB.RevokeToken(id)
-	if err != nil {
+	if _, err := a.DB.RevokeToken(id); err != nil {
 		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
-	auth.InvalidateToken(value)
 	writeJSON(w, 200, map[string]any{"ok": true})
 }

@@ -260,19 +260,28 @@ func (a *API) authenticate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	u, err := a.DB.UserByName(body.Username)
-	if err != nil || !auth.Verify(pass, u.PasswordHash) {
-		if a.LoginLimiter != nil {
-			a.LoginLimiter.Failure(ip)
+	u, err := auth.CheckPassword(r.Context(), a.DB, body.Username, pass)
+	if err != nil {
+		if errors.Is(err, auth.ErrKDFBusy) {
+			auth.WriteRetryAfter(w, time.Second)
+			write(w, 429, map[string]any{"error": "server busy, try again later"})
+			return
 		}
-		w.WriteHeader(401)
-		w.Write([]byte(`{"error":"invalid"}`))
+		if errors.Is(err, auth.ErrBadCredentials) {
+			if a.LoginLimiter != nil {
+				a.LoginLimiter.Failure(ip)
+			}
+			w.WriteHeader(401)
+			w.Write([]byte(`{"error":"invalid"}`))
+			return
+		}
+		write(w, 500, map[string]any{"error": "internal error"})
 		return
 	}
 	if a.LoginLimiter != nil {
 		a.LoginLimiter.Success(ip)
 	}
-	token, err := auth.IssueToken(a.DB, u.ID, "jellyfin-client")
+	token, err := auth.IssueTokenForPassword(a.DB, u.ID, "jellyfin-client", u.PasswordHash)
 	if err != nil {
 		write(w, 500, map[string]any{"error": "internal error"})
 		return

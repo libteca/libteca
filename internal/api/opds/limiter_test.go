@@ -69,7 +69,7 @@ func TestBasicAuthSuccessWithinLimit(t *testing.T) {
 	}
 }
 
-func TestInvalidateUserDropsCachedBasic(t *testing.T) {
+func TestPasswordChangeInvalidatesCachedBasic(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -95,6 +95,9 @@ func TestInvalidateUserDropsCachedBasic(t *testing.T) {
 	if code := get("cache-user", "oldpass123"); code != http.StatusOK {
 		t.Fatalf("initial auth = %d, want 200", code)
 	}
+	if code := get("cache-user", "oldpass123"); code != http.StatusOK {
+		t.Fatalf("cached auth = %d, want 200", code)
+	}
 	u, err := db.UserByName("cache-user")
 	if err != nil {
 		t.Fatal(err)
@@ -102,12 +105,11 @@ func TestInvalidateUserDropsCachedBasic(t *testing.T) {
 	if _, err := db.Exec(`UPDATE users SET password_hash = ? WHERE id = ?`, auth.Hash("newpass123"), u.ID); err != nil {
 		t.Fatal(err)
 	}
-	InvalidateUser(u.ID)
 	if code := get("cache-user", "oldpass123"); code != http.StatusUnauthorized {
-		t.Fatalf("old password after InvalidateUser = %d, want 401", code)
+		t.Fatalf("old password after rotation = %d, want 401", code)
 	}
 	if code := get("cache-user", "newpass123"); code != http.StatusOK {
-		t.Fatalf("new password after InvalidateUser = %d, want 200", code)
+		t.Fatalf("new password after rotation = %d, want 200", code)
 	}
 }
 

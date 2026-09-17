@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -52,10 +53,22 @@ const (
 	pageLimit = 50 // corpus: page param base (0) + per-page size unverified against KOReader/Chunky
 )
 
+// Basic auth: username + argon2 password via the shared auth path. The
+// expensive verification RESULT is cached briefly per API instance, keyed by
+// the current stored hash — a rotated or deleted password can never select a
+// stale proof, so the cache is a cost optimization, never the authorization
+// authority. OPDS clients send Basic on every request; PSE browsing would
+// otherwise re-run argon2 per page.
+const basicTTLMillis = 15 * 60 * 1000
+const basicProofsMax = 1024
+
 type API struct {
 	DB           *store.DB
 	Dir          string
 	LoginLimiter *auth.Limiter
+
+	basicMu     sync.Mutex
+	basicProofs map[[32]byte]time.Time
 }
 
 func New(db *store.DB, dir string) *API {
@@ -75,17 +88,47 @@ func (a *API) Mount(r *neutron.Router) {
 	r.HandleFunc("GET /opds/pse/{editionId}/{pageNumber}", a.auth(a.psePage))
 }
 
-// Basic auth: username + argon2 password via the shared auth path. Successful
-// verifications are cached briefly (hashed key) because OPDS clients send
-// Basic on every request — PSE browsing would otherwise re-run argon2 per page.
-const basicTTLMillis = 15 * 60 * 1000
-
-type cachedBasic struct {
-	userID int64
-	at     int64
+func (a *API) verifyBasic(r *http.Request, u *store.User, pass string) (bool, error) {
+	if u == nil {
+		_, err := auth.VerifyRequest(r.Context(), pass, auth.DummyHash())
+		return false, err
+	}
+	var key [32]byte
+	if len(pass) <= 1024 {
+		key = sha256.Sum256([]byte(strconv.FormatInt(u.ID, 10) + "\x00" + u.PasswordHash + "\x00" + pass))
+		now := time.Now()
+		a.basicMu.Lock()
+		until, hit := a.basicProofs[key]
+		a.basicMu.Unlock()
+		if hit && now.Before(until) {
+			return true, nil
+		}
+	}
+	valid, err := auth.VerifyRequest(r.Context(), pass, u.PasswordHash)
+	if err != nil || !valid {
+		return false, err
+	}
+	if len(pass) <= 1024 {
+		now := time.Now()
+		a.basicMu.Lock()
+		if a.basicProofs == nil {
+			a.basicProofs = make(map[[32]byte]time.Time)
+		}
+		if len(a.basicProofs) >= basicProofsMax {
+			for k, exp := range a.basicProofs {
+				if !now.Before(exp) {
+					delete(a.basicProofs, k)
+				}
+			}
+			if len(a.basicProofs) >= basicProofsMax {
+				a.basicProofs = make(map[[32]byte]time.Time)
+			}
+		}
+		a.basicProofs[key] = now.Add(time.Duration(basicTTLMillis) * time.Millisecond)
+		a.basicMu.Unlock()
+	}
+	return true, nil
 }
-
-var basicCache sync.Map
 
 func (a *API) auth(h func(http.ResponseWriter, *http.Request, int64)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -102,17 +145,26 @@ func (a *API) auth(h func(http.ResponseWriter, *http.Request, int64)) http.Handl
 				return
 			}
 		}
-		var key [32]byte = sha256.Sum256([]byte(user + "\x00" + pass))
-		k := key[:]
-		if v, hit := basicCache.Load(string(k)); hit {
-			if c, ok := v.(*cachedBasic); ok && time.Now().UnixMilli()-c.at < basicTTLMillis {
-				h(w, r, c.userID)
+		var u *store.User
+		looked, err := a.DB.UserByName(user)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			serverError(w, r, err)
+			return
+		}
+		if err == nil {
+			u = looked
+		}
+		valid, verr := a.verifyBasic(r, u, pass)
+		if verr != nil {
+			if errors.Is(verr, auth.ErrKDFBusy) {
+				auth.WriteRetryAfter(w, time.Second)
+				http.Error(w, "server busy, try again later", http.StatusTooManyRequests)
 				return
 			}
-			basicCache.Delete(string(k))
+			serverError(w, r, verr)
+			return
 		}
-		u, err := a.DB.UserByName(user)
-		if err != nil || !auth.Verify(pass, u.PasswordHash) {
+		if !valid {
 			if a.LoginLimiter != nil {
 				a.LoginLimiter.Failure(ip)
 			}
@@ -122,7 +174,6 @@ func (a *API) auth(h func(http.ResponseWriter, *http.Request, int64)) http.Handl
 		if a.LoginLimiter != nil {
 			a.LoginLimiter.Success(ip)
 		}
-		basicCache.Store(string(k), &cachedBasic{userID: u.ID, at: time.Now().UnixMilli()})
 		h(w, r, u.ID)
 	}
 }
@@ -135,17 +186,6 @@ func (a *API) unauthorized(w http.ResponseWriter) {
 func serverError(w http.ResponseWriter, r *http.Request, err error) {
 	slog.Warn("libteca: opds request failed", "path", r.URL.Path, "err", err)
 	http.Error(w, "internal error", http.StatusInternalServerError)
-}
-
-// InvalidateUser drops cached Basic credentials for a user so password
-// changes and deletion take effect before the TTL expires.
-func InvalidateUser(userID int64) {
-	basicCache.Range(func(k, v any) bool {
-		if c, ok := v.(*cachedBasic); ok && c.userID == userID {
-			basicCache.Delete(k)
-		}
-		return true
-	})
 }
 
 type Feed struct {

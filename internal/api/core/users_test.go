@@ -363,12 +363,22 @@ func TestUserChangePasswordTokenFailureIsError(t *testing.T) {
 	if code, _ := callJSON(t, "GET", base+"/users", token, nil); code != http.StatusOK {
 		t.Fatalf("warmup request = %d, want 200", code)
 	}
-	if _, err := db.Exec(`DROP TABLE tokens`); err != nil {
+	if _, err := db.Exec(`CREATE TRIGGER fail_token_revoke BEFORE UPDATE ON tokens BEGIN SELECT RAISE(ABORT, 'boom'); END`); err != nil {
 		t.Fatal(err)
 	}
 	code, out := callJSON(t, "POST", fmt.Sprintf("%s/users/%d/password", base, adminID), token,
 		map[string]string{"password": "newpass123"})
 	if code != http.StatusInternalServerError {
 		t.Fatalf("password change with token-store failure = %d %v, want 500", code, out)
+	}
+	u, err := db.User(adminID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if auth.Verify("newpass123", u.PasswordHash) {
+		t.Fatal("failed rotation must roll the password update back with the revocation")
+	}
+	if !auth.Verify("password123", u.PasswordHash) {
+		t.Fatal("original password must survive a failed rotation")
 	}
 }

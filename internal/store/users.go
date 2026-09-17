@@ -32,6 +32,30 @@ func (d *DB) UpdateUserPassword(id int64, passwordHash string) error {
 	return err
 }
 
+// RotatePassword changes the hash and revokes every active token in one
+// transaction: the old separate statements left a partially completed
+// rotation behind when a later step failed, and a login verified against the
+// old hash could still mint a token after the revocation ran.
+func (d *DB) RotatePassword(id int64, passwordHash string) error {
+	return d.Update(func(tx *Tx) error {
+		res, err := tx.Exec(`UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?`,
+			passwordHash, nowMilli(), id)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return ErrNotFound
+		}
+		_, err = tx.Exec(`UPDATE tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`,
+			nowMilli(), id)
+		return err
+	})
+}
+
 func (d *DB) CountAdmins() (int, error) {
 	var n int
 	err := d.QueryRow(`SELECT COUNT(*) FROM users WHERE is_admin = 1`).Scan(&n)

@@ -82,7 +82,7 @@ func newPodcastTestAPI(t *testing.T) (*API, *store.DB, string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	if err := auth.InitAdmin(db, "admin", "pw"); err != nil {
+	if err := auth.InitAdmin(db, "admin", "password123"); err != nil {
 		t.Fatal(err)
 	}
 	var uid int64

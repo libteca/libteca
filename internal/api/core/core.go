@@ -3,8 +3,6 @@ package core
 import (
 	"log/slog"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -127,14 +125,6 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 
-var loginDummyHash = func() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		panic(err)
-	}
-	return auth.Hash(hex.EncodeToString(b))
-}()
-
 func (a *API) login(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Username string `json:"username"`
@@ -154,27 +144,35 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	u, err := a.DB.UserByName(body.Username)
+	u, err := auth.CheckPassword(r.Context(), a.DB, body.Username, body.Password)
 	if err != nil {
-		auth.Verify(body.Password, loginDummyHash)
-		if a.LoginLimiter != nil {
-			a.LoginLimiter.Failure(ip)
+		if errors.Is(err, auth.ErrKDFBusy) {
+			auth.WriteRetryAfter(w, time.Second)
+			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "server busy, try again later"})
+			return
 		}
-		writeJSON(w, 401, map[string]string{"error": "invalid credentials"})
-		return
-	}
-	if !auth.Verify(body.Password, u.PasswordHash) {
-		if a.LoginLimiter != nil {
-			a.LoginLimiter.Failure(ip)
+		if errors.Is(err, auth.ErrBadCredentials) {
+			if a.LoginLimiter != nil {
+				a.LoginLimiter.Failure(ip)
+			}
+			writeJSON(w, 401, map[string]string{"error": "invalid credentials"})
+			return
 		}
-		writeJSON(w, 401, map[string]string{"error": "invalid credentials"})
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	if a.LoginLimiter != nil {
 		a.LoginLimiter.Success(ip)
 	}
-	token, err := auth.IssueToken(a.DB, u.ID, r.UserAgent())
+	// Issuance is conditional on the hash that just verified: a concurrent
+	// password rotation revokes tokens in the same transaction that swaps
+	// the hash, so an old-password login cannot mint a surviving token.
+	token, err := auth.IssueTokenForPassword(a.DB, u.ID, r.UserAgent(), u.PasswordHash)
 	if err != nil {
+		if errors.Is(err, auth.ErrCredentialsChanged) {
+			writeJSON(w, 401, map[string]string{"error": "invalid credentials"})
+			return
+		}
 		writeJSON(w, 500, map[string]string{"error": "token issue failed"})
 		return
 	}

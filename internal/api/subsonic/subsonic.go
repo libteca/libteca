@@ -119,7 +119,18 @@ func (a *API) notFound(w http.ResponseWriter, r *http.Request) {
 func (a *API) wrap(h func(http.ResponseWriter, *http.Request, int64)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		r.ParseForm()
-		uid, ok := a.authenticate(r)
+		uid, ok, err := a.authenticate(r)
+		if err != nil {
+			if errors.Is(err, auth.ErrKDFBusy) {
+				auth.WriteRetryAfter(w, time.Second)
+				w.WriteHeader(http.StatusTooManyRequests)
+				a.respond(w, r, errResponse(errGeneric, "server busy, try again later"))
+				return
+			}
+			slog.Warn("libteca: subsonic authentication failed", "err", err)
+			a.respond(w, r, errResponse(errGeneric, "Internal server error"))
+			return
+		}
 		if !ok {
 			a.respond(w, r, errResponse(errWrongCredentials, "Wrong username or password"))
 			return
@@ -140,19 +151,23 @@ func limiterKey(r *http.Request, user string) string {
 	return auth.ClientIP(r) + "|" + strings.ToLower(strings.TrimSpace(user))
 }
 
-func (a *API) authenticate(r *http.Request) (int64, bool) {
+func (a *API) authenticate(r *http.Request) (int64, bool, error) {
 	name := r.Form.Get("u")
 	if name == "" {
-		return 0, false
+		return 0, false, nil
 	}
 	u, err := a.DB.UserByName(name)
 	if err != nil {
-		return 0, false
+		if errors.Is(err, store.ErrNotFound) {
+			_, verr := auth.VerifyRequest(r.Context(), r.Form.Get("p"), auth.DummyHash())
+			return 0, false, verr
+		}
+		return 0, false, err
 	}
 	if token := r.Form.Get("t"); token != "" {
 		salt := r.Form.Get("s")
 		if salt == "" {
-			return 0, false
+			return 0, false, nil
 		}
 		// The token branch is an online password oracle: wrong candidates
 		// cost one MD5, the right one authenticates. Without the limiter it
@@ -160,51 +175,59 @@ func (a *API) authenticate(r *http.Request) (int64, bool) {
 		key := limiterKey(r, name)
 		if a.LoginLimiter != nil {
 			if ok, _ := a.LoginLimiter.Allow(key); !ok {
-				return 0, false
+				return 0, false, nil
 			}
 		}
 		secret, has := a.DB.GetSetting(subsonicSecretKey(u.ID))
 		if !has {
-			return 0, false
+			return 0, false, nil
 		}
 		sum := md5.Sum([]byte(secret + salt))
 		if subtle.ConstantTimeCompare([]byte(hex.EncodeToString(sum[:])), []byte(strings.ToLower(token))) != 1 {
 			if a.LoginLimiter != nil {
 				a.LoginLimiter.Failure(key)
 			}
-			return 0, false
+			return 0, false, nil
 		}
 		if a.LoginLimiter != nil {
 			a.LoginLimiter.Success(key)
 		}
-		if !auth.Verify(secret, u.PasswordHash) {
-			a.DB.DeleteSetting(subsonicSecretKey(u.ID))
-			return 0, false
+		stillCurrent, verr := auth.VerifyRequest(r.Context(), secret, u.PasswordHash)
+		if verr != nil {
+			return 0, false, verr
 		}
-		return u.ID, true
+		if !stillCurrent {
+			a.DB.DeleteSetting(subsonicSecretKey(u.ID))
+			return 0, false, nil
+		}
+		return u.ID, true, nil
 	}
 	pass := r.Form.Get("p")
 	if pass == "" {
-		return 0, false
+		return 0, false, nil
 	}
 	plainKey := limiterKey(r, name)
 	if a.LoginLimiter != nil {
 		if ok, _ := a.LoginLimiter.Allow(plainKey); !ok {
-			return 0, false
+			return 0, false, nil
 		}
 	}
 	if enc, found := strings.CutPrefix(pass, "enc:"); found {
 		raw, err := hex.DecodeString(enc)
 		if err != nil {
-			return 0, false
+			return 0, false, nil
 		}
 		pass = string(raw)
 	}
-	if !auth.Verify(pass, u.PasswordHash) {
+	valid, verr := auth.VerifyRequest(r.Context(), pass, u.PasswordHash)
+	if verr != nil {
+		return 0, false, verr
+	}
+	if !valid {
 		if a.LoginLimiter != nil {
 			a.LoginLimiter.Failure(plainKey)
 		}
-		return 0, false
+		return 0, false, nil
 	}
 	if a.LoginLimiter != nil {
 		a.LoginLimiter.Success(plainKey)
@@ -212,7 +235,7 @@ func (a *API) authenticate(r *http.Request) (int64, bool) {
 	if cached, has := a.DB.GetSetting(subsonicSecretKey(u.ID)); !has || cached != pass {
 		a.DB.SetSetting(subsonicSecretKey(u.ID), pass)
 	}
-	return u.ID, true
+	return u.ID, true, nil
 }
 
 func subsonicSecretKey(userID int64) string {

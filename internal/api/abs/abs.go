@@ -1,16 +1,17 @@
 package abs
 
 import (
-	"strings"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/libteca/libteca/internal/auth"
@@ -66,18 +67,27 @@ func (a *API) Login(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	u, err := a.DB.UserByName(body.Username)
-	if err != nil || !auth.Verify(body.Password, u.PasswordHash) {
-		if a.LoginLimiter != nil {
-			a.LoginLimiter.Failure(ip)
+	u, err := auth.CheckPassword(r.Context(), a.DB, body.Username, body.Password)
+	if err != nil {
+		if errors.Is(err, auth.ErrKDFBusy) {
+			auth.WriteRetryAfter(w, time.Second)
+			fail(w, 429, "Server busy, try again later")
+			return
 		}
-		fail(w, 401, "Invalid username or password")
+		if errors.Is(err, auth.ErrBadCredentials) {
+			if a.LoginLimiter != nil {
+				a.LoginLimiter.Failure(ip)
+			}
+			fail(w, 401, "Invalid username or password")
+			return
+		}
+		serverError(w, r, err)
 		return
 	}
 	if a.LoginLimiter != nil {
 		a.LoginLimiter.Success(ip)
 	}
-	token, err := auth.IssueToken(a.DB, u.ID, "abs-app")
+	token, err := auth.IssueTokenForPassword(a.DB, u.ID, "abs-app", u.PasswordHash)
 	if err != nil {
 		serverError(w, r, err)
 		return
