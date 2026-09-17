@@ -267,7 +267,16 @@ func (a *API) podcastImportOPML(w http.ResponseWriter, r *http.Request) {
 	run = &opmlRun{snap: opmlImportStatus{Status: "running", Total: len(urls)}}
 	a.opmlRun = run
 	a.opmlMu.Unlock()
-	go a.runOPMLImport(context.WithoutCancel(r.Context()), run, urls)
+	if !a.launchJob(func() { a.runOPMLImport(context.WithoutCancel(r.Context()), run, urls) }) {
+		a.opmlMu.Lock()
+		if a.opmlRun == run {
+			a.opmlRun = nil
+		}
+		a.opmlMu.Unlock()
+		run.update(opmlImportStatus{Status: "error", Total: len(urls), Failed: len(urls)})
+		writeJSON(w, 503, map[string]string{"error": "server shutting down"})
+		return
+	}
 	writeJSON(w, 202, run.snapshot())
 }
 

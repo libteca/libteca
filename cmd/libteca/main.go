@@ -5,11 +5,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -25,6 +27,13 @@ import (
 var version = "dev"
 
 func main() {
+	exitCode := 0
+	defer func() {
+		if exitCode != 0 {
+			os.Exit(exitCode)
+		}
+	}()
+
 	if len(os.Args) > 1 && os.Args[1] == "backup" {
 		runBackup(os.Args[2:])
 		return
@@ -97,7 +106,16 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	srv.Core.SetShutdownCtx(ctx)
-	go podcasts.Run(ctx)
+
+	var workers sync.WaitGroup
+	startWorker := func(fn func()) {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			fn()
+		}()
+	}
+	startWorker(func() { podcasts.Run(ctx) })
 
 	if v := os.Getenv("LIBTECA_WATCH"); v != "" {
 		if parsed, err := strconv.ParseBool(v); err == nil {
@@ -113,28 +131,50 @@ func main() {
 				sweep = time.Duration(v) * time.Second
 			}
 		}
-		go watch.New(srv.Core, db, watch.Config{SweepEvery: sweep}).Run(ctx)
+		startWorker(func() { watch.New(srv.Core, db, watch.Config{SweepEvery: sweep}).Run(ctx) })
 		fmt.Printf("libteca: watch enabled (debounce %s, sweep %s)\n", watch.DefaultDebounce, sweep)
 	}
 
 	h := &http.Server{
-		Addr:              fmt.Sprintf(":%d", *port),
-		Handler:           srv.Handler(),
+		Addr: fmt.Sprintf(":%d", *port),
+		// Requests get the shutdown context: in-flight work observes
+		// cancellation instead of running past the close sequence below.
+		BaseContext: func(net.Listener) context.Context { return ctx },
+		Handler:     srv.Handler(),
+		// ReadHeaderTimeout alone left a slow body unbounded; ReadTimeout
+		// covers header+body while leaving long media/SSE writes alone
+		// (no WriteTimeout). Hijacked websocket upgrades drop these
+		// deadlines, so /socket keeps its own lifecycle.
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
-	go func() {
-		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := h.Shutdown(shutdownCtx); err != nil {
-			fmt.Fprintln(os.Stderr, "libteca: shutdown:", err)
-		}
-		srv.Close()
-	}()
+	// The main goroutine owns shutdown: returning as soon as
+	// ListenAndServe reports ErrServerClosed used to race the graceful
+	// shutdown, worker drain and transcode cleanup with process exit.
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- h.ListenAndServe() }()
 	fmt.Printf("libteca %s listening on :%d (data: %s)\n", version, *port, abs)
-	if err := h.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		fatal(err)
+
+	var listenErr error
+	select {
+	case <-ctx.Done():
+	case listenErr = <-serveErr:
+	}
+	stop()
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutdownErr := h.Shutdown(shutdownCtx)
+	cancel()
+	if shutdownErr != nil {
+		fmt.Fprintln(os.Stderr, "libteca: shutdown:", shutdownErr)
+		h.Close()
+	}
+	srv.Close()
+	workers.Wait()
+	srv.Core.WaitJobs()
+	if listenErr != nil && !errors.Is(listenErr, http.ErrServerClosed) {
+		fmt.Fprintln(os.Stderr, "libteca:", listenErr)
+		exitCode = 1
 	}
 }
 

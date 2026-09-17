@@ -1,11 +1,11 @@
 package core
 
 import (
-	"log/slog"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -19,6 +19,7 @@ import (
 	"github.com/libteca/libteca/internal/scan"
 	"github.com/libteca/libteca/internal/store"
 	"github.com/libteca/libteca/internal/transcode"
+	"github.com/libteca/libteca/internal/trickplay"
 	"github.com/neutron-build/neutron/go/neutron"
 )
 
@@ -42,6 +43,13 @@ type API struct {
 
 	opmlMu  sync.Mutex
 	opmlRun *opmlRun
+
+	jobsMu      sync.Mutex
+	jobsClosing bool
+	jobsWG      sync.WaitGroup
+
+	tpMu sync.Mutex
+	tp   *trickplay.Generator
 }
 
 func New(db *store.DB, dataDir string) *API {
@@ -49,6 +57,33 @@ func New(db *store.DB, dataDir string) *API {
 		fmt.Printf("libteca: marked %d interrupted scan job(s) as error\n", n)
 	}
 	return &API{DB: db, DataDir: dataDir, runs: map[int64]*scanRun{}, metaRuns: map[int64]*metaRun{}}
+}
+
+// launchJob registers owned background work so shutdown can drain it: a
+// bare goroutine launch was invisible to WaitJobs, and work admitted during
+// shutdown outlived the database close.
+func (a *API) launchJob(fn func()) bool {
+	a.jobsMu.Lock()
+	if a.jobsClosing {
+		a.jobsMu.Unlock()
+		return false
+	}
+	a.jobsWG.Add(1)
+	a.jobsMu.Unlock()
+	go func() {
+		defer a.jobsWG.Done()
+		fn()
+	}()
+	return true
+}
+
+// WaitJobs stops admitting new background work and waits for registered
+// jobs to finish. Callers must not hold API mutexes.
+func (a *API) WaitJobs() {
+	a.jobsMu.Lock()
+	a.jobsClosing = true
+	a.jobsMu.Unlock()
+	a.jobsWG.Wait()
 }
 
 func (a *API) SetShutdownCtx(ctx context.Context) {
@@ -294,7 +329,15 @@ func (a *API) scanLibrary(w http.ResponseWriter, r *http.Request) {
 	run := newScanRun(jobID, id)
 	a.runs[id] = run
 	a.mu.Unlock()
-	go a.runScan(a.scanCtx(), run, lib)
+	if !a.launchJob(func() { a.runScan(a.scanCtx(), run, lib) }) {
+		a.mu.Lock()
+		delete(a.runs, id)
+		a.mu.Unlock()
+		msg := "server shutting down"
+		a.DB.FinishScanJob(run.jobID, "error", &msg)
+		writeJSON(w, 503, map[string]string{"error": "server shutting down"})
+		return
+	}
 	writeJSON(w, 202, map[string]any{"status": "scanning", "jobId": jobID})
 }
 
@@ -325,7 +368,14 @@ func (a *API) TriggerScan(ctx context.Context, libraryID int64) (int64, error) {
 	run := newScanRun(jobID, libraryID)
 	a.runs[libraryID] = run
 	a.mu.Unlock()
-	go a.runScan(ctx, run, lib)
+	if !a.launchJob(func() { a.runScan(ctx, run, lib) }) {
+		a.mu.Lock()
+		delete(a.runs, libraryID)
+		a.mu.Unlock()
+		msg := "server shutting down"
+		a.DB.FinishScanJob(run.jobID, "error", &msg)
+		return 0, fmt.Errorf("server shutting down")
+	}
 	return jobID, nil
 }
 

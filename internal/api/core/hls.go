@@ -9,7 +9,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/libteca/libteca/internal/auth"
@@ -35,20 +34,13 @@ func (a *API) MountHLS(r *neutron.Router) {
 
 const thumbsWidth = 320
 
-var (
-	tpMu  sync.Mutex
-	tpGen = map[*API]*trickplay.Generator{}
-)
-
 func (a *API) trickplayer() *trickplay.Generator {
-	tpMu.Lock()
-	defer tpMu.Unlock()
-	g := tpGen[a]
-	if g == nil {
-		g = trickplay.New(a.DataDir)
-		tpGen[a] = g
+	a.tpMu.Lock()
+	defer a.tpMu.Unlock()
+	if a.tp == nil {
+		a.tp = trickplay.New(a.DataDir)
 	}
-	return g
+	return a.tp
 }
 
 func (a *API) editionThumbSource(id int64) (*store.EditionView, error) {

@@ -679,7 +679,16 @@ func (a *API) refreshMeta(w http.ResponseWriter, r *http.Request) {
 	run := &metaRun{snap: metaSnap{Status: "running"}}
 	a.metaRuns[id] = run
 	a.metaMu.Unlock()
-	go a.runRefreshMeta(context.WithoutCancel(r.Context()), id, run)
+	if !a.launchJob(func() { a.runRefreshMeta(context.WithoutCancel(r.Context()), id, run) }) {
+		a.metaMu.Lock()
+		if a.metaRuns[id] == run {
+			delete(a.metaRuns, id)
+		}
+		a.metaMu.Unlock()
+		run.finish(metaSnap{Status: "error", Error: "server shutting down"})
+		writeJSON(w, 503, map[string]string{"error": "server shutting down"})
+		return
+	}
 	writeJSON(w, 202, map[string]any{"status": "running", "matched": 0, "autoApplied": 0, "total": 0})
 }
 

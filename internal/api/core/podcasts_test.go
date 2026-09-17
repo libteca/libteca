@@ -103,7 +103,7 @@ func mountPodcastServer(t *testing.T, a *API, db *store.DB) *httptest.Server {
 	// installed BEFORE mounting because MountPodcasts binds handlers to the
 	// service it finds at mount time.
 	local := &http.Client{
-		Timeout:   30 * time.Second,
+		Timeout: 30 * time.Second,
 		Transport: func() http.RoundTripper {
 			tr := http.DefaultTransport.(*http.Transport).Clone()
 			tr.ResponseHeaderTimeout = 30 * time.Second

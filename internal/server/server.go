@@ -3,6 +3,7 @@ package server
 import (
 	"log/slog"
 	"net/http"
+	"sync"
 
 	"github.com/libteca/libteca/internal/api/abs"
 	"github.com/libteca/libteca/internal/api/core"
@@ -21,8 +22,10 @@ type Server struct {
 	HWAccel string
 	Core    *core.API
 
-	tm *transcode.Manager
-	jf *jellyfin.API
+	tm          *transcode.Manager
+	jf          *jellyfin.API
+	handlerOnce sync.Once
+	handler     http.Handler
 }
 
 func (s *Server) Close() {
@@ -41,7 +44,18 @@ func New(db *store.DB, dataDir string) *Server {
 	return &Server{DB: db, Dir: dataDir, Core: core.New(db, dataDir)}
 }
 
+// Handler builds the route table once: every call used to construct another
+// transcode manager (removing the shared transcode directory under live
+// sessions) and overwrite the owned manager pointers, leaking the previous
+// manager outside Close's ownership.
 func (s *Server) Handler() http.Handler {
+	s.handlerOnce.Do(func() {
+		s.handler = s.buildHandler()
+	})
+	return s.handler
+}
+
+func (s *Server) buildHandler() http.Handler {
 	app := neutron.New(
 		neutron.WithOpenAPIInfo("libteca", "0.1.0"),
 		neutron.WithLogger(slog.Default()),
