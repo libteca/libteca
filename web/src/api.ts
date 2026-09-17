@@ -18,9 +18,11 @@ export type EditionDetail = {
   chapters: { title: string; start: number; end: number; fileId: number }[];
 };
 
-export type Library = { id: number; name: string; type: string; path: string };
+export type Library = { id: number; name: string; type: LibraryType; path?: string };
 
-export type LibraryType = "movies" | "tv" | "music" | "audiobooks" | "books" | "comics";
+export type LibraryType =
+  | "movies" | "tv" | "music" | "audiobooks"
+  | "books" | "comics" | "podcasts" | "games";
 
 export type ResumeItem = {
   workId: number; editionId: number; libraryId: number; libraryType: string;
@@ -58,22 +60,39 @@ export function getToken() { return token; }
 export function setToken(t: string) { token = t; }
 
 export const api = async (path: string, opts: RequestInit = {}) => {
-  const res = await fetch(`/api/core${path}`, {
-    ...opts,
-    headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(opts.headers || {}) },
-  });
+  const headers = new Headers(opts.headers);
+  if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  if (token && !headers.has("Authorization")) headers.set("Authorization", `Bearer ${token}`);
+  const res = await fetch(`/api/core${path}`, { ...opts, headers });
   if (res.status === 401) {
     setToken("");
-    localStorage.removeItem("libteca-token");
+    try { localStorage.removeItem("libteca-token"); } catch { /* storage unavailable */ }
     location.reload();
     throw new Error("unauthorized");
   }
   const text = await res.text();
-  try {
-    return text ? JSON.parse(text) : {};
-  } catch {
-    return { error: res.ok ? "Empty response from server" : `Server error (${res.status})` };
+  let payload: any = {};
+  if (text) {
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      return {
+        error: res.ok ? "Invalid JSON response from server" : `Server error (${res.status})`,
+        status: res.status,
+      };
+    }
   }
+  if (!res.ok) {
+    const problem =
+      payload !== null && typeof payload === "object" && !Array.isArray(payload)
+        ? (payload as Record<string, unknown>)
+        : {};
+    const message = [problem.error, problem.detail, problem.title].find(
+      (value): value is string => typeof value === "string" && value.length > 0
+    );
+    return { ...problem, error: message || `Server error (${res.status})`, status: res.status };
+  }
+  return payload;
 };
 
 // Media elements (img/video/audio/track) and EventSource cannot send

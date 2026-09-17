@@ -61,6 +61,14 @@ export function EpubReader(props: { editionId: number; title: string; progress: 
     let destroyed = false;
     const host = hostRef.current;
     if (!host) return;
+    const controller = new AbortController();
+    setPhase("loading");
+    setError("");
+    setToc([]);
+    setTocOpen(false);
+    setPercent(null);
+    setSectionHref("");
+    locsReadyRef.current = false;
 
     const persistLocations = (book: Book) => {
       try { localStorage.setItem(`libteca-epub-loc-${props.editionId}`, book.locations.save()); } catch { /* storage unavailable */ }
@@ -72,7 +80,7 @@ export function EpubReader(props: { editionId: number; title: string; progress: 
     const onDocKey = (e: Event) => keyHandler.current(e as KeyboardEvent);
     (async () => {
       try {
-        const res = await fetch(media(`/editions/${props.editionId}/download`));
+        const res = await fetch(media(`/editions/${props.editionId}/download`), { signal: controller.signal });
         if (!res.ok) throw new Error(`Download failed (${res.status})`);
         const data = await res.arrayBuffer();
         if (destroyed) return;
@@ -138,17 +146,23 @@ export function EpubReader(props: { editionId: number; title: string; progress: 
         } catch { haveLocations = false; }
         locsReadyRef.current = haveLocations;
 
+        // Only location GENERATION depends on the cache being absent: with
+        // a cached index present, percentage resume used to be skipped
+        // entirely and the book opened at the beginning.
         let target: string | undefined;
         const p = props.progress;
         if (p && !p.isFinished && p.locator && p.locator.startsWith("epubcfi(")) {
           target = p.locator;
-        } else if (p && !p.isFinished && p.percent && p.percent > 0 && p.percent < 1 && !haveLocations) {
-          setPhase("indexing");
-          await book.locations.generate(LOC_CHUNK);
-          if (destroyed) { try { book?.destroy(); } catch { /* already gone */ } return; }
-          haveLocations = true;
-          locsReadyRef.current = true;
-          persistLocations(book);
+        } else if (p && !p.isFinished && typeof p.percent === "number" &&
+                   isFinite(p.percent) && p.percent > 0 && p.percent < 1) {
+          if (!haveLocations) {
+            setPhase("indexing");
+            await book.locations.generate(LOC_CHUNK);
+            if (destroyed) { try { book?.destroy(); } catch { /* already gone */ } return; }
+            haveLocations = true;
+            locsReadyRef.current = true;
+            persistLocations(book);
+          }
           target = book.locations.cfiFromPercentage(p.percent);
         }
         try {
@@ -171,7 +185,7 @@ export function EpubReader(props: { editionId: number; title: string; progress: 
           }
         }
       } catch (err) {
-        if (!destroyed) {
+        if (!destroyed && !controller.signal.aborted) {
           setError(String((err as Error)?.message || err));
           setPhase("error");
         }
@@ -180,6 +194,7 @@ export function EpubReader(props: { editionId: number; title: string; progress: 
 
     return () => {
       destroyed = true;
+      controller.abort();
       renditionRef.current = null;
       bookRef.current = null;
       keyDoc?.removeEventListener("keydown", onDocKey);
