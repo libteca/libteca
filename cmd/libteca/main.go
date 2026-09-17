@@ -174,9 +174,9 @@ func main() {
 	}
 
 	h := &http.Server{
-		Addr: net.JoinHostPort(*host, strconv.Itoa(*port)),
-		BaseContext: func(net.Listener) context.Context { return ctx },
-		Handler:     srv.Handler(),
+		Addr:              net.JoinHostPort(*host, strconv.Itoa(*port)),
+		BaseContext:       func(net.Listener) context.Context { return ctx },
+		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       120 * time.Second,

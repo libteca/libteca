@@ -10,11 +10,11 @@ import (
 )
 
 type trackingProcess struct {
-	starts atomic.Int32
-	waits  atomic.Int32
-	kills  atomic.Int32
+	starts      atomic.Int32
+	waits       atomic.Int32
+	kills       atomic.Int32
 	releaseWait chan struct{}
-	once    sync.Once
+	once        sync.Once
 }
 
 func (p *trackingProcess) start() error {
