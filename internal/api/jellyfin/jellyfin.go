@@ -1055,6 +1055,15 @@ func (a *API) hlsMaster(w http.ResponseWriter, r *http.Request) {
 	}
 	s, err := a.TC.Get(sessionID, ed.ID, ed.Files[0].Path, start)
 	if err != nil {
+		if errors.Is(err, transcode.ErrCapacity) {
+			w.Header().Set("Retry-After", "5")
+			http.Error(w, "transcode capacity exhausted", 503)
+			return
+		}
+		if errors.Is(err, transcode.ErrClosed) {
+			http.Error(w, "transcode unavailable", 503)
+			return
+		}
 		http.Error(w, "transcode failed", 500)
 		return
 	}

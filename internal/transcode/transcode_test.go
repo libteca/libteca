@@ -226,14 +226,53 @@ func TestMaxSessionsEvictsOldest(t *testing.T) {
 		t.Fatalf("sessions = %d, want cap %d", count, MaxSessions)
 	}
 	if oldestAlive {
-		t.Fatal("least recently touched session must be evicted at cap")
+		t.Fatal("idle-expired session must be reclaimed at cap")
 	}
 	select {
 	case <-procs[first].killed:
 	default:
-		t.Fatal("evicted session's ffmpeg must be killed")
+		t.Fatal("reclaimed session's ffmpeg must be killed")
 	}
 	m.CloseAll()
+}
+
+func TestMaxSessionsRejectsWhenAllActive(t *testing.T) {
+	m := New(t.TempDir())
+	m.probeRun = func([]string) (string, error) { return "", errStartFail }
+	m.spawn = func([]string) process { return newSleepProcess() }
+	defer m.CloseAll()
+	for i := 0; i < MaxSessions; i++ {
+		if _, err := m.Get(fmt.Sprintf("s%d", i), int64(i+1), "src", 0); err != nil {
+			t.Fatalf("Get(s%d): %v", i, err)
+		}
+	}
+	if _, err := m.Get("ninth", 99, "src", 0); err != ErrCapacity {
+		t.Fatalf("Get at capacity = %v, want ErrCapacity", err)
+	}
+	m.mu.Lock()
+	count := len(m.sessions)
+	m.mu.Unlock()
+	if count != MaxSessions {
+		t.Fatalf("sessions = %d, want the original %d untouched", count, MaxSessions)
+	}
+}
+
+func TestGetAfterCloseAll(t *testing.T) {
+	data := t.TempDir()
+	m := New(data)
+	m.probeRun = func([]string) (string, error) { return "", errStartFail }
+	m.spawn = func([]string) process { return newSleepProcess() }
+	if _, err := m.Get("live", 1, "src", 0); err != nil {
+		t.Fatal(err)
+	}
+	m.CloseAll()
+	m.CloseAll()
+	if _, err := m.Get("after", 2, "src", 0); err != ErrClosed {
+		t.Fatalf("Get after CloseAll = %v, want ErrClosed", err)
+	}
+	if _, err := os.Stat(filepath.Join(data, "transcode", "after")); !os.IsNotExist(err) {
+		t.Fatal("closed manager must not create session directories")
+	}
 }
 
 func TestSessionLastHitConcurrentAccess(t *testing.T) {

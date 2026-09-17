@@ -250,6 +250,15 @@ func (a *API) hlsFile(w http.ResponseWriter, r *http.Request) {
 	}
 	s, err := a.TC.Get(sid, ed.ID, ed.Files[0].Path, start)
 	if err != nil {
+		if errors.Is(err, transcode.ErrCapacity) {
+			w.Header().Set("Retry-After", "5")
+			writeJSON(w, 503, map[string]string{"error": "transcode capacity exhausted"})
+			return
+		}
+		if errors.Is(err, transcode.ErrClosed) {
+			writeJSON(w, 503, map[string]string{"error": "transcode unavailable"})
+			return
+		}
 		writeJSON(w, 500, map[string]string{"error": "transcode failed"})
 		return
 	}

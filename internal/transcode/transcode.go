@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -16,6 +17,11 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+)
+
+var (
+	ErrCapacity = errors.New("transcode capacity exhausted")
+	ErrClosed   = errors.New("transcode manager closed")
 )
 
 const (
@@ -70,6 +76,7 @@ type Session struct {
 	spawn           func(argv []string) process
 	proc            process
 	done            chan struct{}
+	exitErr         error
 	fallbackPending bool
 	downgraded      bool
 	killed          bool
@@ -82,6 +89,7 @@ type Manager struct {
 
 	mu       sync.Mutex
 	sessions map[string]*Session
+	closed   bool
 
 	stop     chan struct{}
 	stopOnce sync.Once
@@ -132,6 +140,9 @@ func (m *Manager) Get(sessionID string, edition int64, source string, startSecs 
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.closed {
+		return nil, ErrClosed
+	}
 	if s, ok := m.sessions[sessionID]; ok {
 		if s.Edition == edition {
 			s.lastHit.Store(time.Now().UnixNano())
@@ -140,19 +151,18 @@ func (m *Manager) Get(sessionID string, edition int64, source string, startSecs 
 		s.kill()
 		delete(m.sessions, sessionID)
 	}
-	for len(m.sessions) >= MaxSessions {
-		var oldestID string
-		var oldest int64
-		for id, s := range m.sessions {
-			hit := s.lastHit.Load()
-			if oldestID == "" || hit < oldest {
-				oldestID, oldest = id, hit
-			}
-		}
-		if s, ok := m.sessions[oldestID]; ok {
+	// Only genuinely idle sessions are reclaimed at capacity: evicting the
+	// least-recently-touched one killed a viewer mid-playback whenever a
+	// ninth request arrived. Excess admission is rejected instead.
+	now := time.Now()
+	for id, s := range m.sessions {
+		if now.Sub(time.Unix(0, s.lastHit.Load())) > idleSessionTTL {
 			s.kill()
+			delete(m.sessions, id)
 		}
-		delete(m.sessions, oldestID)
+	}
+	if len(m.sessions) >= MaxSessions {
+		return nil, ErrCapacity
 	}
 	dir := filepath.Join(m.DataDir, "transcode", sessionID)
 	os.MkdirAll(dir, 0o700)
@@ -202,24 +212,31 @@ func (s *Session) launch(startSecs float64, accel string) error {
 		return err
 	}
 	done := make(chan struct{})
-	go func() {
-		p.wait()
-		close(done)
-	}()
 	s.mu.Lock()
-	if s.killed {
-		s.mu.Unlock()
+	s.proc = p
+	s.done = done
+	s.exitErr = nil
+	killed := s.killed
+	s.mu.Unlock()
+	if killed {
 		p.kill()
 		return nil
 	}
-	s.proc = p
-	s.done = done
-	s.mu.Unlock()
+	go func() {
+		err := p.wait()
+		s.mu.Lock()
+		if s.done == done {
+			s.exitErr = err
+		}
+		s.mu.Unlock()
+		close(done)
+	}()
 	return nil
 }
 
-// watchFallback retries a hardware session on software if its ffmpeg dies
-// within fallbackWindow of starting. Death by kill() is never retried.
+// watchFallback retries a hardware session on software if its ffmpeg FAILS
+// within fallbackWindow of starting. A clean early exit is a completed short
+// transcode, not a failure; death by kill() is never retried.
 func (s *Session) watchFallback(startSecs float64) {
 	defer func() {
 		s.mu.Lock()
@@ -239,8 +256,10 @@ func (s *Session) watchFallback(startSecs float64) {
 	}
 	s.mu.Lock()
 	killed := s.killed
+	exitErr := s.exitErr
+	stillCurrent := s.done == first
 	s.mu.Unlock()
-	if killed {
+	if killed || !stillCurrent || exitErr == nil {
 		return
 	}
 	s.mu.Lock()
@@ -292,11 +311,13 @@ func (m *Manager) reaper() {
 	}
 }
 
-// CloseAll kills every session, drops its segments, and stops the reaper
-// goroutine (graceful shutdown; also safe to call more than once).
+// CloseAll kills every session, drops its segments, stops the reaper, and
+// refuses all further admissions (graceful shutdown; also safe to call more
+// than once).
 func (m *Manager) CloseAll() {
 	m.stopOnce.Do(func() { close(m.stop) })
 	m.mu.Lock()
+	m.closed = true
 	defer m.mu.Unlock()
 	for id, s := range m.sessions {
 		s.kill()

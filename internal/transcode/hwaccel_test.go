@@ -2,6 +2,7 @@ package transcode
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -226,6 +227,7 @@ type fakeProcess struct {
 	dieAfter time.Duration
 	once     sync.Once
 	exit     chan struct{}
+	clean    bool
 }
 
 func (f *fakeProcess) start() error {
@@ -238,7 +240,15 @@ func (f *fakeProcess) start() error {
 	return nil
 }
 
-func (f *fakeProcess) wait() error { <-f.exit; return nil }
+func (f *fakeProcess) wait() error {
+	<-f.exit
+	if f.clean {
+		return nil
+	}
+	return errFakeCrash
+}
+
+var errFakeCrash = errors.New("fake process crashed")
 
 func (f *fakeProcess) kill() { f.once.Do(func() { close(f.exit) }) }
 
@@ -296,6 +306,38 @@ func waitCond(d time.Duration, f func() bool) bool {
 
 func newFake(d time.Duration) *fakeProcess {
 	return &fakeProcess{dieAfter: d, exit: make(chan struct{})}
+}
+
+func newCleanFake(d time.Duration) *fakeProcess {
+	return &fakeProcess{dieAfter: d, exit: make(chan struct{}), clean: true}
+}
+
+func TestFallbackNotOnCleanExit(t *testing.T) {
+	setFallbackWindow(t, 2*time.Second)
+	m := New(t.TempDir())
+	if err := m.SetHwAccel(AccelVideoToolbox); err != nil {
+		t.Fatal(err)
+	}
+	lg := &spawnLog{procs: []*fakeProcess{newCleanFake(40 * time.Millisecond), newFake(-1)}}
+	m.spawn = lg.spawn
+	s, err := m.Get("clean", 1, "/src.mp4", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !waitCond(2*time.Second, s.isDead) {
+		t.Fatal("cleanly exited session should be dead")
+	}
+	time.Sleep(300 * time.Millisecond)
+	if lg.count() != 1 {
+		t.Fatalf("clean early exit must not respawn, spawns=%d", lg.count())
+	}
+	s.mu.Lock()
+	down := s.downgraded
+	s.mu.Unlock()
+	if down {
+		t.Fatal("clean exit must not mark downgrade")
+	}
+	m.Close("clean")
 }
 
 func watcherDone(s *Session) bool {
