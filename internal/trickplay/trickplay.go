@@ -24,7 +24,17 @@ var (
 	ErrNoFFmpeg  = errors.New("trickplay: ffmpeg not available")
 	ErrBadItemID = errors.New("trickplay: invalid item id")
 	ErrBadWidth  = errors.New("trickplay: invalid width")
+	ErrBusy      = errors.New("trickplay: generation capacity exhausted")
 )
+
+// generationSlots is a PROCESS-WIDE budget: core and Jellyfin each build
+// their own Generator, and every distinct item/width pair is an independent
+// full-video ffmpeg job the transcode session cap never saw.
+var generationSlots = make(chan struct{}, 2)
+
+func supportedWidth(width int) bool {
+	return width == 160 || width == 320
+}
 
 // corpus: manifest field names/semantics unverified against real 10.10 clients
 type Manifest struct {
@@ -94,15 +104,18 @@ func (g *Generator) Tile(ctx context.Context, itemID, source string, width, inde
 	if !reItemID.MatchString(itemID) {
 		return "", ErrBadItemID
 	}
-	if width < 16 || width > 3840 {
+	if !supportedWidth(width) {
 		return "", ErrBadWidth
 	}
 	if index < 0 {
 		return "", ErrNotFound
 	}
 	path := SheetPath(g.dir, itemID, width, index)
-	if _, err := os.Stat(path); err == nil {
-		return path, nil
+	if g.complete(itemID, width) {
+		if _, err := os.Stat(path); err == nil {
+			return path, nil
+		}
+		return "", ErrNotFound
 	}
 	if err := g.ensure(ctx, itemID, source, width); err != nil {
 		return "", err
@@ -173,14 +186,31 @@ func (g *Generator) ensure(ctx context.Context, itemID, source string, width int
 	return call.err
 }
 
+// complete reports whether a generation finished writing its completion
+// marker. 0.jpg existing proves nothing: ffmpeg may still be mid-run, or a
+// crash may have left a partial sheet set behind.
+func (g *Generator) complete(itemID string, width int) bool {
+	_, err := os.Stat(filepath.Join(g.widthDir(itemID, width), "COMPLETE"))
+	return err == nil
+}
+
 func (g *Generator) generate(ctx context.Context, itemID, source string, width int) error {
-	dir := g.widthDir(itemID, width)
-	if _, err := os.Stat(filepath.Join(dir, "0.jpg")); err == nil {
+	if g.complete(itemID, width) {
 		return nil
 	}
 	if g.ffmpeg == "" {
 		return ErrNoFFmpeg
 	}
+	select {
+	case generationSlots <- struct{}{}:
+		defer func() { <-generationSlots }()
+	default:
+		return ErrBusy
+	}
+	dir := g.widthDir(itemID, width)
+	// A partial directory from an interrupted run is discarded: sheets from
+	// it were served as if the generation had finished.
+	os.RemoveAll(dir)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
@@ -196,7 +226,11 @@ func (g *Generator) generate(ctx context.Context, itemID, source string, width i
 		os.RemoveAll(dir)
 		return fmt.Errorf("trickplay ffmpeg: %w: %s", err, out)
 	}
-	return nil
+	marker, err := os.Create(filepath.Join(dir, "COMPLETE"))
+	if err != nil {
+		return err
+	}
+	return marker.Close()
 }
 
 // jpegDims reads the SOF marker of a baseline/progressive JPEG.

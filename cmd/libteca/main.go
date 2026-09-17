@@ -121,6 +121,17 @@ func main() {
 			}
 			fatal(err)
 		}
+		// Same reconciliation the server's scan path runs, so CLI- and
+		// HTTP-triggered scans record removals identically.
+		if libs, lerr := db.Libraries(); lerr == nil {
+			for _, lib := range libs {
+				if marked, merr := db.MarkMissingLibraryFiles(lib.ID); merr != nil {
+					fmt.Fprintf(os.Stderr, "libteca: reconcile library %d: %v\n", lib.ID, merr)
+				} else if marked > 0 {
+					fmt.Printf("\nreconcile: %d missing file(s) marked in %q", marked, lib.Name)
+				}
+			}
+		}
 		fmt.Printf("\nscan complete: %d editions current\n", n)
 		return
 	}

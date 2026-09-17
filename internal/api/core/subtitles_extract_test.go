@@ -62,10 +62,10 @@ func TestSubtitlesSidecarPreferredOverExtract(t *testing.T) {
 		},
 	)
 	db, base, token := newDiscoveryEnv(t)
-	lib, _ := db.AddLibrary("m", "movies", t.TempDir())
+	dir := t.TempDir()
+	lib, _ := db.AddLibrary("m", "movies", dir)
 	w := seedWork(t, db, lib, "Film", ptr("Dir"), nil, 1, 1)
 	e := seedEdition(t, db, w, ptr(100.0))
-	dir := t.TempDir()
 	media := filepath.Join(dir, "plain.mkv")
 	if err := os.WriteFile(media, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
@@ -103,10 +103,10 @@ func TestSubtitlesExtractWritesCache(t *testing.T) {
 		},
 	)
 	db, base, token := newDiscoveryEnv(t)
-	lib, _ := db.AddLibrary("m", "movies", t.TempDir())
+	dir := t.TempDir()
+	lib, _ := db.AddLibrary("m", "movies", dir)
 	w := seedWork(t, db, lib, "Film", ptr("Dir"), nil, 1, 1)
 	e := seedEdition(t, db, w, ptr(100.0))
-	dir := t.TempDir()
 	media := filepath.Join(dir, "emb.mkv")
 	if err := os.WriteFile(media, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)

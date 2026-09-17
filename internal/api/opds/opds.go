@@ -21,6 +21,7 @@ import (
 	_ "image/gif"
 	"image/jpeg"
 	_ "image/png"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -542,6 +543,60 @@ func (a *API) cover(w http.ResponseWriter, r *http.Request, _ int64) {
 
 const thumbWidth = 160
 
+// Decoding a hostile cover allocates width*height*4 bytes regardless of the
+// compressed size, so decodes are dimension-preflighted via DecodeConfig and
+// run under a small process-wide budget; when the budget is exhausted the
+// original bytes pass through unscaled instead of piling on allocations.
+var decodeSlots = make(chan struct{}, 2)
+
+const (
+	coverByteLimit    = 20 << 20
+	coverMaxDimension = 16384
+	coverMaxPixels    = 16_000_000
+)
+
+func decodeCover(data []byte) (image.Image, bool, error) {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return nil, false, err
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width > coverMaxDimension || cfg.Height > coverMaxDimension ||
+		cfg.Width*cfg.Height > coverMaxPixels {
+		return nil, false, fmt.Errorf("cover dimensions exceed budget")
+	}
+	select {
+	case decodeSlots <- struct{}{}:
+		defer func() { <-decodeSlots }()
+	default:
+		return nil, true, nil
+	}
+	img, _, err := image.Decode(bytes.NewReader(data))
+	return img, false, err
+}
+
+func readBoundedCover(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !st.Mode().IsRegular() {
+		return nil, fmt.Errorf("not a regular cover file")
+	}
+	data, err := io.ReadAll(io.LimitReader(f, coverByteLimit+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > coverByteLimit {
+		return nil, fmt.Errorf("cover exceeds the byte limit")
+	}
+	return data, nil
+}
+
 // coverThumb serves a ~thumbWidth-wide JPEG for the work cover: cached on
 // disk under covers/thumb/, downscaled with a deterministic box-average
 // (stdlib only). Covers already narrower than the target — or in formats
@@ -553,13 +608,13 @@ func (a *API) coverThumb(w http.ResponseWriter, r *http.Request, wid int64, srcP
 		serveCoverFile(w, r, thumbPath)
 		return
 	}
-	data, err := os.ReadFile(srcPath)
+	data, err := readBoundedCover(srcPath)
 	if err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	img, _, err := image.Decode(bytes.NewReader(data))
-	if err != nil || img.Bounds().Dx() <= thumbWidth {
+	img, passthrough, derr := decodeCover(data)
+	if derr != nil || passthrough || img.Bounds().Dx() <= thumbWidth {
 		serveCoverFile(w, r, srcPath)
 		return
 	}
@@ -573,7 +628,7 @@ func (a *API) coverThumb(w http.ResponseWriter, r *http.Request, wid int64, srcP
 	}
 	w.Header().Set("Content-Type", "image/jpeg")
 	w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
-	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Header().Set("Cache-Control", "private, max-age=86400")
 	w.WriteHeader(http.StatusOK)
 	w.Write(buf.Bytes())
 }
@@ -590,7 +645,7 @@ func serveCoverFile(w http.ResponseWriter, r *http.Request, path string) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Header().Set("Cache-Control", "private, max-age=86400")
 	http.ServeContent(w, r, fi.Name(), fi.ModTime(), file)
 }
 
@@ -664,7 +719,7 @@ func (a *API) psePage(w http.ResponseWriter, r *http.Request, _ int64) {
 	}
 	w.Header().Set("Content-Type", pageMime(strings.ToLower(filepath.Ext(name))))
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
-	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Header().Set("Cache-Control", "private, max-age=86400")
 	w.WriteHeader(http.StatusOK)
 	w.Write(data)
 }

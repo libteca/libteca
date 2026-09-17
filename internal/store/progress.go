@@ -3,7 +3,33 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"fmt"
+	"math"
 )
+
+// ValidPosition is the numeric progress policy the core face enforces,
+// shared with the ABS and Jellyfin adapters: non-finite or negative
+// positions are rejected, a known duration bounds the position with a small
+// end-of-track tolerance, and unknown durations accept a bounded policy
+// limit instead of any finite value.
+func ValidPosition(position, total float64) error {
+	if math.IsNaN(position) || math.IsInf(position, 0) || position < 0 {
+		return fmt.Errorf("invalid position")
+	}
+	if math.IsNaN(total) || math.IsInf(total, 0) || total < 0 {
+		return fmt.Errorf("invalid duration")
+	}
+	if total > 0 {
+		if position > total+5 {
+			return fmt.Errorf("position exceeds duration")
+		}
+		return nil
+	}
+	if position > 30*24*60*60 {
+		return fmt.Errorf("position exceeds policy limit for unknown duration")
+	}
+	return nil
+}
 
 func (d *DB) GetProgress(userID, editionID int64) (*Progress, error) {
 	var p Progress

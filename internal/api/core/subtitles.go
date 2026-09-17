@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/libteca/libteca/internal/auth"
+	"github.com/libteca/libteca/internal/mediafs"
 )
 
 var srtStamp = regexp.MustCompile(`(\d{1,2}:\d{2}:\d{2}),(\d{1,3})`)
@@ -29,9 +31,20 @@ func (a *API) subtitles(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 404, map[string]string{"error": "file not found"})
 		return
 	}
+	root, rerr := a.confinedRoot(f.EditionID)
+	if rerr != nil {
+		writeJSON(w, 404, map[string]string{"error": "file not found"})
+		return
+	}
 	side, ok := sidecarSRT(f.Path)
 	if ok {
-		data, err := os.ReadFile(side)
+		sf, _, oerr := mediafs.OpenWithin(root, side)
+		if oerr != nil {
+			writeJSON(w, 404, map[string]string{"error": "no subtitles"})
+			return
+		}
+		defer sf.Close()
+		data, err := io.ReadAll(io.LimitReader(sf, 16<<20))
 		if err != nil {
 			writeJSON(w, 404, map[string]string{"error": "no subtitles"})
 			return

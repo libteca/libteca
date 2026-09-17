@@ -82,6 +82,10 @@ type Session struct {
 	killed          bool
 	lastHit         atomic.Int64
 	mu              sync.Mutex
+	// lifecycle serializes launch against kill: the software-fallback
+	// launcher runs on its own goroutine, so a teardown overlapping fallback
+	// startup could observe a started process the waiter never owns.
+	lifecycle sync.Mutex
 }
 
 type Manager struct {
@@ -204,6 +208,14 @@ func (s *Session) start(startSecs float64) error {
 
 func (s *Session) launch(startSecs float64, accel string) error {
 	args := buildArgs(accel, s.Source, s.Dir, startSecs, DefaultVideoBitrate)
+	s.lifecycle.Lock()
+	defer s.lifecycle.Unlock()
+	s.mu.Lock()
+	closed := s.killed
+	s.mu.Unlock()
+	if closed {
+		return ErrClosed
+	}
 	p := s.spawn(args)
 	if err := p.start(); err != nil {
 		return err
@@ -213,12 +225,10 @@ func (s *Session) launch(startSecs float64, accel string) error {
 	s.proc = p
 	s.done = done
 	s.exitErr = nil
-	killed := s.killed
 	s.mu.Unlock()
-	if killed {
-		p.kill()
-		return nil
-	}
+	// A waiter is registered after EVERY successful start: the old
+	// killed-after-start branch returned without one, so the child was never
+	// reaped and done never closed.
 	go func() {
 		err := p.wait()
 		s.mu.Lock()
@@ -266,14 +276,48 @@ func (s *Session) watchFallback(startSecs float64) {
 }
 
 func (s *Session) kill() {
+	s.lifecycle.Lock()
+	defer s.lifecycle.Unlock()
 	s.mu.Lock()
 	s.killed = true
-	p := s.proc
+	p, done := s.proc, s.done
 	s.mu.Unlock()
-	if p != nil {
-		p.kill()
+	if p != nil && done != nil {
+		select {
+		case <-done:
+		default:
+			p.kill()
+		}
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			// Bounded wait so shutdown cannot hang on a process stuck in
+			// kernel I/O; its output directory is then preserved rather
+			// than removed under a still-writing child.
+			slog.Warn("transcode exit pending; preserving output directory", "session", s.ID)
+			return
+		}
 	}
-	os.RemoveAll(s.Dir)
+	if err := os.RemoveAll(s.Dir); err != nil {
+		slog.Warn("transcode cleanup failed", "session", s.ID, "err", err)
+	}
+}
+
+// Existing returns the live session for (id, edition) WITHOUT creating one.
+// Segment serving must never spawn an encoder: a reaped session's URL would
+// otherwise silently restart at position zero under the old namespace.
+func (m *Manager) Existing(sessionID string, edition int64) (*Session, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return nil, false
+	}
+	s, ok := m.sessions[sessionID]
+	if !ok || s.Edition != edition {
+		return nil, false
+	}
+	s.Touch()
+	return s, true
 }
 
 func (m *Manager) Close(sessionID string) {

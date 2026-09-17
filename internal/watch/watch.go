@@ -2,6 +2,7 @@ package watch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,8 +25,6 @@ const (
 	DefaultDebounce   = 2 * time.Second
 	DefaultStaleAfter = 24 * time.Hour
 	DefaultSyncEvery  = time.Minute
-
-	jobPollEvery = 250 * time.Millisecond
 )
 
 type Config struct {
@@ -107,6 +106,9 @@ func (w *Watcher) Run(ctx context.Context) {
 			}
 			if err != nil {
 				fmt.Fprintln(os.Stderr, "libteca: watch:", err)
+				if errors.Is(err, fsnotify.ErrEventOverflow) {
+					w.markAllDirty()
+				}
 			}
 		case e, ok := <-fw.Events:
 			if !ok {
@@ -192,8 +194,10 @@ func (w *Watcher) fire(libID int64) {
 }
 
 func (w *Watcher) triggerAndWait(ctx context.Context, libID int64) {
-	jobID, err := w.scan.TriggerScan(ctx, libID)
-	if err != nil {
+	// Missing-file reconciliation lives inside the shared scan path:
+	// HTTP-, CLI- and watch-triggered scans all record removals
+	// identically, instead of only whichever one went through the watcher.
+	if _, err := w.scan.TriggerScan(ctx, libID); err != nil {
 		// A change that arrived while a scan was already running must not be
 		// dropped: its debounce timer fired into the running scan and was
 		// consumed. Re-arm so a fresh scan catches it once the current one
@@ -202,11 +206,6 @@ func (w *Watcher) triggerAndWait(ctx context.Context, libID int64) {
 			w.markDirty(libID)
 		}
 		fmt.Fprintf(os.Stderr, "libteca: watch: scan for library %d skipped: %v\n", libID, err)
-		return
-	}
-	status := w.waitForJob(ctx, jobID)
-	if ctx.Err() == nil && status == "done" {
-		w.reconcileMissing(libID)
 	}
 }
 
@@ -215,57 +214,17 @@ func (w *Watcher) scanInFlight(libID int64) bool {
 	return err == nil && len(jobs) > 0 && jobs[0].Status == "running"
 }
 
-func (w *Watcher) waitForJob(ctx context.Context, jobID int64) string {
-	t := time.NewTicker(jobPollEvery)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return ""
-		case <-t.C:
-			j, err := w.db.GetScanJob(jobID)
-			if err != nil {
-				return ""
-			}
-			if j.Status != "running" {
-				return j.Status
-			}
-		}
-	}
-}
-
-// reconcileMissing marks file rows of a library missing when their path no
-// longer exists. The scanner never deletes state, so this is the only place
-// removals are recorded; it runs only after a scan that finished cleanly -
-// a failed scan says nothing about the files, and a transiently unavailable
-// root must not mark a healthy library missing.
-func (w *Watcher) reconcileMissing(libID int64) {
-	rows, err := w.db.Query(`SELECT f.id, f.path
-		FROM files f
-		JOIN editions e ON e.id = f.edition_id
-		JOIN works wo ON wo.id = e.work_id
-		WHERE wo.library_id = ? AND f.missing = 0`, libID)
+// markAllDirty schedules a scan of every configured library: an fsnotify
+// overflow means events were LOST, and logging it without recovery left the
+// changes invisible until the next sweep.
+func (w *Watcher) markAllDirty() {
+	libs, err := w.db.Libraries()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "libteca: watch: reconcile library %d: %v\n", libID, err)
+		fmt.Fprintf(os.Stderr, "libteca: watch: overflow recovery failed: %v\n", err)
 		return
 	}
-	var gone []int64
-	for rows.Next() {
-		var id int64
-		var path string
-		if err := rows.Scan(&id, &path); err != nil {
-			rows.Close()
-			return
-		}
-		if _, err := os.Stat(path); os.IsNotExist(err) {
-			gone = append(gone, id)
-		}
-	}
-	rows.Close()
-	for _, id := range gone {
-		if _, err := w.db.Exec(`UPDATE files SET missing = 1 WHERE id = ? AND missing = 0`, id); err != nil {
-			fmt.Fprintf(os.Stderr, "libteca: watch: mark file %d missing: %v\n", id, err)
-		}
+	for _, l := range libs {
+		w.markDirty(l.ID)
 	}
 }
 
@@ -332,11 +291,10 @@ func (w *Watcher) syncLibraries(markNew bool) {
 func (w *Watcher) watchTree(root string, libID int64) bool {
 	root = filepath.Clean(root)
 	w.mu.Lock()
-	_, watched := w.dirs[root]
+	_, wasWatched := w.dirs[root]
 	w.mu.Unlock()
-	if watched {
-		return false
-	}
+	// Children are always revisited even when the root is already armed: a
+	// subdirectory whose fw.Add once failed was previously never retried.
 	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil || !d.IsDir() {
 			return nil
@@ -350,7 +308,7 @@ func (w *Watcher) watchTree(root string, libID int64) bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	_, armed := w.dirs[root]
-	return armed
+	return armed && !wasWatched
 }
 
 func (w *Watcher) addDir(dir string, libID int64) {

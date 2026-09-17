@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/libteca/libteca/internal/auth"
+	"github.com/libteca/libteca/internal/mediafs"
 	"github.com/libteca/libteca/internal/store"
 	"github.com/libteca/libteca/internal/transcode"
 	"github.com/libteca/libteca/internal/trickplay"
@@ -760,10 +761,20 @@ func (a *API) episodes(w http.ResponseWriter, r *http.Request) {
 		write(w, 200, map[string]any{"Items": []any{}, "TotalRecordCount": 0})
 		return
 	}
-	seasonFilter := 0
+	// Zero is the valid specials season, so absence is modelled separately:
+	// an int zero sentinel made a specials request match every season.
+	var seasonFilter *int
 	if sid := qget(r, "SeasonId"); sid != "" {
 		if m := reSeasonItem.FindStringSubmatch(sid); m != nil {
-			seasonFilter, _ = strconv.Atoi(m[2])
+			n, serr := strconv.Atoi(m[2])
+			if serr != nil {
+				write(w, 400, map[string]any{"error": "malformed season id"})
+				return
+			}
+			seasonFilter = &n
+		} else {
+			write(w, 400, map[string]any{"error": "malformed season id"})
+			return
 		}
 	}
 	works, _ := a.DB.WorksInLibrary(wv.LibraryID)
@@ -777,7 +788,7 @@ func (a *API) episodes(w http.ResponseWriter, r *http.Request) {
 			if ed.SeasonNum == nil {
 				continue
 			}
-			if seasonFilter > 0 && *ed.SeasonNum != seasonFilter {
+			if seasonFilter != nil && *ed.SeasonNum != *seasonFilter {
 				continue
 			}
 			items = append(items, a.episodeItem(userID, &works[i], ed))
@@ -1035,7 +1046,22 @@ func (a *API) videoStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", 404)
 		return
 	}
-	serveFile(w, r, ed.Files[0].Path)
+	a.serveEditionFile(w, r, ed)
+}
+
+func (a *API) serveEditionFile(w http.ResponseWriter, r *http.Request, ed *store.EditionView) {
+	root, err := a.DB.LibraryRootForEdition(ed.ID)
+	if err != nil {
+		http.Error(w, "not found", 404)
+		return
+	}
+	f, fi, oerr := mediafs.OpenWithin(root, ed.Files[0].Path)
+	if oerr != nil {
+		http.Error(w, "not found", 404)
+		return
+	}
+	defer f.Close()
+	http.ServeContent(w, r, filepath.Base(ed.Files[0].Path), fi.ModTime(), f)
 }
 
 func (a *API) hlsMaster(w http.ResponseWriter, r *http.Request) {
@@ -1192,7 +1218,7 @@ func (a *API) audioUniversal(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.Header().Set("Content-Type", "audio/mpeg")
 	}
-	serveFile(w, r, f.Path)
+	a.serveEditionFile(w, r, ed)
 }
 
 func (a *API) sessionPlaying(w http.ResponseWriter, r *http.Request) {
@@ -1245,8 +1271,12 @@ func (a *API) saveFromSession(w http.ResponseWriter, r *http.Request) string {
 		return body.PlaySessionId
 	}
 	pos := fromTicks(body.PositionTicks)
-	fileID, offset := ed.Locate(pos)
 	dur := ed.TotalDuration()
+	if err := store.ValidPosition(pos, dur); err != nil {
+		write(w, 400, map[string]any{"error": err.Error()})
+		return body.PlaySessionId
+	}
+	fileID, offset := ed.Locate(pos)
 	device := "jellyfin-client"
 	p := &store.Progress{
 		UserID: uid(r), EditionID: ed.ID, FileID: &fileID, FileOffsetSecs: offset,
@@ -1301,6 +1331,15 @@ func (a *API) trickplayTile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "ffmpeg unavailable", 503)
 		return
 	}
+	if errors.Is(err, trickplay.ErrBusy) {
+		w.Header().Set("Retry-After", "10")
+		http.Error(w, "trickplay capacity exhausted", 503)
+		return
+	}
+	if errors.Is(err, trickplay.ErrBadWidth) || errors.Is(err, trickplay.ErrBadItemID) {
+		http.Error(w, "bad width", 400)
+		return
+	}
 	if err != nil {
 		http.Error(w, "tile generation failed", 500)
 		return
@@ -1332,6 +1371,15 @@ func (a *API) trickplayManifest(w http.ResponseWriter, r *http.Request) {
 	if errors.Is(err, trickplay.ErrNoFFmpeg) {
 		w.Header().Set("Retry-After", "120")
 		http.Error(w, "ffmpeg unavailable", 503)
+		return
+	}
+	if errors.Is(err, trickplay.ErrBusy) {
+		w.Header().Set("Retry-After", "10")
+		http.Error(w, "trickplay capacity exhausted", 503)
+		return
+	}
+	if errors.Is(err, trickplay.ErrBadWidth) || errors.Is(err, trickplay.ErrBadItemID) {
+		http.Error(w, "bad width", 400)
 		return
 	}
 	if err != nil {

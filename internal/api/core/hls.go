@@ -98,6 +98,15 @@ func (a *API) editionThumbTile(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 503, map[string]string{"error": "ffmpeg unavailable"})
 		return
 	}
+	if errors.Is(err, trickplay.ErrBusy) {
+		w.Header().Set("Retry-After", "10")
+		writeJSON(w, 503, map[string]string{"error": "trickplay capacity exhausted"})
+		return
+	}
+	if errors.Is(err, trickplay.ErrBadWidth) || errors.Is(err, trickplay.ErrBadItemID) {
+		writeJSON(w, 400, map[string]string{"error": "bad trickplay request"})
+		return
+	}
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": "tile generation failed"})
 		return
@@ -294,6 +303,23 @@ func (a *API) hlsFile(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 404, map[string]string{"error": "edition not found"})
 		return
 	}
+	// Segment fetches must never (re)create an encoder: after idle expiry a
+	// segment URL used to respawn the session at default start zero and
+	// serve a different timeline under the old segment namespace. Expired
+	// sessions answer 410 so the client bootstraps a fresh one.
+	if !strings.HasSuffix(file, ".m3u8") {
+		if _, live := a.TC.Existing(sid, ed.ID); !live {
+			w.Header().Set("Cache-Control", "no-store")
+			writeJSON(w, http.StatusGone, map[string]string{"error": "playback session expired"})
+			return
+		}
+		if !a.TC.WaitForSegmentFile(r.Context(), sid, file, 10*time.Second) {
+			writeJSON(w, 404, map[string]string{"error": "segment not found"})
+			return
+		}
+		serveFile(w, r, filepath.Join(a.DataDir, "transcode", sid, file))
+		return
+	}
 	start := 0.0
 	if raw := r.URL.Query().Get("start"); raw != "" {
 		value, err := strconv.ParseFloat(raw, 64)
@@ -321,38 +347,30 @@ func (a *API) hlsFile(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]string{"error": "transcode failed"})
 		return
 	}
-	if strings.HasSuffix(file, ".m3u8") {
-		s.Prebuffer(r.Context(), 2, 10*time.Second)
-		wait := time.NewTicker(200 * time.Millisecond)
-		defer wait.Stop()
-		for i := 0; i < 100; i++ {
-			if fi, err := os.Stat(s.Playlist()); err == nil && fi.Size() > 0 {
-				break
-			}
-			select {
-			case <-r.Context().Done():
-				writeJSON(w, 499, map[string]string{"error": "client closed request"})
-				return
-			case <-wait.C:
-			}
+	s.Prebuffer(r.Context(), 2, 10*time.Second)
+	wait := time.NewTicker(200 * time.Millisecond)
+	defer wait.Stop()
+	for i := 0; i < 100; i++ {
+		if fi, err := os.Stat(s.Playlist()); err == nil && fi.Size() > 0 {
+			break
 		}
-		data, err := os.ReadFile(s.Playlist())
-		if err != nil {
-			writeJSON(w, 500, map[string]string{"error": "no playlist"})
+		select {
+		case <-r.Context().Done():
+			writeJSON(w, 499, map[string]string{"error": "client closed request"})
 			return
+		case <-wait.C:
 		}
-		s.Touch()
-		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-		tok := r.URL.Query().Get("token")
-		if tok == "" {
-			tok = auth.Token(r)
-		}
-		w.Write(rewriteHLSPlaylist(data, sid, tok))
+	}
+	data, err := os.ReadFile(s.Playlist())
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": "no playlist"})
 		return
 	}
-	if !a.TC.WaitForSegmentFile(r.Context(), sid, file, 10*time.Second) {
-		writeJSON(w, 404, map[string]string{"error": "segment not found"})
-		return
+	s.Touch()
+	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+	tok := r.URL.Query().Get("token")
+	if tok == "" {
+		tok = auth.Token(r)
 	}
-	serveFile(w, r, filepath.Join(a.DataDir, "transcode", sid, file))
+	w.Write(rewriteHLSPlaylist(data, sid, tok))
 }

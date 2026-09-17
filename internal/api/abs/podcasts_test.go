@@ -61,7 +61,8 @@ func podcastEnv(t *testing.T) *podEnv {
 	}
 	podID, _ := res.LastInsertId()
 
-	audioPath := filepath.Join(dir, "ep1.mp3")
+	os.MkdirAll(filepath.Join(dir, "podcasts"), 0o755)
+	audioPath := filepath.Join(dir, "podcasts", "ep1.mp3")
 	if err := os.WriteFile(audioPath, []byte("fake-episode-bytes"), 0o644); err != nil {
 		t.Fatal(err)
 	}

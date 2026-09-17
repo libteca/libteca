@@ -371,11 +371,12 @@ func TestWorksSortFilterEndpoint(t *testing.T) {
 
 func TestSubtitlesEndpoint(t *testing.T) {
 	db, base, token := newDiscoveryEnv(t)
-	lib, _ := db.AddLibrary("m", "movies", t.TempDir())
+	libDir := t.TempDir()
+	lib, _ := db.AddLibrary("m", "movies", libDir)
 	w := seedWork(t, db, lib, "Film", ptr("Dir"), nil, 1, 1)
 	e := seedEdition(t, db, w, ptr(100.0))
 
-	dir := t.TempDir()
+	dir := libDir
 	write := func(name, content string) {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
 			t.Fatal(err)

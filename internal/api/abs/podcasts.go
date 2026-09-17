@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/libteca/libteca/internal/auth"
+	"github.com/libteca/libteca/internal/mediafs"
 	"github.com/libteca/libteca/internal/store"
 	"github.com/neutron-build/neutron/go/neutron"
 )
@@ -145,7 +146,13 @@ func (a *API) podcastEpisodeFile(w http.ResponseWriter, r *http.Request) {
 		fail(w, 404, "File not found")
 		return
 	}
-	serveAudio(w, r, path)
+	fh, fi, oerr := mediafs.OpenWithin(filepath.Join(a.DataDir, "podcasts"), path)
+	if oerr != nil {
+		fail(w, 404, "File not found")
+		return
+	}
+	defer fh.Close()
+	http.ServeContent(w, r, filepath.Base(path), fi.ModTime(), fh)
 }
 
 // episodeProgressPayload mirrors abs.go's progressPayload field-for-field

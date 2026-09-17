@@ -2,6 +2,8 @@ package podcast
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -63,10 +65,39 @@ func (s *Service) downloadEpisode(ctx context.Context, p *store.Podcast, ep *sto
 	}
 	ext := enclosureExt(ep.EnclosureURL)
 	path := filepath.Join(dir, name+"."+ext)
-	if otherID, err := s.DB.EpisodeUsingFilePath(path); err == nil && otherID != ep.ID {
+	// Ownership checks are mandatory at EVERY fallback level: the old final
+	// fallback (bare episode id) had no check, and a check error was treated
+	// as proof the name was unused. Both let one download REPLACE another
+	// episode's file on POSIX rename.
+	used := func(candidate string) (bool, error) {
+		otherID, err := s.DB.EpisodeUsingFilePath(candidate)
+		if errors.Is(err, store.ErrNotFound) {
+			return false, nil
+		}
+		if err != nil {
+			return true, err
+		}
+		return otherID != ep.ID, nil
+	}
+	taken, err := used(path)
+	if err != nil {
+		return err
+	}
+	if taken {
 		path = filepath.Join(dir, fmt.Sprintf("%s-%d.%s", name, ep.ID, ext))
-		if otherID, err := s.DB.EpisodeUsingFilePath(path); err == nil && otherID != ep.ID {
-			path = filepath.Join(dir, strconv.FormatInt(ep.ID, 10)+"."+ext)
+		taken, err = used(path)
+		if err != nil {
+			return err
+		}
+		if taken {
+			var nonce [6]byte
+			if _, rerr := rand.Read(nonce[:]); rerr != nil {
+				return rerr
+			}
+			// Immutable service-generated name: never collides with another
+			// episode's file, so publication can never overwrite foreign
+			// bytes.
+			path = filepath.Join(dir, fmt.Sprintf("%s-%d-%s.%s", name, ep.ID, hex.EncodeToString(nonce[:]), ext))
 		}
 	}
 
@@ -118,8 +149,27 @@ func (s *Service) downloadEpisode(ctx context.Context, p *store.Podcast, ep *sto
 	if err != nil {
 		return err
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		return err
+	// No-replace publication: os.Rename REPLACES on POSIX, and every
+	// candidate above was verified unowned - a hard link fails with EEXIST
+	// instead of clobbering whatever appeared in the meantime. Replacement is
+	// allowed only for a file this episode already owns (redownload) or a
+	// truly orphaned file with no episode link.
+	if err := os.Link(tmpPath, path); err != nil {
+		otherID, lerr := s.DB.EpisodeUsingFilePath(path)
+		if lerr != nil && !errors.Is(lerr, store.ErrNotFound) {
+			os.Remove(tmpPath)
+			return lerr
+		}
+		if errors.Is(lerr, store.ErrNotFound) || otherID == ep.ID {
+			if rerr := os.Rename(tmpPath, path); rerr != nil {
+				return rerr
+			}
+		} else {
+			os.Remove(tmpPath)
+			return fmt.Errorf("episode filename collision at publish: %s", path)
+		}
+	} else {
+		os.Remove(tmpPath)
 	}
 
 	fileID, err := s.DB.InsertPodcastFile(path, size, time.Now().Unix(), fmt.Sprintf("%x-%d", h.Sum64(), size), derefFlt(ep.DurationSecs), ext)
@@ -136,17 +186,24 @@ func (s *Service) downloadEpisode(ctx context.Context, p *store.Podcast, ep *sto
 }
 
 func (s *Service) downloadTimeout(contentLength int64) time.Duration {
+	// Unknown length gets the maximum overall deadline, not the floor: a
+	// legitimate chunked transfer making steady progress was capped at ~90s
+	// regardless of progress. Idle/stalled bodies are still closed by the
+	// watchdog goroutine when the deadline fires.
+	if contentLength < 0 {
+		return maxEpisodeReadTime
+	}
 	floor := s.dlReadFloor
 	if floor <= 0 {
 		floor = 90 * time.Second
 	}
 	secs := contentLength / (32 * 1024)
+	if contentLength%(32*1024) != 0 {
+		secs++
+	}
 	maxSeconds := int64(maxEpisodeReadTime / time.Second)
 	if secs > maxSeconds {
 		secs = maxSeconds
-	}
-	if secs < 0 {
-		secs = 0
 	}
 	duration := time.Duration(secs) * time.Second
 	if duration < floor {

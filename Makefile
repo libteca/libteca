@@ -67,7 +67,9 @@ release: web $(PLATFORMS:%=release-%) checksums
 checksums: $(PLATFORMS:%=release-%)
 	mkdir -p $(DIST) && cd $(DIST) && shasum -a 256 libteca_$(VERSION)_*.tar.gz libteca_$(VERSION)_*.zip > SHA256SUMS
 
-release-%:
+# Depends on web directly: as a sibling prerequisite of `release`, a -j run
+# could embed webdist before the web build/copy finished.
+release-%: web
 	@set -e; os=$(word 1,$(subst -, ,$*)); arch=$(word 2,$(subst -, ,$*)); \
 	name=libteca_$(VERSION)_$${os}_$${arch}; \
 	rm -rf $(DIST)/$$name; mkdir -p $(DIST)/$$name; \

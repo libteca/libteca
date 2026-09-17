@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/libteca/libteca/internal/auth"
+	"github.com/libteca/libteca/internal/mediafs"
 	"github.com/libteca/libteca/internal/podcast"
 	"github.com/libteca/libteca/internal/scan"
 	"github.com/libteca/libteca/internal/store"
@@ -303,6 +304,20 @@ func (a *API) addLibrary(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "path is not a directory"})
 		return
 	}
+	// Files are globally unique by path and the watcher maps each directory
+	// to one library, so overlapping roots are refused: an ancestor root
+	// silently swallowed or reparented the other library's files.
+	libs, err := a.DB.Libraries()
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
+		return
+	}
+	for _, l := range libs {
+		if rootsOverlap(abs, l.Path) {
+			writeJSON(w, 409, map[string]string{"error": "library path overlaps an existing library"})
+			return
+		}
+	}
 	id, err := a.DB.AddLibrary(body.Name, body.Type, abs)
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": "internal error"})
@@ -474,6 +489,15 @@ func (a *API) runScan(ctx context.Context, run *scanRun, lib *store.Library) {
 		return
 	}
 	_, _ = a.DB.PruneProviderCache()
+	// Reconciliation runs inside the shared scan path so EVERY entry point
+	// (HTTP, watcher, CLI) records removals - not just whichever one happened
+	// to go through the watcher. It only ever runs after a complete,
+	// successful enumeration.
+	if n, rerr := a.DB.MarkMissingLibraryFiles(lib.ID); rerr != nil {
+		slog.Warn("libteca: scan reconciliation failed", "library", lib.ID, "err", rerr)
+	} else if n > 0 {
+		slog.Info("libteca: scan marked missing files", "library", lib.ID, "count", n)
+	}
 	a.persistScanTerminal(run, "done", nil)
 	run.finish("done", "")
 }
@@ -760,6 +784,32 @@ func writeSSE(w http.ResponseWriter, fl http.Flusher, ev scanEvent) bool {
 
 func nowMilli() int64 { return time.Now().UnixMilli() }
 
+// rootsOverlap reports duplicate/ancestor/descendant library roots, after
+// best-effort symlink resolution and an inode identity check for
+// case-insensitive or bind-mounted aliases. Either direction of containment
+// counts.
+func rootsOverlap(a, b string) bool {
+	if ea, err := filepath.EvalSymlinks(a); err == nil {
+		a = ea
+	}
+	if eb, err := filepath.EvalSymlinks(b); err == nil {
+		b = eb
+	}
+	if ai, aerr := os.Stat(a); aerr == nil {
+		if bi, berr := os.Stat(b); berr == nil && os.SameFile(ai, bi) {
+			return true
+		}
+	}
+	contains := func(parent, child string) bool {
+		rel, err := filepath.Rel(parent, child)
+		if err != nil {
+			return false
+		}
+		return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+	}
+	return contains(a, b) || contains(b, a)
+}
+
 func fileOK(p string) bool {
 	fi, err := os.Stat(p)
 	return err == nil && !fi.IsDir() && fi.Size() > 0
@@ -982,7 +1032,7 @@ func (a *API) setProgress(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Position float64  `json:"position"`
 		Duration float64  `json:"duration"`
-		Finished bool     `json:"finished"`
+		Finished *bool    `json:"finished"`
 		Device   string   `json:"device"`
 		Page     *int64   `json:"page"`
 		Percent  *float64 `json:"percent"`
@@ -1018,21 +1068,46 @@ func (a *API) setProgress(w http.ResponseWriter, r *http.Request) {
 	if body.Duration > 0 {
 		dur = &body.Duration
 	}
+	finished := false
+	if body.Finished != nil {
+		finished = *body.Finished
+	}
 	p := &store.ReadingProgress{
 		Progress: store.Progress{
 			UserID: auth.UserID(r), EditionID: eid, FileID: &fileID, FileOffsetSecs: offset,
-			EditionPositionSecs: body.Position, DurationSecs: dur, IsFinished: body.Finished,
+			EditionPositionSecs: body.Position, DurationSecs: dur, IsFinished: finished,
 		},
 		Page: body.Page, Percent: body.Percent, Locator: body.Locator,
 	}
 	if body.Device != "" {
 		p.Device = &body.Device
 	}
-	if err := a.DB.SetReadingProgress(p); err != nil {
+	if err := a.DB.SetReadingProgressPatch(p, body.Finished != nil); err != nil {
 		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// confinedRoot resolves the serving root for a recorded file: edition files
+// serve from their library root, podcast episode files (edition_id 0) from
+// the podcasts data directory. Every media open goes through mediafs so a
+// database path pointing past its root never reads outside it.
+func (a *API) confinedRoot(editionID int64) (string, error) {
+	if editionID == 0 {
+		return filepath.Join(a.DataDir, "podcasts"), nil
+	}
+	return a.DB.LibraryRootForEdition(editionID)
+}
+
+func serveConfined(w http.ResponseWriter, r *http.Request, root, path string) {
+	f, fi, err := mediafs.OpenWithin(root, path)
+	if err != nil {
+		http.Error(w, "gone", 404)
+		return
+	}
+	defer f.Close()
+	http.ServeContent(w, r, filepath.Base(path), fi.ModTime(), f)
 }
 
 func (a *API) stream(w http.ResponseWriter, r *http.Request) {
@@ -1042,7 +1117,12 @@ func (a *API) stream(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 404, map[string]string{"error": "file not found"})
 		return
 	}
-	serveFile(w, r, f.Path)
+	root, err := a.confinedRoot(f.EditionID)
+	if err != nil {
+		writeJSON(w, 404, map[string]string{"error": "file not found"})
+		return
+	}
+	serveConfined(w, r, root, f.Path)
 }
 
 func (a *API) cover(w http.ResponseWriter, r *http.Request) {

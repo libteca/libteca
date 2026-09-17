@@ -39,8 +39,8 @@ on PATH. The Go module `github.com/neutron-build/neutron/go` is a published
 dependency (`v0.1.0`). Release tarballs need only ffmpeg + ffprobe.
 
 ```sh
-make build                                  # web UI into the binary, then go build
-./libteca --data ./data --init-admin admin:secret   # creates admin, then serves :8096
+make build                                              # web UI into the binary, then go build
+./libteca --data ./data --init-admin 'admin:replace-with-a-unique-long-password'   # creates admin (min 8 bytes), then serves :8096
 ```
 
 `--watch` is on by default (`--watch=false` or `LIBTECA_WATCH=false` disables;

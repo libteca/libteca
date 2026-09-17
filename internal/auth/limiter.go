@@ -25,14 +25,14 @@ type limitEntry struct {
 }
 
 type Limiter struct {
-	mu         sync.Mutex
-	entries    map[string]*limitEntry
-	threshold  int
-	ipThresh   int
-	window     time.Duration
-	lockout    time.Duration
-	maxIPs     int
-	now        func() time.Time
+	mu        sync.Mutex
+	entries   map[string]*limitEntry
+	threshold int
+	ipThresh  int
+	window    time.Duration
+	lockout   time.Duration
+	maxIPs    int
+	now       func() time.Time
 }
 
 func NewLimiter() *Limiter {

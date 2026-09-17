@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/libteca/libteca/internal/auth"
+	"github.com/libteca/libteca/internal/mediafs"
 	"github.com/libteca/libteca/internal/store"
 	"github.com/neutron-build/neutron/go/neutron"
 )
@@ -243,6 +244,7 @@ func (a *API) itemPayload(ctx *itemCtx) map[string]any {
 	}
 	chapters := make([]map[string]any, 0)
 	cum := 0.0
+	nextChapterID := int64(1)
 	for _, f := range e.Files {
 		var chs []struct {
 			Start float64 `json:"start"`
@@ -250,10 +252,11 @@ func (a *API) itemPayload(ctx *itemCtx) map[string]any {
 			Title string  `json:"title"`
 		}
 		json.Unmarshal([]byte(f.Chapters), &chs)
-		for i, c := range chs {
+		for _, c := range chs {
 			chapters = append(chapters, map[string]any{
-				"id": i + 1, "start": cum + c.Start, "end": cum + c.End, "title": c.Title,
+				"id": nextChapterID, "start": cum + c.Start, "end": cum + c.End, "title": c.Title,
 			})
+			nextChapterID++
 		}
 		cum += f.DurationSecs
 	}
@@ -263,7 +266,7 @@ func (a *API) itemPayload(ctx *itemCtx) map[string]any {
 		start := cum
 		cum += f.DurationSecs
 		tracks = append(tracks, map[string]any{
-			"index": i, "startOffset": int64(start), "duration": f.DurationSecs,
+			"index": i, "startOffset": start, "duration": f.DurationSecs,
 			"contentUrl": "/api/items/" + strconv.FormatInt(e.ID, 10) + "/file/" + strconv.FormatInt(f.ID, 10),
 			"mimeType":   "audio/mp4",
 			"metadata":   map[string]any{"title": ctx.wv.Title, "authorName": ctx.wv.Author},
@@ -351,7 +354,7 @@ func (a *API) itemCover(w http.ResponseWriter, r *http.Request) {
 	}
 	defer f.Close()
 	fi, _ := f.Stat()
-	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Header().Set("Cache-Control", "private, max-age=86400")
 	http.ServeContent(w, r, fi.Name(), fi.ModTime(), f)
 }
 
@@ -437,11 +440,23 @@ func (a *API) postProgress(w http.ResponseWriter, r *http.Request) {
 	}
 	position := body.CurrentTime
 	if body.Progress > 0 && body.CurrentTime == 0 && body.Duration > 0 {
+		if body.Progress > 1 {
+			fail(w, 400, "Progress must be between 0 and 1")
+			return
+		}
 		position = body.Progress * body.Duration
 	}
 	dur := body.Duration
 	if dur == 0 {
 		dur = ctx.ed.TotalDuration()
+	}
+	if err := store.ValidPosition(position, dur); err != nil {
+		fail(w, 400, err.Error())
+		return
+	}
+	if err := store.ValidPosition(body.TimeListened, 0); err != nil && body.TimeListened < 0 {
+		fail(w, 400, "invalid timeListened")
+		return
 	}
 	fileID, offset := ctx.ed.Locate(position)
 	device := r.UserAgent()
@@ -502,10 +517,12 @@ func (a *API) play(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tracks := make([]map[string]any, 0, len(ctx.ed.Files))
-	cum := 0
+	// Float accumulation: int(f.DurationSecs) truncated every track, so the
+	// hundredth 60.9s track was advertised 89.1 seconds early.
+	cum := 0.0
 	for i, f := range ctx.ed.Files {
 		start := cum
-		cum += int(f.DurationSecs)
+		cum += f.DurationSecs
 		var codec, container string
 		if f.Codec != nil {
 			codec = *f.Codec
@@ -549,7 +566,10 @@ func (a *API) itemFile(w http.ResponseWriter, r *http.Request) {
 	fid, _ := strconv.ParseInt(r.PathValue("fileId"), 10, 64)
 	for _, f := range ctx.ed.Files {
 		if f.ID == fid {
-			serveAudio(w, r, f.Path)
+			if err := a.serveEditionFile(w, r, &f, ctx.wv.LibraryID); err == nil {
+				return
+			}
+			fail(w, 404, "File not found")
 			return
 		}
 	}
@@ -572,7 +592,28 @@ func (a *API) SessionTrack(w http.ResponseWriter, r *http.Request) {
 		fail(w, 404, "Track not found")
 		return
 	}
-	serveAudio(w, r, ed.Files[index].Path)
+	wv, err := a.DB.WorkByID(ed.WorkID)
+	if err != nil {
+		fail(w, 404, "Track not found")
+		return
+	}
+	if err := a.serveEditionFile(w, r, &ed.Files[index], wv.LibraryID); err != nil {
+		fail(w, 404, "Track not found")
+	}
+}
+
+func (a *API) serveEditionFile(w http.ResponseWriter, r *http.Request, f *store.FileRec, libraryID int64) error {
+	lib, err := a.DB.Library(libraryID)
+	if err != nil {
+		return err
+	}
+	fh, fi, err := mediafs.OpenWithin(lib.Path, f.Path)
+	if err != nil {
+		return err
+	}
+	defer fh.Close()
+	http.ServeContent(w, r, filepath.Base(f.Path), fi.ModTime(), fh)
+	return nil
 }
 
 func (a *API) sessionSync(w http.ResponseWriter, r *http.Request) {
@@ -589,6 +630,14 @@ func (a *API) sessionSync(w http.ResponseWriter, r *http.Request) {
 	s, err := a.DB.Session(r.PathValue("id"))
 	if err != nil || s.ClosedAt != nil || s.UserID != auth.UserID(r) {
 		fail(w, 404, "Session not found")
+		return
+	}
+	if err := store.ValidPosition(body.CurrentTime, body.Duration); err != nil {
+		fail(w, 400, err.Error())
+		return
+	}
+	if body.TimeListened < 0 {
+		fail(w, 400, "invalid timeListened")
 		return
 	}
 	if err := a.DB.UpdateSession(s.ID, body.CurrentTime, body.TimeListened); err != nil {
@@ -629,28 +678,48 @@ func (a *API) sessionClose(w http.ResponseWriter, r *http.Request) {
 		fail(w, 404, "Session not found")
 		return
 	}
-	if s.ClosedAt == nil {
-		if err := a.DB.CloseSession(s.ID, body.CurrentTime, body.TimeListened); err != nil {
+	if s.ClosedAt != nil {
+		write(w, 200, map[string]any{"success": true})
+		return
+	}
+	ed, err := a.DB.EditionByID(s.EditionID)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	if err := store.ValidPosition(body.CurrentTime, body.Duration); err != nil {
+		fail(w, 400, err.Error())
+		return
+	}
+	if body.TimeListened < 0 {
+		fail(w, 400, "invalid timeListened")
+		return
+	}
+	// Close and final progress commit atomically: closing first made the
+	// retry a no-op when the progress write failed, losing the final position.
+	if body.CurrentTime > 0 {
+		fileID, offset := ed.Locate(body.CurrentTime)
+		dur := body.Duration
+		if dur == 0 {
+			dur = ed.TotalDuration()
+		}
+		device := "abs-app"
+		p := &store.Progress{
+			UserID: s.UserID, EditionID: s.EditionID, FileID: &fileID, FileOffsetSecs: offset,
+			EditionPositionSecs: body.CurrentTime, DurationSecs: &dur, Device: &device,
+			IsFinished: dur > 0 && body.CurrentTime >= dur-5,
+		}
+		if err := a.DB.CloseSessionWithProgress(s, p, body.TimeListened); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				fail(w, 404, "Session not found")
+				return
+			}
 			serverError(w, r, err)
 			return
 		}
-		if ed, err := a.DB.EditionByID(s.EditionID); err == nil && body.CurrentTime > 0 {
-			fileID, offset := ed.Locate(body.CurrentTime)
-			dur := body.Duration
-			if dur == 0 {
-				dur = ed.TotalDuration()
-			}
-			device := "abs-app"
-			p := &store.Progress{
-				UserID: s.UserID, EditionID: s.EditionID, FileID: &fileID, FileOffsetSecs: offset,
-				EditionPositionSecs: body.CurrentTime, DurationSecs: &dur, Device: &device,
-				IsFinished: dur > 0 && body.CurrentTime >= dur-5,
-			}
-			if err := a.DB.SetProgress(p); err != nil {
-				serverError(w, r, err)
-				return
-			}
-		}
+	} else if err := a.DB.CloseSession(s.ID, body.CurrentTime, body.TimeListened); err != nil {
+		serverError(w, r, err)
+		return
 	}
 	write(w, 200, map[string]any{"success": true})
 }
@@ -670,17 +739,6 @@ func mimeType(codec, container string) string {
 		return "audio/mp4"
 	}
 	return "audio/mpeg"
-}
-
-func serveAudio(w http.ResponseWriter, r *http.Request, path string) {
-	f, err := os.Open(path)
-	if err != nil {
-		http.Error(w, "gone", 404)
-		return
-	}
-	defer f.Close()
-	fi, _ := f.Stat()
-	http.ServeContent(w, r, filepath.Base(path), fi.ModTime(), f)
 }
 
 func intQuery(r *http.Request, key string, def int) int {
