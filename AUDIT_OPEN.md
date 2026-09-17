@@ -91,3 +91,83 @@ omilator-derived ROM filename cleanup (region/revision/tag stripping).
 Runtime smoke: 3 fake ROMs across sfc/gba/gen → 3 works on correct
 platforms, rescan no-op, Jellyfin views show only the book library,
 Subsonic unaffected, zero panics.
+
+## ChatGPT audit pass 6 (2026-09-17, AUDIT-CHATGPT-6.md) - 41 of 45 fixed, 4 deferred/partial
+
+Fixed (verified against source first; `audit 6-NN` commits):
+
+1. HIGH bearer-token cache resurrection - FIXED: UserForToken queries the DB on every request (no positive cache), bounded token length, throttled last_seen SQL write (F10 rolled in).
+2. HIGH OPDS basic-auth revocation race - FIXED: per-API proof cache keyed by user id + CURRENT stored hash + password; user looked up on every request; DB outage is 500, not a failure count.
+3. HIGH non-atomic password rotation - FIXED: store.RotatePassword swaps hash + revokes tokens in one transaction; login/token issuance is conditional (IssueTokenForPassword on the verified hash, IssueTokenFromParent on an active parent) across core/ABS/Jellyfin/tokenIssue.
+5. HIGH unbounded concurrent Argon2 - FIXED: process-wide 2-slot KDF budget (VerifyRequest/HashRequest/CheckPassword) on every request-time verify/hash incl. unknown-user dummy, user create and rotation; ErrKDFBusy maps to 429 + Retry-After on every face.
+6. MEDIUM malformed stored hash params - FIXED: Verify accepts exactly the one format Hash emits (version, params, salt/key lengths, total length).
+7. LOW unknown-user timing - FIXED: CheckPassword / OPDS + Subsonic dummy-hash burn make missing-user and wrong-password cost identical.
+8. MEDIUM bootstrap bypass - FIXED: name/password validation, non-admin refusal, empty-install check + insert in one transaction; no more never-delivered bootstrap token.
+11. HIGH main returns before shutdown finishes - FIXED: HTTP server runs in a goroutine, main owns Shutdown→srv.Close→worker join→core.WaitJobs→exit; scan/meta/OPML jobs go through a launchJob registry (503 on shutdown admission); exit code preserved after deferred cleanup.
+12. MEDIUM no body-read deadline - FIXED: ReadTimeout 30s (hijacked websocket upgrades keep their own lifecycle).
+13. LOW CLI precedence/validation - FIXED: explicit --watch beats LIBTECA_WATCH, strict env parsing, port range check, overflow-guarded sweep, invalid --hwaccel fatal, --host flag. (README reverse-proxy/Tailscale trust-boundary paragraph not rewritten - doc-only residue.)
+14. MEDIUM backup name collision - FIXED: snapshot staged privately and published with a no-replace hard link (nanosecond + random suffix name); BackupTo refuses existing destinations.
+15. MEDIUM cover backup durability - PARTIAL: checked Close, fsync of files+dirs, non-regular entries rejected. Per-snapshot cover generations DEFERRED (see below).
+16. LOW retention over-keep with protected oldest - FIXED: the protected file counts toward the keep budget.
+17. MEDIUM DSN reserved characters - FIXED: file URI built via net/url; paths with ? # % spaces open literally, pragmas survive (tested).
+18. LOW leaked handles on failed Open - FIXED: pool closed unless init succeeds.
+19. MEDIUM reads silently empty - FIXED: me/getProgress/work-detail propagate failures (500); missing edition is 404; WorksInLibrary checks erows.Err; FileByID/EditionByID report iteration errors before NotFound. (findWorkID left two-valued: its callers funnel into UpsertWork, which re-queries and propagates.)
+20. MEDIUM JSON committed then failed - FIXED: writeJSON marshals before WriteHeader; failure degrades to a valid 500; 404 problem+json preserved.
+21. MEDIUM work detail loads whole library - FIXED: WorkViewByID loads only the work's editions/files in the WorksInLibrary shape (file-less editions still listed).
+22. MEDIUM progress validation - PARTIAL: non-finite/negative position/duration/page, oversized device/locator rejected; Device finally persisted. position>total bound skipped (client end-position tolerance is a product call; Locate pins to the last file today).
+23. LOW misleading id/type responses - PARTIAL: addLibrary validates name/type (podcasts excluded). Malformed numeric ids stay 404-by-design; sweeping every handler to 400 is contract churn without security impact.
+24. MEDIUM unchecked stat/nullable derefs - FIXED: serveFile stats + regular-file checks before/after open; HLS segments served through it; width/height emitted independently.
+25. MEDIUM discarded scan persistence errors - FIXED: counts checked (warn), terminal FinishScanJob retried 3x and failures logged; FailRunningScanJobs at startup remains the crash backstop. Durable outbox DEFERRED (overkill for a single-node server; see below).
+26. MEDIUM validators before apply - FIXED: ETag/Last-Modified advance only after episodes applied (subscribe + refresh); metadata writes checked.
+27. HIGH unbounded enclosures - FIXED: 2 GiB byte cap + 2 h read ceiling, declared-length rejection, LimitReader(max+1), empty-body rejection, temp cleanup.
+28. MEDIUM filename collision overwrite - FIXED: title fallback re-checked; ultimate fallback is the immutable episode id.
+29. MEDIUM DeleteLibrary orphan podcast files - FIXED: file ids captured in-transaction before episode rows; delete guarded by NOT EXISTS.
+30. MEDIUM NaN/Inf/negative durations - FIXED: strict 1-3 field parser, sub-60 fields, finite/nonnegative, 30-day cap; 0 = unknown as before.
+31. MEDIUM capacity eviction of active viewers - FIXED: only idle-expired sessions reclaimed at cap; excess admission gets ErrCapacity (503 + Retry-After on core and Jellyfin).
+32. MEDIUM closed manager admits sessions - FIXED: closed flag under the manager lock; Get returns ErrClosed after CloseAll.
+33. MEDIUM clean short transcodes re-encoded - FIXED: process exit error recorded per generation; fallback only on actual failure, never on clean exit or kill.
+34. MEDIUM HLS sessions not user-owned - FIXED: bounded expiring per-user web tickets; hlsFile derives the edition from the caller's ticket, hlsStop consumes it; fabricated/foreign/replayed ids get 404.
+35. MEDIUM unvalidated starts/non-media - FIXED: NaN/Inf/negative/out-of-duration starts 400; game-*/codec-less editions never reach ffmpeg (415 at playback, 404 at segment fetch).
+36. HIGH service worker caches protocol faces - FIXED: static-asset allowlist only; query/Authorization/Range requests and non-shell navigations bypass; cache failures fail open to the network. skipWaiting/claim retained deliberately (existing update behavior).
+37. LOW activation deletes foreign caches - FIXED: only libteca-static-* plus the four known legacy names are deleted.
+38. MEDIUM api() treats failures as data - FIXED: every non-ok response normalized to {error, status...} reading problem+json detail/title; 401 storage access guarded.
+39. LOW Headers merge + Library types - FIXED: platform Headers merge with override preservation; path optional, podcasts/games in LibraryType.
+40. MEDIUM EPUB percentage resume with cached locations - FIXED: only location GENERATION gates on the cache; percentage→CFI mapping runs either way.
+41. LOW EPUB unmount/stale state - FIXED: AbortController cancels the transfer; per-edition state reset at effect start; intentional abort shows no error overlay.
+42. MEDIUM false-success Subsonic stubs - FIXED: savePlayQueue/getPlayQueue answer errNotImplemented; getStarred2/getAlbumInfo2 return their truthful empty payloads.
+43. LOW CI gaps - FIXED: race-enabled go job on go.mod toolchain with ffmpeg, npm ci with cache, least-privilege permissions, job timeouts. (Exposed and fixed the map-order flake in TestLimiterMaxIPs.)
+44. LOW Handler() recreates destructive state - FIXED: once-only construction; trickplay generator is per-API (no package-global map retention).
+45. MEDIUM unchanged feed blocks retries - FIXED: downloadPending returns joined failures; the 304 branch runs pending downloads + retention (auto-download toggled on after subscription now recovers without a feed change).
+
+Deferred (product/architecture decisions, not contained fixes):
+
+- **F04 plaintext subsonic password (HIGH):** disabling legacy t/s token auth
+  breaks every deployed Subsonic client that defaults to it (the repo's own
+  corpus tests pin the behavior); the safe alternative - a separate
+  revocable Subsonic-only app secret - is a deliberate protocol/credential
+  migration that needs a founder decision and client-compat verification.
+  Interim posture: the captured secret is hash-validated on every use and
+  dropped on rotation (already the case).
+- **F09 token digests at rest + expiry policy (MEDIUM):** storing sha256
+  instead of raw values requires rewriting every token reader/writer plus a
+  data migration in one atomic pass (half-applied = lockout), and an expiry
+  policy for interactive vs device tokens is a product decision. Revisit
+  together with F04's credential work.
+- **F15 per-snapshot cover generations (MEDIUM, durability half fixed):**
+  switching backups/ to generation directories changes the on-disk layout,
+  restore procedure and retention docs - a product decision. Durability
+  (fsync, checked closes, non-regular rejection) is fixed in place.
+- **F25 durable scan-terminal outbox:** bounded retry + startup
+  reconciliation (FailRunningScanJobs) already bound the stuck-job window
+  to one restart; an outbox is beyond a single-node server's needs.
+
+Also noted while verifying: TestLibraryAddedAtRuntimeGetsWatched in
+internal/watch flakes when the 200ms periodic sync scans a CBZ mid-write
+(pre-existing; neither watch nor scan was touched this pass). The remaining
+gofmt-dirty files (jellyfin/ws.go, opds/cbz.go, meta/thegamesdb.go,
+scan/books_test.go, scan/games_test.go, store/podcasts.go and tests) are
+pre-existing and untouched.
+
+Verification: go vet ./... clean; go test ./... -count=1 green across
+repeated full runs; go test -race ./... -timeout 600s green; web npx tsc
+--noEmit + npm run build clean (2026-09-17).
