@@ -95,6 +95,9 @@ func (d *DB) WorksInLibrary(libID int64) ([]WorkView, error) {
 		out[wi].Editions = append(out[wi].Editions, EditionView{Edition: e})
 	}
 	erows.Close()
+	if err := erows.Err(); err != nil {
+		return nil, err
+	}
 
 	frows, err := d.Query(`SELECT `+fileCols+` FROM files WHERE missing = 0 AND edition_id IN
 		(SELECT id FROM editions WHERE work_id IN (SELECT id FROM works WHERE library_id = ?))
@@ -113,6 +116,66 @@ func (d *DB) WorksInLibrary(libID int64) ([]WorkView, error) {
 			continue
 		}
 		ev := &out[pos[0]].Editions[pos[1]]
+		cum := f.DurationSecs
+		if n := len(ev.CumDurations); n > 0 {
+			cum += ev.CumDurations[n-1]
+		}
+		ev.CumDurations = append(ev.CumDurations, cum)
+		ev.Files = append(ev.Files, f)
+	}
+	return out, frows.Err()
+}
+
+// WorkViewByID loads one work with its editions and non-missing files in the
+// same shape WorksInLibrary produces, without materializing every work,
+// edition and file of the enclosing library: work detail used to scale with
+// unrelated library content.
+func (d *DB) WorkViewByID(id int64) (*WorkView, error) {
+	w, err := workRow(d, id)
+	if err != nil {
+		return nil, err
+	}
+	out := &WorkView{Work: *w}
+	erows, err := d.Query(`SELECT id, work_id, format, title, language, abridged, duration_secs, position, season_num, episode_num, created_at FROM editions WHERE work_id = ? ORDER BY id`, id)
+	if err != nil {
+		return nil, err
+	}
+	for erows.Next() {
+		var e Edition
+		var abr int
+		if err := erows.Scan(&e.ID, &e.WorkID, &e.Format, &e.Title, &e.Language, &abr, &e.DurationSecs, &e.Position, &e.SeasonNum, &e.EpisodeNum, &e.CreatedAt); err != nil {
+			erows.Close()
+			return nil, err
+		}
+		e.Abridged = abr != 0
+		out.Editions = append(out.Editions, EditionView{Edition: e})
+	}
+	erows.Close()
+	if err := erows.Err(); err != nil {
+		return nil, err
+	}
+	if len(out.Editions) == 0 {
+		return out, nil
+	}
+	frows, err := d.Query(`SELECT `+fileCols+` FROM files WHERE missing = 0 AND edition_id IN (SELECT id FROM editions WHERE work_id = ?) ORDER BY edition_id, seq`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer frows.Close()
+	pos := map[int64]int{}
+	for i := range out.Editions {
+		pos[out.Editions[i].ID] = i
+	}
+	for frows.Next() {
+		f, err := scanFile(frows)
+		if err != nil {
+			return nil, err
+		}
+		i, ok := pos[f.EditionID]
+		if !ok {
+			continue
+		}
+		ev := &out.Editions[i]
 		cum := f.DurationSecs
 		if n := len(ev.CumDurations); n > 0 {
 			cum += ev.CumDurations[n-1]
@@ -154,10 +217,13 @@ func (d *DB) EditionByID(id int64) (*EditionView, error) {
 		ev.CumDurations = append(ev.CumDurations, cum)
 		ev.Files = append(ev.Files, f)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	if len(ev.Files) == 0 {
 		return nil, ErrNotFound
 	}
-	return ev, rows.Err()
+	return ev, nil
 }
 
 func (d *DB) WorkByID(id int64) (*Work, error) {
@@ -185,6 +251,9 @@ func (d *DB) FileByID(id int64) (*FileRec, error) {
 	}
 	defer rows.Close()
 	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
 		return nil, ErrNotFound
 	}
 	f, err := scanFile(rows)

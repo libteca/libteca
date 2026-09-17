@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -141,23 +142,32 @@ func (a *API) Mount(r *neutron.Router) {
 // problem+json instead: the router's errInterceptor replaces any non-problem
 // 404 body with a generic "No route matches" document, which would swallow
 // the handler's specific message; problem+json passes through untouched.
+// The body is serialized BEFORE the status is written: a value that cannot
+// marshal (e.g. NaN imported through a non-JSON ingress) used to commit a
+// 200 and then emit an empty or truncated body.
 func writeJSON(w http.ResponseWriter, status int, v any) {
+	contentType := "application/json"
 	if status == http.StatusNotFound {
 		detail := "Not Found"
 		if m, ok := v.(map[string]string); ok && m["error"] != "" {
 			detail = m["error"]
 		}
-		w.Header().Set("Content-Type", "application/problem+json")
-		w.WriteHeader(status)
-		json.NewEncoder(w).Encode(map[string]any{
+		contentType = "application/problem+json"
+		v = map[string]any{
 			"type": "https://neutron.dev/errors/not-found", "title": "Not Found",
 			"status": status, "detail": detail,
-		})
-		return
+		}
 	}
-	w.Header().Set("Content-Type", "application/json")
+	data, err := json.Marshal(v)
+	if err != nil {
+		slog.Error("libteca: json serialization failed", "err", err)
+		status = http.StatusInternalServerError
+		contentType = "application/json"
+		data = []byte(`{"error":"internal error"}`)
+	}
+	w.Header().Set("Content-Type", contentType)
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+	w.Write(append(data, '\n'))
 }
 
 func (a *API) login(w http.ResponseWriter, r *http.Request) {
@@ -220,7 +230,11 @@ func (a *API) me(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 401, map[string]string{"error": "unauthorized"})
 		return
 	}
-	list, _ := a.DB.UserProgressList(u.ID)
+	list, err := a.DB.UserProgressList(u.ID)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
+		return
+	}
 	progress := make([]map[string]any, 0, len(list))
 	for _, p := range list {
 		progress = append(progress, map[string]any{
@@ -260,12 +274,23 @@ func (a *API) addLibrary(w http.ResponseWriter, r *http.Request) {
 		Type string `json:"type"`
 		Path string `json:"path"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Name == "" || body.Path == "" {
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Path == "" {
 		writeJSON(w, 400, map[string]string{"error": "name and path required"})
+		return
+	}
+	body.Name = strings.TrimSpace(body.Name)
+	if body.Name == "" || len(body.Name) > 200 || strings.ContainsRune(body.Path, '\x00') {
+		writeJSON(w, 400, map[string]string{"error": "invalid name or path"})
 		return
 	}
 	if body.Type == "" {
 		body.Type = "audiobooks"
+	}
+	switch body.Type {
+	case "movies", "tv", "music", "audiobooks", "books", "comics", "games":
+	default:
+		writeJSON(w, 400, map[string]string{"error": "unsupported library type"})
+		return
 	}
 	abs, err := filepath.Abs(body.Path)
 	if err != nil {
@@ -381,6 +406,30 @@ func (a *API) TriggerScan(ctx context.Context, libraryID int64) (int64, error) {
 
 const scanPersistInterval = 2 * time.Second
 
+// persistScanTerminal writes the terminal job state with bounded retry: a
+// discarded failure left the durable row 'running' while memory said
+// finished, wedging the admission and watcher paths until restart. Startup
+// reconciliation (FailRunningScanJobs) remains the backstop for a hard
+// crash between retries.
+func (a *API) persistScanTerminal(run *scanRun, status string, message *string) {
+	p := run.snapshot()
+	if err := a.DB.UpdateScanJobCounts(run.jobID, int64(p.FilesSeen), int64(p.FilesProbed), int64(p.FilesAdded), int64(p.FilesUpdated), int64(p.WorksChanged)); err != nil {
+		slog.Warn("libteca: scan counts persistence failed", "job", run.jobID, "err", err)
+	}
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if err := a.DB.FinishScanJob(run.jobID, status, message); err == nil {
+			return
+		} else {
+			lastErr = err
+		}
+		if attempt < 2 {
+			time.Sleep(time.Duration(attempt+1) * 100 * time.Millisecond)
+		}
+	}
+	slog.Error("libteca: scan terminal state persistence failed", "job", run.jobID, "status", status, "err", lastErr)
+}
+
 func (a *API) runScan(ctx context.Context, run *scanRun, lib *store.Library) {
 	// Bare goroutine, outside request recovery: a panic here used to take
 	// the whole server down.
@@ -391,9 +440,7 @@ func (a *API) runScan(ctx context.Context, run *scanRun, lib *store.Library) {
 			// the scan_jobs row 'running' forever - the watcher polled it
 			// endlessly and the library returned 409 until restart.
 			msg := fmt.Sprintf("scan panicked: %v", rec)
-			fin := run.snapshot()
-			a.DB.UpdateScanJobCounts(run.jobID, int64(fin.FilesSeen), int64(fin.FilesProbed), int64(fin.FilesAdded), int64(fin.FilesUpdated), int64(fin.WorksChanged))
-			a.DB.FinishScanJob(run.jobID, "error", &msg)
+			a.persistScanTerminal(run, "error", &msg)
 			run.finish("error", msg)
 		}
 	}()
@@ -413,24 +460,24 @@ func (a *API) runScan(ctx context.Context, run *scanRun, lib *store.Library) {
 		run.publish(p)
 		if time.Since(lastPersist) >= scanPersistInterval {
 			lastPersist = time.Now()
-			a.DB.UpdateScanJobCounts(run.jobID, int64(p.FilesSeen), int64(p.FilesProbed), int64(p.FilesAdded), int64(p.FilesUpdated), int64(p.WorksChanged))
+			if err := a.DB.UpdateScanJobCounts(run.jobID, int64(p.FilesSeen), int64(p.FilesProbed), int64(p.FilesAdded), int64(p.FilesUpdated), int64(p.WorksChanged)); err != nil {
+				slog.Warn("libteca: scan progress persistence failed", "job", run.jobID, "err", err)
+			}
 		}
 	}
 	_, err := scanFn(ctx, a.DB, lib, filepath.Join(a.DataDir, "covers"), onProgress)
-	final := run.snapshot()
-	a.DB.UpdateScanJobCounts(run.jobID, int64(final.FilesSeen), int64(final.FilesProbed), int64(final.FilesAdded), int64(final.FilesUpdated), int64(final.WorksChanged))
 	if err != nil {
 		msg := err.Error()
 		if ctx.Err() != nil {
 			msg = "cancelled"
 		}
-		a.DB.FinishScanJob(run.jobID, "error", &msg)
+		a.persistScanTerminal(run, "error", &msg)
 		run.finish("error", msg)
 		fmt.Println("libteca: scan:", err)
 		return
 	}
 	_, _ = a.DB.PruneProviderCache()
-	a.DB.FinishScanJob(run.jobID, "done", nil)
+	a.persistScanTerminal(run, "done", nil)
 	run.finish("done", "")
 }
 
@@ -787,97 +834,102 @@ func (a *API) works(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) work(w http.ResponseWriter, r *http.Request) {
 	id := auth.Atoi64(r.PathValue("id"))
-	wv, err := a.DB.WorkByID(id)
+	full, err := a.DB.WorkViewByID(id)
 	if err != nil {
 		writeJSON(w, 404, map[string]string{"error": "not found"})
 		return
 	}
-	lib, _ := a.DB.Library(wv.LibraryID)
-	works, err := a.DB.WorksInLibrary(wv.LibraryID)
+	lib, err := a.DB.Library(full.LibraryID)
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
-	for _, full := range works {
-		if full.ID != id {
-			continue
-		}
-		progress, _ := a.DB.UserProgressList(auth.UserID(r))
-		pmap := map[int64]*store.Progress{}
-		for i := range progress {
-			pmap[progress[i].EditionID] = &progress[i]
-		}
-		pageCounts, _ := a.DB.PageCountsByWork(id)
-		rmap, _ := a.DB.ReadingListByUser(auth.UserID(r))
-		eds := make([]map[string]any, 0, len(full.Editions))
-		for _, ev := range full.Editions {
-			chapters := []map[string]any{}
-			cum := 0.0
-			for fi, f := range ev.Files {
-				var ch []audioChapter
-				json.Unmarshal([]byte(f.Chapters), &ch)
-				for _, c := range ch {
-					chapters = append(chapters, map[string]any{
-						"title": c.Title, "start": cum + c.Start, "end": cum + c.End, "fileId": f.ID,
-					})
-				}
-				_ = fi
-				cum += f.DurationSecs
-			}
-			files := make([]map[string]any, 0, len(ev.Files))
-			for _, f := range ev.Files {
-				file := map[string]any{
-					"id": f.ID, "seq": f.Seq, "duration": f.DurationSecs, "size": f.SizeBytes,
-				}
-				if f.VideoCodec != nil {
-					file["videoCodec"] = *f.VideoCodec
-				}
-				if f.Codec != nil {
-					file["codec"] = *f.Codec
-				}
-				if f.Width != nil {
-					file["width"] = *f.Width
-					file["height"] = *f.Height
-				}
-				files = append(files, file)
-			}
-			e := map[string]any{
-				"id": ev.ID, "format": ev.Format, "title": ev.Title, "duration": ev.TotalDuration(),
-				"files": files, "chapters": chapters,
-			}
-			if ev.SeasonNum != nil {
-				e["seasonNum"] = *ev.SeasonNum
-			}
-			if ev.EpisodeNum != nil {
-				e["episodeNum"] = *ev.EpisodeNum
-			}
-			if pc := pageCounts[ev.ID]; pc != nil {
-				e["pageCount"] = *pc
-			}
-			if p, ok := pmap[ev.ID]; ok {
-				e["position"] = p.EditionPositionSecs
-				e["isFinished"] = p.IsFinished
-			}
-			if rp, ok := rmap[ev.ID]; ok {
-				if rp.Page != nil {
-					e["page"] = *rp.Page
-				}
-				if rp.Percent != nil {
-					e["percent"] = *rp.Percent
-				}
-			}
-			eds = append(eds, e)
-		}
-		writeJSON(w, 200, map[string]any{
-			"id": full.ID, "libraryId": full.LibraryID, "libraryName": lib.Name,
-			"title": full.Title, "subtitle": full.Subtitle, "author": full.Author,
-			"description": full.Description, "hasCover": full.CoverPath != nil && *full.CoverPath != "",
-			"hasFanart": fileOK(filepath.Join(a.DataDir, "covers", fmt.Sprintf("%d-fanart.jpg", full.ID))),
-			"genres":    a.DB.WorkGenres(id), "editions": eds,
-		})
+	progress, err := a.DB.UserProgressList(auth.UserID(r))
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
-	writeJSON(w, 404, map[string]string{"error": "not found"})
+	pmap := map[int64]*store.Progress{}
+	for i := range progress {
+		pmap[progress[i].EditionID] = &progress[i]
+	}
+	pageCounts, err := a.DB.PageCountsByWork(id)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
+		return
+	}
+	rmap, err := a.DB.ReadingListByUser(auth.UserID(r))
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
+		return
+	}
+	eds := make([]map[string]any, 0, len(full.Editions))
+	for _, ev := range full.Editions {
+		chapters := []map[string]any{}
+		cum := 0.0
+		for _, f := range ev.Files {
+			var ch []audioChapter
+			json.Unmarshal([]byte(f.Chapters), &ch)
+			for _, c := range ch {
+				chapters = append(chapters, map[string]any{
+					"title": c.Title, "start": cum + c.Start, "end": cum + c.End, "fileId": f.ID,
+				})
+			}
+			cum += f.DurationSecs
+		}
+		files := make([]map[string]any, 0, len(ev.Files))
+		for _, f := range ev.Files {
+			file := map[string]any{
+				"id": f.ID, "seq": f.Seq, "duration": f.DurationSecs, "size": f.SizeBytes,
+			}
+			if f.VideoCodec != nil {
+				file["videoCodec"] = *f.VideoCodec
+			}
+			if f.Codec != nil {
+				file["codec"] = *f.Codec
+			}
+			if f.Width != nil {
+				file["width"] = *f.Width
+			}
+			if f.Height != nil {
+				file["height"] = *f.Height
+			}
+			files = append(files, file)
+		}
+		e := map[string]any{
+			"id": ev.ID, "format": ev.Format, "title": ev.Title, "duration": ev.TotalDuration(),
+			"files": files, "chapters": chapters,
+		}
+		if ev.SeasonNum != nil {
+			e["seasonNum"] = *ev.SeasonNum
+		}
+		if ev.EpisodeNum != nil {
+			e["episodeNum"] = *ev.EpisodeNum
+		}
+		if pc := pageCounts[ev.ID]; pc != nil {
+			e["pageCount"] = *pc
+		}
+		if p, ok := pmap[ev.ID]; ok {
+			e["position"] = p.EditionPositionSecs
+			e["isFinished"] = p.IsFinished
+		}
+		if rp, ok := rmap[ev.ID]; ok {
+			if rp.Page != nil {
+				e["page"] = *rp.Page
+			}
+			if rp.Percent != nil {
+				e["percent"] = *rp.Percent
+			}
+		}
+		eds = append(eds, e)
+	}
+	writeJSON(w, 200, map[string]any{
+		"id": full.ID, "libraryId": full.LibraryID, "libraryName": lib.Name,
+		"title": full.Title, "subtitle": full.Subtitle, "author": full.Author,
+		"description": full.Description, "hasCover": full.CoverPath != nil && *full.CoverPath != "",
+		"hasFanart": fileOK(filepath.Join(a.DataDir, "covers", fmt.Sprintf("%d-fanart.jpg", full.ID))),
+		"genres":    a.DB.WorkGenres(id), "editions": eds,
+	})
 }
 
 type audioChapter struct {
@@ -889,7 +941,19 @@ type audioChapter struct {
 
 func (a *API) getProgress(w http.ResponseWriter, r *http.Request) {
 	eid := auth.Atoi64(r.PathValue("editionId"))
+	var exists int
+	if err := a.DB.QueryRow(`SELECT 1 FROM editions WHERE id = ?`, eid).Scan(&exists); err != nil {
+		writeJSON(w, 404, map[string]string{"error": "edition not found"})
+		return
+	}
 	p, err := a.DB.GetReadingProgress(auth.UserID(r), eid)
+	// Only ErrNotFound means a valid edition with no saved progress; any
+	// other read failure used to be served as a successful zero position,
+	// which clients could persist over real progress.
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		writeJSON(w, 500, map[string]string{"error": "progress unavailable"})
+		return
+	}
 	m := map[string]any{"editionId": eid, "position": 0, "isFinished": false}
 	if err == nil {
 		m = map[string]any{
@@ -938,8 +1002,21 @@ func (a *API) setProgress(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "percent must be between 0 and 1"})
 		return
 	}
-	if body.Position < 0 {
-		writeJSON(w, 400, map[string]string{"error": "position must be >= 0"})
+	if math.IsNaN(body.Position) || math.IsInf(body.Position, 0) || body.Position < 0 ||
+		math.IsNaN(body.Duration) || math.IsInf(body.Duration, 0) || body.Duration < 0 {
+		writeJSON(w, 400, map[string]string{"error": "invalid position or duration"})
+		return
+	}
+	if body.Percent != nil && (math.IsNaN(*body.Percent) || math.IsInf(*body.Percent, 0)) {
+		writeJSON(w, 400, map[string]string{"error": "invalid percent"})
+		return
+	}
+	if body.Page != nil && *body.Page < 0 {
+		writeJSON(w, 400, map[string]string{"error": "page must be nonnegative"})
+		return
+	}
+	if len(body.Device) > 256 || (body.Locator != nil && len(*body.Locator) > 8192) {
+		writeJSON(w, 400, map[string]string{"error": "progress metadata too large"})
 		return
 	}
 	fileID, offset := ed.Locate(body.Position)
@@ -953,6 +1030,9 @@ func (a *API) setProgress(w http.ResponseWriter, r *http.Request) {
 			EditionPositionSecs: body.Position, DurationSecs: dur, IsFinished: body.Finished,
 		},
 		Page: body.Page, Percent: body.Percent, Locator: body.Locator,
+	}
+	if body.Device != "" {
+		p.Device = &body.Device
 	}
 	if err := a.DB.SetReadingProgress(p); err != nil {
 		writeJSON(w, 500, map[string]string{"error": "internal error"})
@@ -986,13 +1066,29 @@ func (a *API) cover(w http.ResponseWriter, r *http.Request) {
 	serveFile(w, r, path)
 }
 
+// serveFile serves a stored media path. Stat errors and non-regular files
+// are handled instead of dereferenced: a vanished or replaced path used to
+// panic the request on a nil FileInfo.
 func serveFile(w http.ResponseWriter, r *http.Request, path string) {
+	before, err := os.Stat(path)
+	if err != nil || !before.Mode().IsRegular() {
+		http.Error(w, "gone", 404)
+		return
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		http.Error(w, "gone", 404)
 		return
 	}
 	defer f.Close()
-	fi, _ := f.Stat()
+	fi, err := f.Stat()
+	if err != nil {
+		http.Error(w, "internal error", 500)
+		return
+	}
+	if !fi.Mode().IsRegular() {
+		http.Error(w, "gone", 404)
+		return
+	}
 	http.ServeContent(w, r, filepath.Base(path), fi.ModTime(), f)
 }
