@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"embed"
 	"fmt"
+	"net/url"
+	"path/filepath"
 	"time"
 
 	"github.com/pressly/goose/v3"
@@ -18,11 +20,36 @@ type DB struct {
 }
 
 func Open(path string) (*DB, error) {
-	dsn := fmt.Sprintf("file:%s?_txlock=immediate&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)", path)
-	sdb, err := sql.Open("sqlite", dsn)
+	// A path containing ?, # or % would be reinterpreted as query, fragment
+	// or escape syntax by the driver's DSN parser; build the file URI
+	// through net/url so the path stays literal.
+	abs, err := filepath.Abs(path)
 	if err != nil {
 		return nil, err
 	}
+	u := url.URL{Scheme: "file", Path: filepath.ToSlash(abs)}
+	q := url.Values{}
+	q.Set("_txlock", "immediate")
+	for _, pragma := range []string{
+		"journal_mode(WAL)", "synchronous(NORMAL)",
+		"busy_timeout(5000)", "foreign_keys(1)",
+	} {
+		q.Add("_pragma", pragma)
+	}
+	u.RawQuery = q.Encode()
+	sdb, err := sql.Open("sqlite", u.String())
+	if err != nil {
+		return nil, err
+	}
+	// Ownership transfers to the returned DB only on success: a failure in
+	// dialect setup, migrations or backfill used to leak the opened pool
+	// and its file handles.
+	success := false
+	defer func() {
+		if !success {
+			_ = sdb.Close()
+		}
+	}()
 	sdb.SetMaxOpenConns(16)
 	sdb.SetMaxIdleConns(16)
 	sdb.SetConnMaxLifetime(0)
@@ -37,6 +64,7 @@ func Open(path string) (*DB, error) {
 	if err := d.backfillWorkSearch(); err != nil {
 		return nil, fmt.Errorf("backfill works search columns: %w", err)
 	}
+	success = true
 	return d, nil
 }
 

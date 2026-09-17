@@ -168,3 +168,64 @@ func TestSnapshotCapturesWalWrites(t *testing.T) {
 		t.Fatalf("post-backup write missing from snapshot: %d", n)
 	}
 }
+
+func TestSnapshotSameSecondNeverOverwrites(t *testing.T) {
+	db := backupDB(t)
+	backups := t.TempDir()
+	first, err := db.Snapshot(filepath.Join(t.TempDir(), "no-covers"), backups, 10)
+	if err != nil {
+		t.Fatalf("Snapshot 1: %v", err)
+	}
+	firstBytes, err := os.ReadFile(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := db.Snapshot(filepath.Join(t.TempDir(), "no-covers"), backups, 10)
+	if err != nil {
+		t.Fatalf("Snapshot 2 in the same second: %v", err)
+	}
+	if first == second {
+		t.Fatalf("two snapshots in the same second share one name: %s", first)
+	}
+	again, err := os.ReadFile(first)
+	if err != nil || len(again) == 0 || string(again) != string(firstBytes) {
+		t.Fatalf("first snapshot destroyed by the second: read=%v err=%v", len(again), err)
+	}
+}
+
+func TestBackupToRefusesExistingDestination(t *testing.T) {
+	db := backupDB(t)
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "existing.db")
+	if err := os.WriteFile(dest, []byte("precious"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.BackupTo(dest); err == nil {
+		t.Fatal("BackupTo must refuse an existing destination")
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil || string(got) != "precious" {
+		t.Fatalf("existing destination damaged: %q %v", got, err)
+	}
+}
+
+func TestOpenEscapesReservedPathCharacters(t *testing.T) {
+	for _, name := range []string{"q?mark.db", "f#rag.db", "p%ct.db", "sp ace.db"} {
+		path := filepath.Join(t.TempDir(), name)
+		db, err := store.Open(path)
+		if err != nil {
+			t.Fatalf("Open(%q): %v", name, err)
+		}
+		if _, err := db.Exec(`INSERT INTO users (name, password_hash, is_admin, created_at, updated_at) VALUES ('u','x',0,0,0)`); err != nil {
+			t.Fatalf("write(%q): %v", name, err)
+		}
+		var mode string
+		if err := db.QueryRow(`PRAGMA journal_mode`).Scan(&mode); err != nil || mode != "wal" {
+			t.Fatalf("journal_mode(%q) = %q err=%v, want wal (pragmas must survive the DSN encoding)", name, mode, err)
+		}
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("database not created at the requested path %q: %v", path, err)
+		}
+		db.Close()
+	}
+}
