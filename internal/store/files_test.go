@@ -71,12 +71,94 @@ func TestUpsertFileGonePathRelink(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// A LIVE row whose path merely vanished does not relink yet: the
+	// disappearance is unverified until reconciliation flags it missing.
 	moved := &store.FileRec{EditionID: eid, Path: filepath.Join(dir, "here.m4b"), Seq: 1, SizeBytes: 4, MtimeSecs: 2, Hash: &hash, DurationSecs: 1, Chapters: "[]"}
 	if err := db.UpsertFile(moved); err != nil {
 		t.Fatal(err)
 	}
-	if moved.ID != old.ID || moved.Inserted {
-		t.Fatalf("id=%d inserted=%v want %d", moved.ID, moved.Inserted, old.ID)
+	if !moved.Inserted || moved.ID == old.ID {
+		t.Fatalf("unverified disappearance must insert: id=%d inserted=%v", moved.ID, moved.Inserted)
+	}
+
+	// After reconciliation marks the old row missing, a later move relinks.
+	if _, err := db.Exec(`UPDATE files SET missing = 1 WHERE id = ?`, old.ID); err != nil {
+		t.Fatal(err)
+	}
+	again := &store.FileRec{EditionID: eid, Path: filepath.Join(dir, "moved.m4b"), Seq: 1, SizeBytes: 4, MtimeSecs: 3, Hash: &hash, DurationSecs: 1, Chapters: "[]"}
+	if err := db.UpsertFile(again); err != nil {
+		t.Fatal(err)
+	}
+	if again.Inserted || again.ID != old.ID {
+		t.Fatalf("verified disappearance should relink: id=%d inserted=%v want %d", again.ID, again.Inserted, old.ID)
+	}
+}
+
+func TestUpsertFileRelinkScopesToLibrary(t *testing.T) {
+	db := openTestDB(t)
+	dir := t.TempDir()
+	libA, err := db.AddLibrary("A", "audiobooks", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	libB, err := db.AddLibrary("B", "audiobooks", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wA := &store.Work{LibraryID: libA, Title: "W"}
+	widA, err := db.UpsertWork(wA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wB := &store.Work{LibraryID: libB, Title: "W"}
+	widB, err := db.UpsertWork(wB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eA := &store.Edition{WorkID: widA, Format: "m4b", Title: "W"}
+	eidA, err := db.UpsertEdition(eA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eB := &store.Edition{WorkID: widB, Format: "m4b", Title: "W"}
+	eidB, err := db.UpsertEdition(eB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := "cross-4"
+	old := &store.FileRec{EditionID: eidA, Path: filepath.Join(dir, "old.m4b"), Seq: 1, SizeBytes: 4, MtimeSecs: 1, Hash: &hash, DurationSecs: 1, Chapters: "[]"}
+	if err := db.UpsertFile(old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE files SET missing = 1 WHERE id = ?`, old.ID); err != nil {
+		t.Fatal(err)
+	}
+	other := &store.FileRec{EditionID: eidB, Path: filepath.Join(dir, "new.m4b"), Seq: 1, SizeBytes: 4, MtimeSecs: 2, Hash: &hash, DurationSecs: 1, Chapters: "[]"}
+	if err := db.UpsertFile(other); err != nil {
+		t.Fatal(err)
+	}
+	if !other.Inserted || other.ID == old.ID {
+		t.Fatalf("cross-library relink must not happen: id=%d inserted=%v", other.ID, other.Inserted)
+	}
+}
+
+func TestUpsertFileRelinkRequiresSizeMatch(t *testing.T) {
+	db := openTestDB(t)
+	eid := seedEdition(t, db)
+	hash := "size-4"
+	old := &store.FileRec{EditionID: eid, Path: "/old/a.m4b", Seq: 1, SizeBytes: 4, MtimeSecs: 1, Hash: &hash, DurationSecs: 1, Chapters: "[]"}
+	if err := db.UpsertFile(old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE files SET missing = 1 WHERE id = ?`, old.ID); err != nil {
+		t.Fatal(err)
+	}
+	diffSize := &store.FileRec{EditionID: eid, Path: "/new/a.m4b", Seq: 1, SizeBytes: 5, MtimeSecs: 2, Hash: &hash, DurationSecs: 1, Chapters: "[]"}
+	if err := db.UpsertFile(diffSize); err != nil {
+		t.Fatal(err)
+	}
+	if !diffSize.Inserted || diffSize.ID == old.ID {
+		t.Fatalf("same sampled hash with different size must insert: id=%d inserted=%v", diffSize.ID, diffSize.Inserted)
 	}
 }
 

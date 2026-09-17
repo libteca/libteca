@@ -2,6 +2,8 @@ package scan
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -32,6 +34,7 @@ type vidFile struct {
 	epTitle   string
 	size      int64
 	mtime     int64
+	mtimeNs   int64
 	codec     string
 	vcodec    string
 	container string
@@ -42,8 +45,8 @@ type vidFile struct {
 	hash      string
 }
 
-func (v *vidFile) probe() error {
-	info, err := audio.Probe(v.path)
+func (v *vidFile) probe(ctx context.Context) error {
+	info, err := audio.ProbeContext(ctx, v.path)
 	if err != nil {
 		return err
 	}
@@ -57,15 +60,21 @@ func (v *vidFile) probe() error {
 }
 
 func scanVideoLibrary(ctx context.Context, db *store.DB, lib *store.Library, coversDir string, tv bool, tr *tracker) (int, error) {
-	abs, _ := filepath.Abs(lib.Path)
+	abs, err := filepath.Abs(lib.Path)
+	if err != nil {
+		return 0, err
+	}
+	if err := validateScanRoot(abs); err != nil {
+		return 0, err
+	}
 	var files []vidFile
 	var series = map[string][]vidFile{}
-	err := filepath.WalkDir(abs, func(path string, d os.DirEntry, err error) error {
+	err = filepath.WalkDir(abs, func(path string, d os.DirEntry, err error) error {
 		if cerr := cancelErr(ctx); cerr != nil {
 			return cerr
 		}
 		if err != nil {
-			return nil
+			return fmt.Errorf("scan %s: %w", path, err)
 		}
 		if d.IsDir() {
 			if strings.HasPrefix(d.Name(), ".") && path != abs {
@@ -77,19 +86,20 @@ func scanVideoLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 		if !videoExts[ext] {
 			return nil
 		}
+		fi, ierr := d.Info()
+		if ierr != nil {
+			return fmt.Errorf("scan %s: %w", path, ierr)
+		}
+		if !fi.Mode().IsRegular() {
+			return nil
+		}
 		rel, _ := filepath.Rel(abs, path)
 		parts := strings.Split(rel, string(filepath.Separator))
-		top := abs
+		top := path
 		if len(parts) > 1 {
 			top = filepath.Join(abs, parts[0])
 		}
-		fi, ierr := d.Info()
-		if ierr != nil {
-			// Entry vanished or became unreadable after enumeration; a nil
-			// deref here was a process-killing panic in a bare goroutine.
-			return nil
-		}
-		v := vidFile{path: path, name: d.Name(), size: fi.Size(), mtime: fi.ModTime().Unix()}
+		v := vidFile{path: path, name: d.Name(), size: fi.Size(), mtime: fi.ModTime().Unix(), mtimeNs: fi.ModTime().UnixNano()}
 		if tv {
 			parseEpisode(&v, path, rel)
 		}
@@ -123,7 +133,7 @@ func scanVideoLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 		skip := make([]bool, len(group))
 		anyChanged := false
 		for i := range group {
-			skip[i] = fileUnchanged(db, group[i].path, group[i].size, group[i].mtime)
+			skip[i] = fileUnchanged(db, group[i].path, group[i].size, group[i].mtime, group[i].mtimeNs)
 			if !skip[i] {
 				anyChanged = true
 			}
@@ -132,7 +142,7 @@ func scanVideoLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 			title, year := titleYear(filepath.Base(top))
 			authorPtr := nullable(year)
 			if id, ok := db.FindWorkID(lib.ID, title, &authorPtr); ok {
-				if err := ensureCoverVideo(db, id, top, group[0].path, coversDir); err != nil {
+				if err := ensureCoverVideo(ctx, db, id, top, group[0].path, coversDir); err != nil {
 					return count, err
 				}
 			}
@@ -166,7 +176,7 @@ func scanVideoLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 			if skip[i] {
 				continue
 			}
-			if err := f.probe(); err != nil {
+			if err := f.probe(ctx); err != nil {
 				fmt.Fprintf(os.Stderr, "libteca: probe fail %s: %v\n", f.path, err)
 				continue
 			}
@@ -215,7 +225,7 @@ func scanVideoLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 				c, ct, vc, w_, h, br := f.codec, f.container, f.vcodec, f.width, f.height, f.bitrate
 				fr := &store.FileRec{
 					EditionID: editionID, Path: f.path, Seq: 1,
-					SizeBytes: f.size, MtimeSecs: f.mtime, Hash: &f.hash,
+					SizeBytes: f.size, MtimeSecs: f.mtime, MtimeNS: f.mtimeNs, Hash: &f.hash,
 					Codec: &c, VideoCodec: &vc, Width: &w_, Height: &h, Container: &ct,
 					Bitrate: &br, DurationSecs: f.duration, Chapters: "[]",
 				}
@@ -230,14 +240,14 @@ func scanVideoLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 		if err != nil {
 			return count, err
 		}
-		if err := ensureCoverVideo(db, workID, top, group[0].path, coversDir); err != nil {
+		if err := ensureCoverVideo(ctx, db, workID, top, group[0].path, coversDir); err != nil {
 			return count, err
 		}
 	}
 	return count, nil
 }
 
-func ensureCoverVideo(db *store.DB, workID int64, top, mediaPath, coversDir string) error {
+func ensureCoverVideo(ctx context.Context, db *store.DB, workID int64, top, mediaPath, coversDir string) error {
 	ok, err := importSidecarPoster(db, workID, top, coversDir, findWorkNFO(top) != "")
 	if err != nil || ok {
 		if err == nil {
@@ -253,7 +263,7 @@ func ensureCoverVideo(db *store.DB, workID int64, top, mediaPath, coversDir stri
 		return err
 	}
 	dst := filepath.Join(coversDir, fmt.Sprintf("%d.jpg", workID))
-	if cmd := extractCmd(mediaPath, dst); cmd != nil && cmd.Run() == nil {
+	if cmd := extractCmd(ctx, mediaPath, dst); cmd != nil && cmd.Run() == nil {
 		_ = db.SetWorkCover(workID, fmt.Sprintf("%d.jpg", workID))
 	}
 	importFanart(workID, top, mediaPath, coversDir)
@@ -310,21 +320,28 @@ func titleYear(base string) (string, string) {
 }
 
 func scanMusicLibrary(ctx context.Context, db *store.DB, lib *store.Library, coversDir string, tr *tracker) (int, error) {
-	abs, _ := filepath.Abs(lib.Path)
+	abs, err := filepath.Abs(lib.Path)
+	if err != nil {
+		return 0, err
+	}
+	if err := validateScanRoot(abs); err != nil {
+		return 0, err
+	}
 	type track struct {
-		path  string
-		num   int
-		name  string
-		size  int64
-		mtime int64
+		path    string
+		num     int
+		name    string
+		size    int64
+		mtime   int64
+		mtimeNs int64
 	}
 	albums := map[string][]track{}
-	err := filepath.WalkDir(abs, func(path string, d os.DirEntry, err error) error {
+	err = filepath.WalkDir(abs, func(path string, d os.DirEntry, err error) error {
 		if cerr := cancelErr(ctx); cerr != nil {
 			return cerr
 		}
 		if err != nil {
-			return nil
+			return fmt.Errorf("scan %s: %w", path, err)
 		}
 		if d.IsDir() {
 			if strings.HasPrefix(d.Name(), ".") && path != abs {
@@ -336,24 +353,25 @@ func scanMusicLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 		if !musicExts[ext] {
 			return nil
 		}
-		rel, _ := filepath.Rel(abs, path)
-		parts := strings.Split(rel, string(filepath.Separator))
-		top := abs
-		if len(parts) > 1 {
-			top = filepath.Join(abs, parts[0])
-		}
 		fi, ierr := d.Info()
 		if ierr != nil {
-			// Entry vanished or became unreadable after enumeration; a nil
-			// deref here was a process-killing panic in a bare goroutine.
+			return fmt.Errorf("scan %s: %w", path, ierr)
+		}
+		if !fi.Mode().IsRegular() {
 			return nil
+		}
+		rel, _ := filepath.Rel(abs, path)
+		parts := strings.Split(rel, string(filepath.Separator))
+		top := path
+		if len(parts) > 1 {
+			top = filepath.Join(abs, parts[0])
 		}
 		base := strings.TrimSuffix(d.Name(), ext)
 		num := 0
 		if n, err := strconv.Atoi(strings.TrimSpace(strings.SplitN(base, " ", 2)[0])); err == nil {
 			num = n
 		}
-		albums[top] = append(albums[top], track{path: path, num: num, name: base, size: fi.Size(), mtime: fi.ModTime().Unix()})
+		albums[top] = append(albums[top], track{path: path, num: num, name: base, size: fi.Size(), mtime: fi.ModTime().Unix(), mtimeNs: fi.ModTime().UnixNano()})
 		tr.seen(path)
 		return nil
 	})
@@ -377,7 +395,7 @@ func scanMusicLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 		skip := make([]bool, len(group))
 		anyChanged := false
 		for i := range group {
-			skip[i] = fileUnchanged(db, group[i].path, group[i].size, group[i].mtime)
+			skip[i] = fileUnchanged(db, group[i].path, group[i].size, group[i].mtime, group[i].mtimeNs)
 			if !skip[i] {
 				anyChanged = true
 			}
@@ -390,7 +408,7 @@ func scanMusicLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 			}
 			artistPtr := nullable(artist)
 			if id, ok := db.FindWorkID(lib.ID, title, &artistPtr); ok {
-				if err := ensureCoverVideo(db, id, top, group[0].path, coversDir); err != nil {
+				if err := ensureCoverVideo(ctx, db, id, top, group[0].path, coversDir); err != nil {
 					return count, err
 				}
 			}
@@ -404,10 +422,11 @@ func scanMusicLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 		artistPtr := nullable(artist)
 		w := &store.Work{LibraryID: lib.ID, Title: title, Author: &artistPtr}
 		type probedTrack struct {
-			t     *track
-			title string
-			info  *audio.Info
-			hash  string
+			t       *track
+			title   string
+			info    *audio.Info
+			hash    string
+			ordinal int64
 		}
 		var probedTracks []probedTrack
 		for i := range group {
@@ -415,7 +434,7 @@ func scanMusicLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 			if skip[i] {
 				continue
 			}
-			info, err := audio.Probe(t.path)
+			info, err := audio.ProbeContext(ctx, t.path)
 			if err != nil {
 				continue
 			}
@@ -424,7 +443,10 @@ func scanMusicLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 			if v := info.Meta["title"]; v != "" {
 				trackTitle = v
 			}
-			probedTracks = append(probedTracks, probedTrack{t: t, title: trackTitle, info: info, hash: hashFile(t.path, t.size)})
+			// The ordinal comes from the COMPLETE ordered track list:
+			// enumerating only the changed subset gave a newly added track 3
+			// position 1.
+			probedTracks = append(probedTracks, probedTrack{t: t, title: trackTitle, info: info, hash: hashFile(t.path, t.size), ordinal: int64(i + 1)})
 		}
 		var workID int64
 		err := db.Update(func(tx *store.Tx) error {
@@ -436,9 +458,24 @@ func scanMusicLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 			if w.Created {
 				tr.work()
 			}
-			for i, pt := range probedTracks {
+			for i := range group {
+				if !skip[i] {
+					continue
+				}
+				// Unchanged tracks keep their stored probe data but their
+				// album position is repaired from the complete order.
+				var edID int64
+				if qerr := tx.QueryRow(`SELECT edition_id FROM files WHERE path = ?`, group[i].path).Scan(&edID); qerr == nil {
+					if _, uerr := tx.Exec(`UPDATE editions SET position = ? WHERE id = ?`, int64(i+1), edID); uerr != nil {
+						return uerr
+					}
+				} else if !errors.Is(qerr, sql.ErrNoRows) {
+					return qerr
+				}
+			}
+			for _, pt := range probedTracks {
 				dur := pt.info.Duration
-				e := &store.Edition{WorkID: workID, Format: "audio", Title: pt.title, DurationSecs: &dur, Position: int64(i + 1)}
+				e := &store.Edition{WorkID: workID, Format: "audio", Title: pt.title, DurationSecs: &dur, Position: pt.ordinal}
 				editionID, err := tx.UpsertEdition(e)
 				if err != nil {
 					return err
@@ -446,7 +483,7 @@ func scanMusicLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 				c, ct, br := pt.info.Codec, pt.info.Container, pt.info.Bitrate
 				hash := pt.hash
 				fr := &store.FileRec{
-					EditionID: editionID, Path: pt.t.path, Seq: 1, SizeBytes: pt.t.size, MtimeSecs: pt.t.mtime,
+					EditionID: editionID, Path: pt.t.path, Seq: 1, SizeBytes: pt.t.size, MtimeSecs: pt.t.mtime, MtimeNS: pt.t.mtimeNs,
 					Hash: &hash, Codec: &c, Container: &ct, Bitrate: &br,
 					DurationSecs: pt.info.Duration, Chapters: "[]",
 				}
@@ -461,7 +498,7 @@ func scanMusicLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 		if err != nil {
 			return count, err
 		}
-		if err := ensureCoverVideo(db, workID, top, group[0].path, coversDir); err != nil {
+		if err := ensureCoverVideo(ctx, db, workID, top, group[0].path, coversDir); err != nil {
 			return count, err
 		}
 	}

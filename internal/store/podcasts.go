@@ -384,7 +384,6 @@ func (d *DB) DeletePodcastsLibrary(libID int64) ([]int64, error) {
 	return fileIDs, err
 }
 
-
 func (d *DB) UpsertPodcastEpisode(e *PodcastEpisode) (bool, error) {
 	added := false
 	err := d.Update(func(tx *Tx) error {

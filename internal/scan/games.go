@@ -2,6 +2,8 @@ package scan
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -98,6 +100,7 @@ type gameDoc struct {
 	name     string
 	size     int64
 	mtime    int64
+	mtimeNs  int64
 	platform *gamePlatform
 	title    string
 }
@@ -139,13 +142,16 @@ func scanGamesLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 	if err != nil {
 		return 0, err
 	}
+	if err := validateScanRoot(abs); err != nil {
+		return 0, err
+	}
 	var docs []gameDoc
 	err = filepath.WalkDir(abs, func(p string, d os.DirEntry, err error) error {
 		if cerr := cancelErr(ctx); cerr != nil {
 			return cerr
 		}
 		if err != nil {
-			return nil
+			return fmt.Errorf("scan %s: %w", p, err)
 		}
 		if d.IsDir() {
 			if strings.HasPrefix(d.Name(), ".") && p != abs {
@@ -160,10 +166,13 @@ func scanGamesLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 		}
 		fi, ierr := d.Info()
 		if ierr != nil {
+			return fmt.Errorf("scan %s: %w", p, ierr)
+		}
+		if !fi.Mode().IsRegular() {
 			return nil
 		}
 		docs = append(docs, gameDoc{
-			path: p, name: d.Name(), size: fi.Size(), mtime: fi.ModTime().Unix(),
+			path: p, name: d.Name(), size: fi.Size(), mtime: fi.ModTime().Unix(), mtimeNs: fi.ModTime().UnixNano(),
 			platform: plat, title: cleanRomTitle(d.Name()),
 		})
 		tr.seen(p)
@@ -184,7 +193,7 @@ func scanGamesLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 		if d.title == "" {
 			d.title = strings.TrimSuffix(d.name, filepath.Ext(d.name))
 		}
-		if size, mtime, ok, serr := db.FileStatByPath(d.path); serr == nil && ok && size == d.size && mtime == d.mtime {
+		if size, mtime, mtimeNs, ok, serr := db.FileStatByPath(d.path); serr == nil && ok && size == d.size && mtime == d.mtime && mtimeNs == d.mtimeNs && mtimeNs != 0 {
 			continue
 		}
 		if serr := storeGame(db, lib, d, coversDir, tr); serr != nil {
@@ -198,7 +207,6 @@ func scanGamesLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 
 func storeGame(db *store.DB, lib *store.Library, d *gameDoc, coversDir string, tr *tracker) error {
 	var workID int64
-	var seq int64
 	err := db.Update(func(tx *store.Tx) error {
 		// Games set no work metadata of their own (providers fill it in G2),
 		// so every file links to the shared work without unconditional updates.
@@ -223,13 +231,21 @@ func storeGame(db *store.DB, lib *store.Library, d *gameDoc, coversDir string, t
 			return err
 		}
 
-		if err := tx.QueryRow(`SELECT coalesce(max(seq), 0) + 1 FROM files WHERE edition_id = ?`, editionID).Scan(&seq); err != nil {
+		// An updated existing file KEEPS its sequence: recomputing
+		// max(seq)+1 for an update moved the first of two discs to the end
+		// and changed the default selected file.
+		var seq int64
+		err = tx.QueryRow(`SELECT seq FROM files WHERE path = ? AND edition_id = ?`, d.path, editionID).Scan(&seq)
+		if errors.Is(err, sql.ErrNoRows) {
+			err = tx.QueryRow(`SELECT coalesce(max(seq), 0) + 1 FROM files WHERE edition_id = ?`, editionID).Scan(&seq)
+		}
+		if err != nil {
 			return err
 		}
 		hash := hashFile(d.path, d.size)
 		fr := &store.FileRec{
 			EditionID: editionID, Path: d.path, Seq: int(seq),
-			SizeBytes: d.size, MtimeSecs: d.mtime, Hash: &hash,
+			SizeBytes: d.size, MtimeSecs: d.mtime, MtimeNS: d.mtimeNs, Hash: &hash,
 			Container: &d.platform.Tag, DurationSecs: 0, Chapters: "[]",
 		}
 		if err := tx.UpsertFile(fr); err != nil {
@@ -256,11 +272,11 @@ func writeGameCover(db *store.DB, workID int64, d *gameDoc, coversDir string) er
 	dir := filepath.Dir(d.path)
 	for _, candidate := range []string{base + ".png", base + ".jpg", "cover.jpg", "Cover.jpg", "folder.jpg", "Folder.jpg"} {
 		src := filepath.Join(dir, candidate)
-		data, rerr := os.ReadFile(src)
-		if rerr != nil || len(data) == 0 || int64(len(data)) > 20<<20 {
+		data, rerr := readSidecar(src)
+		if rerr != nil || len(data) == 0 {
 			continue
 		}
-		if werr := os.WriteFile(dst, data, 0o644); werr != nil {
+		if werr := writeCoverFile(dst, data); werr != nil {
 			return nil
 		}
 		return db.SetWorkCover(workID, fmt.Sprintf("%d.jpg", workID))

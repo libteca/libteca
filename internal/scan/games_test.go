@@ -18,10 +18,10 @@ func TestDetectGamePlatform(t *testing.T) {
 		{"sfc", "snes", true},
 		{"gba", "gba", true},
 		{"wbfs", "wii", true},
-		{"iso", "psx", true},   // shared: preference
-		{"bin", "psx", true},   // shared: preference
-		{"cue", "psx", true},   // shared: preference
-		{"elf", "psp", true},   // shared: preference
+		{"iso", "psx", true},  // shared: preference
+		{"bin", "psx", true},  // shared: preference
+		{"cue", "psx", true},  // shared: preference
+		{"elf", "psp", true},  // shared: preference
 		{"app", "n3ds", true}, // shared: preference
 		{"ciso", "gamecube", true},
 		{"mdf", "ps2", true},

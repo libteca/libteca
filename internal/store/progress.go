@@ -116,3 +116,45 @@ func (d *DB) CloseSession(id string, position, listened float64) error {
 		position, listened, nowMilli(), nowMilli(), id)
 	return err
 }
+
+// CloseSessionWithProgress commits the final progress row and the session
+// close in ONE transaction: closing first left a retry with nothing to
+// update when the progress write failed, silently losing the final position.
+// Idempotent - an already-closed session is a no-op.
+func (d *DB) CloseSessionWithProgress(s *Session, p *Progress, listenedDelta float64) error {
+	return d.Update(func(tx *Tx) error {
+		var owner, edition int64
+		var closed sql.NullInt64
+		err := tx.QueryRow(`SELECT user_id, edition_id, closed_at FROM playback_sessions WHERE id = ?`, s.ID).
+			Scan(&owner, &edition, &closed)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if closed.Valid {
+			return nil
+		}
+		if owner != s.UserID || p.UserID != owner || p.EditionID != edition {
+			return ErrNotFound
+		}
+		now := nowMilli()
+		if _, err := tx.Exec(`INSERT INTO progress (user_id, edition_id, file_id, file_offset_secs, edition_position_secs, duration_secs, is_finished, device, updated_at)
+			VALUES (?,?,?,?,?,?,?,?,?)
+			ON CONFLICT(user_id, edition_id) DO UPDATE SET
+				file_id = excluded.file_id,
+				file_offset_secs = excluded.file_offset_secs,
+				edition_position_secs = excluded.edition_position_secs,
+				duration_secs = excluded.duration_secs,
+				is_finished = excluded.is_finished,
+				device = excluded.device,
+				updated_at = excluded.updated_at`,
+			p.UserID, p.EditionID, p.FileID, p.FileOffsetSecs, p.EditionPositionSecs, p.DurationSecs, p.IsFinished, p.Device, now); err != nil {
+			return err
+		}
+		_, err = tx.Exec(`UPDATE playback_sessions SET closed_at = ?, updated_at = ?, position_secs = ?, time_listened_secs = time_listened_secs + ? WHERE id = ? AND closed_at IS NULL`,
+			now, now, p.EditionPositionSecs, listenedDelta, s.ID)
+		return err
+	})
+}

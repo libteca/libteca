@@ -2,8 +2,8 @@ package scan
 
 import (
 	"archive/zip"
-	"context"
 	"bytes"
+	"context"
 	"database/sql"
 	"os"
 	"path/filepath"
@@ -364,7 +364,7 @@ func TestProbeCBRUnrar(t *testing.T) {
 	fakeExtractor(t, "unrar", fakeUnrar)
 	p := filepath.Join(t.TempDir(), "comic.cbr")
 	os.WriteFile(p, []byte("Rar!"), 0o644)
-	n, cover, err := probeCBR(p, "unrar")
+	n, cover, err := probeCBR(context.Background(), p, "unrar")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,7 +381,7 @@ func TestProbeCBRUnar(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "unar"), []byte(fakeUnar), 0o755)
 	p := filepath.Join(t.TempDir(), "Comic.cbr")
 	os.WriteFile(p, []byte("Rar!"), 0o644)
-	n, cover, err := probeCBR(p, "unar")
+	n, cover, err := probeCBR(context.Background(), p, "unar")
 	if err != nil {
 		t.Fatal(err)
 	}

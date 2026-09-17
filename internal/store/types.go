@@ -53,6 +53,7 @@ type FileRec struct {
 	Seq          int
 	SizeBytes    int64
 	MtimeSecs    int64
+	MtimeNS      int64
 	Hash         *string
 	Codec        *string
 	VideoCodec   *string

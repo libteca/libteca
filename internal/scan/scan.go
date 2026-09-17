@@ -19,21 +19,37 @@ import (
 var audioExts = map[string]bool{".m4b": true, ".mp3": true, ".m4a": true}
 
 type bookFile struct {
-	path  string
-	dir   string
-	top   string
-	name  string
-	disc  int
-	track int
-	info  *audio.Info
-	hash  string
-	size  int64
-	mtime int64
+	path    string
+	dir     string
+	top     string
+	name    string
+	disc    int
+	track   int
+	info    *audio.Info
+	hash    string
+	size    int64
+	mtime   int64
+	mtimeNs int64
 }
 
 func cancelErr(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("scan cancelled: %w", err)
+	}
+	return nil
+}
+
+// validateScanRoot refuses to enumerate an unavailable root: a WalkDir that
+// swallowed the root error reported a clean EMPTY scan, and the missing-file
+// reconciliation that follows a "done" job would then mark the whole healthy
+// library missing.
+func validateScanRoot(root string) error {
+	st, err := os.Stat(root)
+	if err != nil {
+		return fmt.Errorf("library root unavailable: %w", err)
+	}
+	if !st.IsDir() {
+		return fmt.Errorf("library root is not a directory")
 	}
 	return nil
 }
@@ -83,13 +99,16 @@ func scanAudioLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 	if err != nil {
 		return 0, err
 	}
+	if err := validateScanRoot(abs); err != nil {
+		return 0, err
+	}
 	var files []bookFile
 	err = filepath.WalkDir(abs, func(path string, d os.DirEntry, err error) error {
 		if cerr := cancelErr(ctx); cerr != nil {
 			return cerr
 		}
 		if err != nil {
-			return nil
+			return fmt.Errorf("scan %s: %w", path, err)
 		}
 		if d.IsDir() {
 			if strings.HasPrefix(d.Name(), ".") && path != abs {
@@ -101,28 +120,30 @@ func scanAudioLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 		if !audioExts[ext] {
 			return nil
 		}
-		rel, err := filepath.Rel(abs, path)
-		if err != nil {
+		fi, ierr := d.Info()
+		if ierr != nil {
+			return fmt.Errorf("scan %s: %w", path, ierr)
+		}
+		if !fi.Mode().IsRegular() {
+			return nil
+		}
+		rel, rerr := filepath.Rel(abs, path)
+		if rerr != nil {
 			return nil
 		}
 		parts := strings.Split(rel, string(filepath.Separator))
-		top := abs
+		top := path
 		if len(parts) > 1 {
 			top = filepath.Join(abs, parts[0])
 		}
-		fi, ierr := d.Info()
-		if ierr != nil {
-			// Entry vanished or became unreadable after enumeration; a nil
-			// deref here was a process-killing panic in a bare goroutine.
-			return nil
-		}
 		files = append(files, bookFile{
-			path:  path,
-			dir:   filepath.Dir(path),
-			top:   top,
-			name:  d.Name(),
-			size:  fi.Size(),
-			mtime: fi.ModTime().Unix(),
+			path:    path,
+			dir:     filepath.Dir(path),
+			top:     top,
+			name:    d.Name(),
+			size:    fi.Size(),
+			mtime:   fi.ModTime().Unix(),
+			mtimeNs: fi.ModTime().UnixNano(),
 		})
 		tr.seen(path)
 		return nil
@@ -147,8 +168,8 @@ func scanAudioLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 			return count, cerr
 		}
 		group := groups[top]
-		sort.Slice(group, func(i, j int) bool { return natural.Less(relPath(top, group[i].path), relPath(top, group[j].path)) })
-		if err := scanBook(db, lib, top, group, coversDir, tr); err != nil {
+		sort.Slice(group, func(i, j int) bool { return natLess(relPath(top, group[i].path), relPath(top, group[j].path)) })
+		if err := scanBook(ctx, db, lib, top, group, coversDir, tr); err != nil {
 			fmt.Fprintf(os.Stderr, "libteca: skip %s: %v\n", top, err)
 			continue
 		}
@@ -157,10 +178,10 @@ func scanAudioLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 	return count, nil
 }
 
-func scanBook(db *store.DB, lib *store.Library, top string, group []bookFile, coversDir string, tr *tracker) error {
+func scanBook(ctx context.Context, db *store.DB, lib *store.Library, top string, group []bookFile, coversDir string, tr *tracker) error {
 	unchanged := true
 	for _, f := range group {
-		if !fileUnchanged(db, f.path, f.size, f.mtime) {
+		if !fileUnchanged(db, f.path, f.size, f.mtime, f.mtimeNs) {
 			unchanged = false
 			break
 		}
@@ -169,7 +190,7 @@ func scanBook(db *store.DB, lib *store.Library, top string, group []bookFile, co
 		title, author := titleAuthor(top, bookFile{})
 		authorPtr := nullable(author)
 		if id, ok := db.FindWorkID(lib.ID, title, &authorPtr); ok {
-			if err := ensureCover(db, id, top, group, coversDir); err != nil {
+			if err := ensureCover(ctx, db, id, top, group, coversDir); err != nil {
 				return err
 			}
 		}
@@ -186,7 +207,7 @@ func scanBook(db *store.DB, lib *store.Library, top string, group []bookFile, co
 
 	for i := range group {
 		f := &group[i]
-		probe, err := audio.Probe(f.path)
+		probe, err := audio.ProbeContext(ctx, f.path)
 		if err != nil {
 			return err
 		}
@@ -268,7 +289,7 @@ func scanBook(db *store.DB, lib *store.Library, top string, group []bookFile, co
 			}
 			fr := &store.FileRec{
 				EditionID: editionID, Path: f.path, Seq: seq + 1,
-				SizeBytes: f.size, MtimeSecs: f.mtime, Hash: &f.hash,
+				SizeBytes: f.size, MtimeSecs: f.mtime, MtimeNS: f.mtimeNs, Hash: &f.hash,
 				Codec: &c, Container: &ct, Bitrate: &br, Channels: &ch, SampleRate: &sr,
 				DurationSecs: f.info.Duration, Chapters: chap,
 			}
@@ -283,10 +304,10 @@ func scanBook(db *store.DB, lib *store.Library, top string, group []bookFile, co
 		return txErr
 	}
 
-	return ensureCover(db, workID, top, group, coversDir)
+	return ensureCover(ctx, db, workID, top, group, coversDir)
 }
 
-func ensureCover(db *store.DB, workID int64, top string, group []bookFile, coversDir string) error {
+func ensureCover(ctx context.Context, db *store.DB, workID int64, top string, group []bookFile, coversDir string) error {
 	ok, err := importSidecarPoster(db, workID, top, coversDir, findWorkNFO(top) != "")
 	if err != nil || ok {
 		return err
@@ -294,7 +315,7 @@ func ensureCover(db *store.DB, workID int64, top string, group []bookFile, cover
 	dst := filepath.Join(coversDir, fmt.Sprintf("%d.jpg", workID))
 	for _, f := range group {
 		if f.info != nil && f.info.HasVideo {
-			cmd := extractCmd(f.path, dst)
+			cmd := extractCmd(ctx, f.path, dst)
 			if cmd != nil && cmd.Run() == nil {
 				return db.SetWorkCover(workID, fmt.Sprintf("%d.jpg", workID))
 			}

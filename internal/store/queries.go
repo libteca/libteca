@@ -3,6 +3,8 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"strings"
 )
@@ -255,8 +257,10 @@ func upsertEdition(q dbtx, e *Edition) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	_, err = q.Exec(`UPDATE editions SET language = ?, abridged = ?, duration_secs = ? WHERE id = ?`,
-		e.Language, e.Abridged, e.DurationSecs, id)
+	// Position updates only when the caller provides one: book editions have
+	// no meaningful position and must not be zeroed by a warm rescan.
+	_, err = q.Exec(`UPDATE editions SET language = ?, abridged = ?, duration_secs = ?, position = CASE WHEN ? > 0 THEN ? ELSE position END WHERE id = ?`,
+		e.Language, e.Abridged, e.DurationSecs, e.Position, e.Position, id)
 	return id, err
 }
 
@@ -286,9 +290,9 @@ func upsertFile(q dbtx, f *FileRec) error {
 				return nil
 			}
 		}
-		res, ierr := q.Exec(`INSERT INTO files (edition_id, path, seq, size_bytes, mtime_secs, hash, codec, video_codec, width, height, container, bitrate, channels, sample_rate, duration_secs, chapters, embedded_meta, missing, probed_at)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)`,
-			f.EditionID, f.Path, f.Seq, f.SizeBytes, f.MtimeSecs, f.Hash, f.Codec, f.VideoCodec, f.Width, f.Height, f.Container, f.Bitrate, f.Channels, f.SampleRate, f.DurationSecs, f.Chapters, "{}", nowMilli())
+		res, ierr := q.Exec(`INSERT INTO files (edition_id, path, seq, size_bytes, mtime_secs, mtime_ns, hash, codec, video_codec, width, height, container, bitrate, channels, sample_rate, duration_secs, chapters, embedded_meta, missing, probed_at)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)`,
+			f.EditionID, f.Path, f.Seq, f.SizeBytes, f.MtimeSecs, f.MtimeNS, f.Hash, f.Codec, f.VideoCodec, f.Width, f.Height, f.Container, f.Bitrate, f.Channels, f.SampleRate, f.DurationSecs, f.Chapters, "{}", nowMilli())
 		if ierr != nil {
 			return ierr
 		}
@@ -304,7 +308,7 @@ func upsertFile(q dbtx, f *FileRec) error {
 }
 
 func relinkFile(q dbtx, hash string, f *FileRec) (bool, error) {
-	hid, ok, err := relinkableFileID(q, hash, f.Path)
+	hid, ok, err := relinkableFileID(q, hash, f)
 	if err != nil || !ok {
 		return false, err
 	}
@@ -314,32 +318,72 @@ func relinkFile(q dbtx, hash string, f *FileRec) (bool, error) {
 	return true, nil
 }
 
-func relinkableFileID(q dbtx, hash, newPath string) (int64, bool, error) {
-	rows, err := q.Query(`SELECT id, path, missing FROM files WHERE hash = ? AND path != ? ORDER BY missing DESC, id ASC`, hash, newPath)
+// relinkableFileID resolves the file row a moved file should adopt. The
+// sampled scan hash is only a candidate filter, never identity evidence on
+// its own: candidates are scoped to the destination library, must match the
+// recorded size, the old path must be VERIFIABLY gone (only fs.ErrNotExist
+// counts - an EACCES or EIO stat says nothing about the file having moved),
+// and only rows already flagged missing by a prior reconciliation are
+// adopted. Live-flagged rows with vanished paths wait for that
+// reconciliation instead. Ambiguous multi-candidate matches insert a fresh
+// row rather than picking arbitrarily. Full-content verification is
+// impossible here by construction (the old bytes are gone), so the residual
+// sampled-hash ambiguity for same-size/same-ends files is accepted and
+// documented rather than hidden.
+func relinkableFileID(q dbtx, hash string, f *FileRec) (int64, bool, error) {
+	var libID int64
+	if err := q.QueryRow(`SELECT w.library_id FROM editions e JOIN works w ON w.id = e.work_id WHERE e.id = ?`, f.EditionID).Scan(&libID); err != nil {
+		return 0, false, err
+	}
+	rows, err := q.Query(`SELECT f.id, f.path, f.missing, f.size_bytes
+		FROM files f
+		JOIN editions e ON e.id = f.edition_id
+		JOIN works w ON w.id = e.work_id
+		WHERE f.hash = ? AND f.path != ? AND w.library_id = ?
+		ORDER BY f.missing DESC, f.id ASC`, hash, f.Path, libID)
 	if err != nil {
 		return 0, false, err
 	}
 	defer rows.Close()
+	var eligible []int64
 	for rows.Next() {
 		var id int64
 		var oldPath string
 		var missing int
-		if err := rows.Scan(&id, &oldPath, &missing); err != nil {
+		var size int64
+		if err := rows.Scan(&id, &oldPath, &missing, &size); err != nil {
 			return 0, false, err
 		}
-		if missing == 1 {
-			return id, true, nil
+		if size != f.SizeBytes {
+			continue
 		}
-		if _, err := os.Stat(oldPath); err != nil {
-			return id, true, nil
+		_, statErr := os.Stat(oldPath)
+		if statErr == nil {
+			continue
 		}
+		if !errors.Is(statErr, fs.ErrNotExist) {
+			return 0, false, fmt.Errorf("cannot verify old file %s: %w", oldPath, statErr)
+		}
+		if missing != 1 {
+			continue
+		}
+		if len(eligible) >= 2 {
+			continue
+		}
+		eligible = append(eligible, id)
 	}
-	return 0, false, rows.Err()
+	if err := rows.Err(); err != nil {
+		return 0, false, err
+	}
+	if len(eligible) != 1 {
+		return 0, false, nil
+	}
+	return eligible[0], true, nil
 }
 
 func updateFileRow(q dbtx, id int64, f *FileRec) error {
-	_, err := q.Exec(`UPDATE files SET edition_id = ?, path = ?, seq = ?, size_bytes = ?, mtime_secs = ?, hash = ?, codec = ?, video_codec = ?, width = ?, height = ?, container = ?, bitrate = ?, channels = ?, sample_rate = ?, duration_secs = ?, chapters = ?, missing = 0, probed_at = ? WHERE id = ?`,
-		f.EditionID, f.Path, f.Seq, f.SizeBytes, f.MtimeSecs, f.Hash, f.Codec, f.VideoCodec, f.Width, f.Height, f.Container, f.Bitrate, f.Channels, f.SampleRate, f.DurationSecs, f.Chapters, nowMilli(), id)
+	_, err := q.Exec(`UPDATE files SET edition_id = ?, path = ?, seq = ?, size_bytes = ?, mtime_secs = ?, mtime_ns = ?, hash = ?, codec = ?, video_codec = ?, width = ?, height = ?, container = ?, bitrate = ?, channels = ?, sample_rate = ?, duration_secs = ?, chapters = ?, missing = 0, probed_at = ? WHERE id = ?`,
+		f.EditionID, f.Path, f.Seq, f.SizeBytes, f.MtimeSecs, f.MtimeNS, f.Hash, f.Codec, f.VideoCodec, f.Width, f.Height, f.Container, f.Bitrate, f.Channels, f.SampleRate, f.DurationSecs, f.Chapters, nowMilli(), id)
 	f.ID = id
 	f.Inserted = false
 	return err

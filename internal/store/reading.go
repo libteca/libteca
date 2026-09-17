@@ -55,6 +55,15 @@ func (d *DB) GetReadingProgress(userID, editionID int64) (*ReadingProgress, erro
 // columns only overwrite when provided, so an audio-style post to the same
 // edition never wipes page state.
 func (d *DB) SetReadingProgress(p *ReadingProgress) error {
+	return d.SetReadingProgressPatch(p, true)
+}
+
+// SetReadingProgressPatch gives progress updates PATCH semantics for
+// completion: an omitted finished flag PRESERVES the stored value (a
+// page-only update from a reader must not reopen a finished item), while an
+// explicit false does. The CASE is atomic inside the upsert, not a
+// read-then-write race.
+func (d *DB) SetReadingProgressPatch(p *ReadingProgress, finishedProvided bool) error {
 	_, err := d.Exec(`INSERT INTO progress (user_id, edition_id, file_id, file_offset_secs, edition_position_secs, duration_secs, is_finished, device, updated_at, page, percent, locator)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(user_id, edition_id) DO UPDATE SET
@@ -62,13 +71,13 @@ func (d *DB) SetReadingProgress(p *ReadingProgress) error {
 			file_offset_secs = excluded.file_offset_secs,
 			edition_position_secs = excluded.edition_position_secs,
 			duration_secs = excluded.duration_secs,
-			is_finished = excluded.is_finished,
+			is_finished = CASE WHEN ? THEN excluded.is_finished ELSE progress.is_finished END,
 			device = excluded.device,
 			updated_at = excluded.updated_at,
 			page = coalesce(excluded.page, progress.page),
 			percent = coalesce(excluded.percent, progress.percent),
 			locator = coalesce(excluded.locator, progress.locator)`,
-		p.UserID, p.EditionID, p.FileID, p.FileOffsetSecs, p.EditionPositionSecs, p.DurationSecs, p.IsFinished, p.Device, nowMilli(), p.Page, p.Percent, p.Locator)
+		p.UserID, p.EditionID, p.FileID, p.FileOffsetSecs, p.EditionPositionSecs, p.DurationSecs, p.IsFinished, p.Device, nowMilli(), p.Page, p.Percent, p.Locator, finishedProvided)
 	return err
 }
 
@@ -172,17 +181,18 @@ func (d *DB) EditionFile(editionID int64) (*FileRec, string, error) {
 }
 
 // FileStatByPath reports the recorded size/mtime so the scanner can skip
-// probing unchanged book files.
-func (d *DB) FileStatByPath(path string) (int64, int64, bool, error) {
-	var size, mtime int64
-	err := d.QueryRow(`SELECT size_bytes, mtime_secs FROM files WHERE path = ? AND missing = 0`, path).Scan(&size, &mtime)
+// probing unchanged book files. mtimeNs is 0 for legacy rows, which forces
+// exactly one refresh after the 0012 migration.
+func (d *DB) FileStatByPath(path string) (int64, int64, int64, bool, error) {
+	var size, mtime, mtimeNs int64
+	err := d.QueryRow(`SELECT size_bytes, mtime_secs, mtime_ns FROM files WHERE path = ? AND missing = 0`, path).Scan(&size, &mtime, &mtimeNs)
 	if errors.Is(err, sql.ErrNoRows) {
-		return 0, 0, false, nil
+		return 0, 0, 0, false, nil
 	}
 	if err != nil {
-		return 0, 0, false, err
+		return 0, 0, 0, false, err
 	}
-	return size, mtime, true, nil
+	return size, mtime, mtimeNs, true, nil
 }
 
 func (d *DB) SetFileMeta(fileID int64, meta string) error {

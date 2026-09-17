@@ -1,11 +1,14 @@
 package audio
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Chapter struct {
@@ -55,11 +58,65 @@ type ffprobeOut struct {
 	} `json:"chapters"`
 }
 
-func Probe(path string) (*Info, error) {
-	out, err := exec.Command("ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", "-show_chapters", path).Output()
-	if err != nil {
+const probeOutputLimit = 4 << 20
+
+// boundedBuffer caps retained output while still draining the pipe: a plain
+// LimitReader reader that stops at the cap wedges a child still writing, and
+// Output() buffers whatever the file says. Over budget cancels the command.
+type boundedBuffer struct {
+	bytes.Buffer
+	limit  int
+	cancel context.CancelFunc
+	over   bool
+}
+
+func (b *boundedBuffer) Write(p []byte) (int, error) {
+	room := b.limit - b.Buffer.Len()
+	if room < 0 {
+		room = 0
+	}
+	if len(p) > room {
+		b.over = true
+		if room > 0 {
+			b.Buffer.Write(p[:room])
+		}
+		b.cancel()
+	}
+	if !b.over {
+		b.Buffer.Write(p)
+	}
+	return len(p), nil
+}
+
+// ProbeContext runs ffprobe bounded and cancellable: a plain
+// exec.Command().Output() could outlive a cancelled scan, block shutdown, or
+// buffer unbounded metadata output.
+func ProbeContext(parent context.Context, path string) (*Info, error) {
+	ctx, cancel := context.WithTimeout(parent, 60*time.Second)
+	defer cancel()
+	stdout := &boundedBuffer{limit: probeOutputLimit, cancel: cancel}
+	cmd := exec.CommandContext(ctx, "ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", "-show_chapters", path)
+	cmd.Stdout = stdout
+	if err := cmd.Run(); err != nil {
+		if stdout.over {
+			return nil, fmt.Errorf("ffprobe %s: output exceeds %d bytes", path, probeOutputLimit)
+		}
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("ffprobe %s: %w", path, ctx.Err())
+		}
 		return nil, fmt.Errorf("ffprobe %s: %w", path, err)
 	}
+	if stdout.over {
+		return nil, fmt.Errorf("ffprobe %s: output exceeds %d bytes", path, probeOutputLimit)
+	}
+	return parseProbe(stdout.Bytes(), path)
+}
+
+func Probe(path string) (*Info, error) {
+	return ProbeContext(context.Background(), path)
+}
+
+func parseProbe(out []byte, path string) (*Info, error) {
 	var p ffprobeOut
 	if err := json.Unmarshal(out, &p); err != nil {
 		return nil, fmt.Errorf("ffprobe json %s: %w", path, err)

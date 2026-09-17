@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/libteca/libteca/internal/store"
 )
@@ -31,6 +32,7 @@ type bookDoc struct {
 	name        string
 	size        int64
 	mtime       int64
+	mtimeNs     int64
 	format      string
 	title       string
 	author      string
@@ -46,6 +48,9 @@ func scanBooksLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 	if err != nil {
 		return 0, err
 	}
+	if err := validateScanRoot(abs); err != nil {
+		return 0, err
+	}
 	cbrTool := cbrExtractor()
 	var docs []bookDoc
 	err = filepath.WalkDir(abs, func(p string, d os.DirEntry, err error) error {
@@ -53,7 +58,7 @@ func scanBooksLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 			return cerr
 		}
 		if err != nil {
-			return nil
+			return fmt.Errorf("scan %s: %w", p, err)
 		}
 		if d.IsDir() {
 			if strings.HasPrefix(d.Name(), ".") && p != abs {
@@ -71,11 +76,12 @@ func scanBooksLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 		}
 		fi, ierr := d.Info()
 		if ierr != nil {
-			// Entry vanished or became unreadable after enumeration; a nil
-			// deref here was a process-killing panic in a bare goroutine.
+			return fmt.Errorf("scan %s: %w", p, ierr)
+		}
+		if !fi.Mode().IsRegular() {
 			return nil
 		}
-		docs = append(docs, bookDoc{path: p, name: d.Name(), format: ext[1:], size: fi.Size(), mtime: fi.ModTime().Unix()})
+		docs = append(docs, bookDoc{path: p, name: d.Name(), format: ext[1:], size: fi.Size(), mtime: fi.ModTime().Unix(), mtimeNs: fi.ModTime().UnixNano()})
 		tr.seen(p)
 		return nil
 	})
@@ -91,10 +97,10 @@ func scanBooksLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 			return count, cerr
 		}
 		d := &docs[i]
-		if size, mtime, ok, serr := db.FileStatByPath(d.path); serr == nil && ok && size == d.size && mtime == d.mtime {
+		if size, mtime, mtimeNs, ok, serr := db.FileStatByPath(d.path); serr == nil && ok && size == d.size && mtime == d.mtime && mtimeNs == d.mtimeNs && mtimeNs != 0 {
 			continue
 		}
-		if perr := probeBook(d, cbrTool); perr != nil {
+		if perr := probeBook(ctx, d, cbrTool); perr != nil {
 			fmt.Fprintf(os.Stderr, "libteca: skip %s: %v\n", d.path, perr)
 			continue
 		}
@@ -107,7 +113,7 @@ func scanBooksLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 	return count, nil
 }
 
-func probeBook(d *bookDoc, cbrTool string) error {
+func probeBook(ctx context.Context, d *bookDoc, cbrTool string) error {
 	switch d.format {
 	case "epub":
 		info, err := ParseEPUB(d.path)
@@ -123,7 +129,7 @@ func probeBook(d *bookDoc, cbrTool string) error {
 		}
 		d.pageCount, d.cover = n, cover
 	case "cbr":
-		n, cover, err := probeCBR(d.path, cbrTool)
+		n, cover, err := probeCBR(ctx, d.path, cbrTool)
 		if err != nil {
 			return err
 		}
@@ -186,7 +192,7 @@ func storeBook(db *store.DB, lib *store.Library, d *bookDoc, coversDir string, t
 		hash := hashFile(d.path, d.size)
 		fr := &store.FileRec{
 			EditionID: editionID, Path: d.path, Seq: 1,
-			SizeBytes: d.size, MtimeSecs: d.mtime, Hash: &hash,
+			SizeBytes: d.size, MtimeSecs: d.mtime, MtimeNS: d.mtimeNs, Hash: &hash,
 			DurationSecs: 0, Chapters: "[]",
 		}
 		if err := tx.UpsertFile(fr); err != nil {
@@ -208,6 +214,52 @@ func storeBook(db *store.DB, lib *store.Library, d *bookDoc, coversDir string, t
 	return writeBookCover(db, workID, d, coversDir)
 }
 
+const sidecarCoverMax = 20 << 20
+
+// readSidecar reads a cover candidate fully bounded: the whole file was
+// materialized before any size check, so an oversized "cover" beside the
+// media blew the scan's memory budget.
+func readSidecar(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, sidecarCoverMax+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > sidecarCoverMax {
+		return nil, fmt.Errorf("cover sidecar exceeds the %d MB cap", sidecarCoverMax>>20)
+	}
+	return data, nil
+}
+
+// writeCoverFile publishes atomically: a direct WriteFile exposes partially
+// written bytes to concurrent readers and never repairs a torn file from a
+// previous crash.
+func writeCoverFile(dst string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(dst), ".cover-*")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	_, err = tmp.Write(data)
+	if err == nil {
+		err = tmp.Sync()
+	}
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(name, dst)
+	}
+	if err != nil {
+		os.Remove(name)
+	}
+	return err
+}
+
 func writeBookCover(db *store.DB, workID int64, d *bookDoc, coversDir string) error {
 	dst := filepath.Join(coversDir, fmt.Sprintf("%d.jpg", workID))
 	if _, err := os.Stat(dst); err == nil {
@@ -215,7 +267,8 @@ func writeBookCover(db *store.DB, workID int64, d *bookDoc, coversDir string) er
 	}
 	if len(d.cover) == 0 {
 		for _, name := range []string{"cover.jpg", "Cover.jpg", "folder.jpg", "Folder.jpg"} {
-			if data, rerr := os.ReadFile(filepath.Join(filepath.Dir(d.path), name)); rerr == nil {
+			data, rerr := readSidecar(filepath.Join(filepath.Dir(d.path), name))
+			if rerr == nil {
 				d.cover = data
 				break
 			}
@@ -224,7 +277,7 @@ func writeBookCover(db *store.DB, workID int64, d *bookDoc, coversDir string) er
 	if len(d.cover) == 0 {
 		return nil
 	}
-	if err := os.WriteFile(dst, d.cover, 0o644); err != nil {
+	if err := writeCoverFile(dst, d.cover); err != nil {
 		return err
 	}
 	return db.SetWorkCover(workID, fmt.Sprintf("%d.jpg", workID))
@@ -330,8 +383,8 @@ func cbrExtractor() string {
 // naturally sorts image entries like probeCBZ does, and extracts the first
 // page as the cover (unrar p / unar into a temp dir). Zero deps: the archive
 // itself is never parsed in-process.
-func probeCBR(p, tool string) (int, []byte, error) {
-	names, err := cbrList(p, tool)
+func probeCBR(ctx context.Context, p, tool string) (int, []byte, error) {
+	names, err := cbrList(ctx, p, tool)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -346,16 +399,18 @@ func probeCBR(p, tool string) (int, []byte, error) {
 	return len(pages), cover, nil
 }
 
-func cbrList(p, tool string) ([]string, error) {
+// cbrList runs the extractor listing with a hard deadline and an output cap
+// that KILLS the child: reading exactly the cap and then calling Wait left
+// the child blocked on a full pipe forever for listings past the cap.
+func cbrList(ctx context.Context, p, tool string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 	var cmd *exec.Cmd
 	if tool == "unrar" {
-		cmd = exec.Command(tool, "lb", p)
+		cmd = exec.CommandContext(ctx, tool, "lb", p)
 	} else {
-		cmd = exec.Command("lsar", p)
+		cmd = exec.CommandContext(ctx, "lsar", p)
 	}
-	// Streamed and capped: Output() buffered the extractor's complete
-	// listing, so an archive with a huge entry table consumed memory
-	// proportional to it before the page limit was ever applied.
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
@@ -363,10 +418,23 @@ func cbrList(p, tool string) ([]string, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	listing, rerr := io.ReadAll(io.LimitReader(stdout, 4<<20))
+	const limit = 4 << 20
+	listing, rerr := io.ReadAll(io.LimitReader(stdout, limit+1))
+	oversized := len(listing) > limit
+	if oversized || rerr != nil {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+	}
 	werr := cmd.Wait()
+	if oversized {
+		return nil, fmt.Errorf("archive listing exceeds %d bytes", limit)
+	}
 	if rerr != nil {
 		return nil, rerr
+	}
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
 	}
 	if werr != nil {
 		return nil, werr
@@ -437,7 +505,9 @@ func cbrExtract(tool, archive, name string) ([]byte, error) {
 			return nil, err
 		}
 		defer os.RemoveAll(dir)
-		if err := exec.Command(tool, "-q", "-f", "-o", dir, archive, name).Run(); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		if err := exec.CommandContext(ctx, tool, "-q", "-f", "-o", dir, archive, name).Run(); err != nil {
 			return nil, err
 		}
 		var tooBig bool
