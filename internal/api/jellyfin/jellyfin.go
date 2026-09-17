@@ -242,19 +242,34 @@ func (a *API) brandingStub(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) authenticate(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 32<<10)
 	var body struct {
 		Username string `json:"Username"`
 		Pw       string `json:"Pw"`
 		Password string `json:"Password"`
 	}
-	json.NewDecoder(r.Body).Decode(&body)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			write(w, http.StatusRequestEntityTooLarge, map[string]any{"error": "request body too large"})
+			return
+		}
+		write(w, 400, map[string]any{"error": "invalid request body"})
+		return
+	}
 	pass := body.Pw
 	if pass == "" {
 		pass = body.Password
 	}
-	ip := auth.ClientIP(r) + "|" + strings.ToLower(strings.TrimSpace(body.Username))
+	ip := auth.ClientIP(r)
+	principal := ip + "|" + strings.ToLower(strings.TrimSpace(body.Username))
 	if a.LoginLimiter != nil {
-		if ok, retry := a.LoginLimiter.Allow(ip); !ok {
+		if ok, retry := a.LoginLimiter.AllowIP(ip); !ok {
+			auth.WriteRetryAfter(w, retry)
+			write(w, 429, map[string]any{"error": "too many attempts, try again later"})
+			return
+		}
+		if ok, retry := a.LoginLimiter.Allow(principal); !ok {
 			auth.WriteRetryAfter(w, retry)
 			write(w, 429, map[string]any{"error": "too many attempts, try again later"})
 			return
@@ -269,7 +284,8 @@ func (a *API) authenticate(w http.ResponseWriter, r *http.Request) {
 		}
 		if errors.Is(err, auth.ErrBadCredentials) {
 			if a.LoginLimiter != nil {
-				a.LoginLimiter.Failure(ip)
+				a.LoginLimiter.FailureIP(ip)
+				a.LoginLimiter.Failure(principal)
 			}
 			w.WriteHeader(401)
 			w.Write([]byte(`{"error":"invalid"}`))
@@ -279,7 +295,8 @@ func (a *API) authenticate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if a.LoginLimiter != nil {
-		a.LoginLimiter.Success(ip)
+		a.LoginLimiter.Success(principal)
+		a.LoginLimiter.SuccessIP(ip)
 	}
 	token, err := auth.IssueTokenForPassword(a.DB, u.ID, "jellyfin-client", u.PasswordHash)
 	if err != nil {
@@ -1187,12 +1204,12 @@ func (a *API) sessionProgress(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) sessionStopped(w http.ResponseWriter, r *http.Request) {
+	// saveFromSession owns the response: writing a second document from the
+	// ownership-rejection branches produced "{}{...}" bodies that clients
+	// could not parse. Rejection simply skips teardown.
 	sid := a.saveFromSession(w, r)
 	if q := qget(r, "PlaySessionId"); q != "" {
 		if !ownsPlaySession(r, q) {
-			// Closing another user's ffmpeg session is not this caller's
-			// call; report acceptance without tearing anything down.
-			write(w, 200, map[string]bool{"ok": true})
 			return
 		}
 		sid = q
@@ -1200,7 +1217,6 @@ func (a *API) sessionStopped(w http.ResponseWriter, r *http.Request) {
 	// The body-only path resolves to the same id space; ownership applies
 	// there too, or the query check was bypassable by moving the field.
 	if sid != "" && !ownsPlaySession(r, sid) {
-		write(w, 200, map[string]bool{"ok": true})
 		return
 	}
 	if sid != "" {
@@ -1212,6 +1228,7 @@ func (a *API) sessionStopped(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) saveFromSession(w http.ResponseWriter, r *http.Request) string {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var body struct {
 		ItemId        string `json:"ItemId"`
 		PositionTicks int64  `json:"PositionTicks"`
@@ -1219,7 +1236,7 @@ func (a *API) saveFromSession(w http.ResponseWriter, r *http.Request) string {
 		PlaySessionId string `json:"PlaySessionId"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		write(w, 200, map[string]any{})
+		write(w, 400, map[string]any{"error": "invalid request body"})
 		return ""
 	}
 	ed, err := a.resolvePlayable(body.ItemId)

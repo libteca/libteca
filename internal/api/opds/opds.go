@@ -131,9 +131,15 @@ func (a *API) auth(h func(http.ResponseWriter, *http.Request, int64)) http.Handl
 			a.unauthorized(w)
 			return
 		}
-		ip := auth.ClientIP(r) + "|" + strings.ToLower(strings.TrimSpace(user))
+		ip := auth.ClientIP(r)
+		principal := ip + "|" + strings.ToLower(strings.TrimSpace(user))
 		if a.LoginLimiter != nil {
-			if ok, retry := a.LoginLimiter.Allow(ip); !ok {
+			if allow, retry := a.LoginLimiter.AllowIP(ip); !allow {
+				auth.WriteRetryAfter(w, retry)
+				http.Error(w, "too many attempts, try again later", http.StatusTooManyRequests)
+				return
+			}
+			if allow, retry := a.LoginLimiter.Allow(principal); !allow {
 				auth.WriteRetryAfter(w, retry)
 				http.Error(w, "too many attempts, try again later", http.StatusTooManyRequests)
 				return
@@ -160,13 +166,15 @@ func (a *API) auth(h func(http.ResponseWriter, *http.Request, int64)) http.Handl
 		}
 		if !valid {
 			if a.LoginLimiter != nil {
-				a.LoginLimiter.Failure(ip)
+				a.LoginLimiter.FailureIP(ip)
+				a.LoginLimiter.Failure(principal)
 			}
 			a.unauthorized(w)
 			return
 		}
 		if a.LoginLimiter != nil {
-			a.LoginLimiter.Success(ip)
+			a.LoginLimiter.Success(principal)
+			a.LoginLimiter.SuccessIP(ip)
 		}
 		h(w, r, u.ID)
 	}

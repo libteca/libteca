@@ -4,15 +4,18 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
 
 const (
-	defaultThreshold = 5
-	defaultWindow    = 10 * time.Minute
-	defaultLockout   = 15 * time.Minute
-	defaultMaxIPs    = 10000
+	defaultThreshold   = 5
+	defaultIPThreshold = 30
+	defaultWindow      = 10 * time.Minute
+	defaultLockout     = 15 * time.Minute
+	defaultMaxIPs      = 10000
+	ipKeyPrefix        = "ip:"
 )
 
 type limitEntry struct {
@@ -22,24 +25,45 @@ type limitEntry struct {
 }
 
 type Limiter struct {
-	mu        sync.Mutex
-	entries   map[string]*limitEntry
-	threshold int
-	window    time.Duration
-	lockout   time.Duration
-	maxIPs    int
-	now       func() time.Time
+	mu         sync.Mutex
+	entries    map[string]*limitEntry
+	threshold  int
+	ipThresh   int
+	window     time.Duration
+	lockout    time.Duration
+	maxIPs     int
+	now        func() time.Time
 }
 
 func NewLimiter() *Limiter {
 	return &Limiter{
 		entries:   make(map[string]*limitEntry),
 		threshold: defaultThreshold,
+		ipThresh:  defaultIPThreshold,
 		window:    defaultWindow,
 		lockout:   defaultLockout,
 		maxIPs:    defaultMaxIPs,
 		now:       time.Now,
 	}
+}
+
+// AllowIP checks the per-IP aggregate bucket. Principal buckets are keyed by
+// ip|username, so cycling usernames minted a fresh bucket per guess; the
+// aggregate bucket bounds total failures from one source regardless of the
+// names tried. A successful login must NOT clear it (see SuccessIP).
+func (l *Limiter) AllowIP(ip string) (bool, time.Duration) {
+	return l.Allow(ipKeyPrefix + ip)
+}
+
+func (l *Limiter) FailureIP(ip string) {
+	l.Failure(ipKeyPrefix + ip)
+}
+
+func (l *Limiter) thresholdFor(key string) int {
+	if strings.HasPrefix(key, ipKeyPrefix) {
+		return l.ipThresh
+	}
+	return l.threshold
 }
 
 func (l *Limiter) Allow(ip string) (bool, time.Duration) {
@@ -79,7 +103,7 @@ func (l *Limiter) Failure(ip string) {
 	e.lastSeen = now
 	l.pruneFailures(e, now)
 	e.failures = append(e.failures, now)
-	if len(e.failures) >= l.threshold {
+	if len(e.failures) >= l.thresholdFor(ip) {
 		e.lockedUntil = now.Add(l.lockout)
 		e.failures = nil
 	}
@@ -89,6 +113,16 @@ func (l *Limiter) Success(ip string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.entries, ip)
+}
+
+// SuccessIP deliberately does not clear the aggregate bucket: one valid login
+// must not reset the failure history of a source still guessing other names.
+func (l *Limiter) SuccessIP(ip string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if e, ok := l.entries[ipKeyPrefix+ip]; ok {
+		e.lastSeen = l.now()
+	}
 }
 
 func (l *Limiter) pruneFailures(e *limitEntry, now time.Time) {

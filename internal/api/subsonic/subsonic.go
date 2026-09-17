@@ -156,11 +156,31 @@ func (a *API) authenticate(r *http.Request) (int64, bool, error) {
 	if name == "" {
 		return 0, false, nil
 	}
+	ip := auth.ClientIP(r)
+	principal := limiterKey(r, name)
+	if a.LoginLimiter != nil {
+		// The aggregate bucket is checked first for every branch: the
+		// unknown-user path previously ran its dummy burn before any
+		// limiter consultation and registered no failure at all.
+		if ok, _ := a.LoginLimiter.AllowIP(ip); !ok {
+			return 0, false, nil
+		}
+	}
+	failBoth := func() {
+		if a.LoginLimiter != nil {
+			a.LoginLimiter.FailureIP(ip)
+			a.LoginLimiter.Failure(principal)
+		}
+	}
 	u, err := a.DB.UserByName(name)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			_, verr := auth.VerifyRequest(r.Context(), r.Form.Get("p"), auth.DummyHash())
-			return 0, false, verr
+			if verr != nil {
+				return 0, false, verr
+			}
+			failBoth()
+			return 0, false, nil
 		}
 		return 0, false, err
 	}
@@ -172,25 +192,24 @@ func (a *API) authenticate(r *http.Request) (int64, bool, error) {
 		// The token branch is an online password oracle: wrong candidates
 		// cost one MD5, the right one authenticates. Without the limiter it
 		// bypassed the lockout that governs every other credential check.
-		key := limiterKey(r, name)
 		if a.LoginLimiter != nil {
-			if ok, _ := a.LoginLimiter.Allow(key); !ok {
+			if ok, _ := a.LoginLimiter.Allow(principal); !ok {
 				return 0, false, nil
 			}
 		}
 		secret, has := a.DB.GetSetting(subsonicSecretKey(u.ID))
 		if !has {
+			failBoth()
 			return 0, false, nil
 		}
 		sum := md5.Sum([]byte(secret + salt))
 		if subtle.ConstantTimeCompare([]byte(hex.EncodeToString(sum[:])), []byte(strings.ToLower(token))) != 1 {
-			if a.LoginLimiter != nil {
-				a.LoginLimiter.Failure(key)
-			}
+			failBoth()
 			return 0, false, nil
 		}
 		if a.LoginLimiter != nil {
-			a.LoginLimiter.Success(key)
+			a.LoginLimiter.Success(principal)
+			a.LoginLimiter.SuccessIP(ip)
 		}
 		stillCurrent, verr := auth.VerifyRequest(r.Context(), secret, u.PasswordHash)
 		if verr != nil {
@@ -206,15 +225,15 @@ func (a *API) authenticate(r *http.Request) (int64, bool, error) {
 	if pass == "" {
 		return 0, false, nil
 	}
-	plainKey := limiterKey(r, name)
 	if a.LoginLimiter != nil {
-		if ok, _ := a.LoginLimiter.Allow(plainKey); !ok {
+		if ok, _ := a.LoginLimiter.Allow(principal); !ok {
 			return 0, false, nil
 		}
 	}
 	if enc, found := strings.CutPrefix(pass, "enc:"); found {
 		raw, err := hex.DecodeString(enc)
 		if err != nil {
+			failBoth()
 			return 0, false, nil
 		}
 		pass = string(raw)
@@ -224,13 +243,12 @@ func (a *API) authenticate(r *http.Request) (int64, bool, error) {
 		return 0, false, verr
 	}
 	if !valid {
-		if a.LoginLimiter != nil {
-			a.LoginLimiter.Failure(plainKey)
-		}
+		failBoth()
 		return 0, false, nil
 	}
 	if a.LoginLimiter != nil {
-		a.LoginLimiter.Success(plainKey)
+		a.LoginLimiter.Success(principal)
+		a.LoginLimiter.SuccessIP(ip)
 	}
 	if cached, has := a.DB.GetSetting(subsonicSecretKey(u.ID)); !has || cached != pass {
 		a.DB.SetSetting(subsonicSecretKey(u.ID), pass)

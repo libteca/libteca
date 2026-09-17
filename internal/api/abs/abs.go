@@ -51,17 +51,29 @@ func (a *API) Mount(r *neutron.Router) {
 }
 
 func (a *API) Login(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 32<<10)
 	var body struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			fail(w, http.StatusRequestEntityTooLarge, "Request body too large")
+			return
+		}
 		fail(w, 400, "Invalid request body")
 		return
 	}
-	ip := auth.ClientIP(r) + "|" + strings.ToLower(strings.TrimSpace(body.Username))
+	ip := auth.ClientIP(r)
+	principal := ip + "|" + strings.ToLower(strings.TrimSpace(body.Username))
 	if a.LoginLimiter != nil {
-		if ok, retry := a.LoginLimiter.Allow(ip); !ok {
+		if ok, retry := a.LoginLimiter.AllowIP(ip); !ok {
+			auth.WriteRetryAfter(w, retry)
+			fail(w, 429, "Too many attempts, try again later")
+			return
+		}
+		if ok, retry := a.LoginLimiter.Allow(principal); !ok {
 			auth.WriteRetryAfter(w, retry)
 			fail(w, 429, "Too many attempts, try again later")
 			return
@@ -76,7 +88,8 @@ func (a *API) Login(w http.ResponseWriter, r *http.Request) {
 		}
 		if errors.Is(err, auth.ErrBadCredentials) {
 			if a.LoginLimiter != nil {
-				a.LoginLimiter.Failure(ip)
+				a.LoginLimiter.FailureIP(ip)
+				a.LoginLimiter.Failure(principal)
 			}
 			fail(w, 401, "Invalid username or password")
 			return
@@ -85,7 +98,8 @@ func (a *API) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if a.LoginLimiter != nil {
-		a.LoginLimiter.Success(ip)
+		a.LoginLimiter.Success(principal)
+		a.LoginLimiter.SuccessIP(ip)
 	}
 	token, err := auth.IssueTokenForPassword(a.DB, u.ID, "abs-app", u.PasswordHash)
 	if err != nil {
@@ -404,6 +418,7 @@ func (a *API) getProgress(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) postProgress(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	ctx, err := a.resolveItem(r.PathValue("itemId"))
 	if err != nil {
 		fail(w, 404, "Item not found")
@@ -457,6 +472,7 @@ func (a *API) listeningSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) play(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	ctx, err := a.resolveItem(r.PathValue("itemId"))
 	if err != nil {
 		fail(w, 404, "Item not found")
@@ -560,6 +576,7 @@ func (a *API) SessionTrack(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) sessionSync(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var body struct {
 		CurrentTime  float64 `json:"currentTime"`
 		TimeListened float64 `json:"timeListened"`
@@ -600,6 +617,7 @@ func (a *API) sessionSync(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) sessionClose(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var body struct {
 		CurrentTime  float64 `json:"currentTime"`
 		TimeListened float64 `json:"timeListened"`

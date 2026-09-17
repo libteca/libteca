@@ -175,3 +175,50 @@ func TestClientIP(t *testing.T) {
 		}
 	}
 }
+
+func TestLimiterAggregateIPBucket(t *testing.T) {
+	l, _ := newTestLimiter()
+	for i := 0; i < 30; i++ {
+		if ok, _ := l.AllowIP("9.9.9.9"); !ok {
+			t.Fatalf("aggregate bucket locked after %d failures", i)
+		}
+		l.FailureIP("9.9.9.9")
+	}
+	if ok, retry := l.AllowIP("9.9.9.9"); ok {
+		t.Fatal("aggregate bucket did not lock after 30 failures")
+	} else if retry <= 0 {
+		t.Fatal("locked aggregate bucket must report a retry duration")
+	}
+	if ok, _ := l.AllowIP("8.8.8.8"); !ok {
+		t.Fatal("aggregate lockout leaked to another IP")
+	}
+}
+
+func TestLimiterAggregateNotClearedBySuccess(t *testing.T) {
+	l, _ := newTestLimiter()
+	for i := 0; i < 29; i++ {
+		l.FailureIP("9.9.9.9")
+	}
+	l.SuccessIP("9.9.9.9")
+	if ok, _ := l.AllowIP("9.9.9.9"); !ok {
+		t.Fatal("aggregate bucket locked too early")
+	}
+	l.FailureIP("9.9.9.9")
+	if ok, _ := l.AllowIP("9.9.9.9"); ok {
+		t.Fatal("success cleared the aggregate failure history")
+	}
+}
+
+func TestLimiterPrincipalThresholdUnchanged(t *testing.T) {
+	l, _ := newTestLimiter()
+	for i := 0; i < 4; i++ {
+		l.Failure("1.1.1.1|alice")
+	}
+	if ok, _ := l.Allow("1.1.1.1|alice"); !ok {
+		t.Fatal("principal bucket must still lock at 5 failures")
+	}
+	l.Failure("1.1.1.1|alice")
+	if ok, _ := l.Allow("1.1.1.1|alice"); ok {
+		t.Fatal("principal bucket did not lock at 5 failures")
+	}
+}

@@ -175,10 +175,18 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Principal-aware bucket: a success for one account must not erase the
-	// failures accumulated against another from the same IP.
-	ip := auth.ClientIP(r) + "|" + strings.ToLower(strings.TrimSpace(body.Username))
+	// failures accumulated against another from the same IP. The aggregate
+	// per-IP bucket bounds username-cycling: a fresh principal bucket per
+	// guess otherwise defeats the limiter entirely.
+	principal := auth.ClientIP(r) + "|" + strings.ToLower(strings.TrimSpace(body.Username))
+	ip := auth.ClientIP(r)
 	if a.LoginLimiter != nil {
-		if ok, retry := a.LoginLimiter.Allow(ip); !ok {
+		if ok, retry := a.LoginLimiter.AllowIP(ip); !ok {
+			auth.WriteRetryAfter(w, retry)
+			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many attempts, try again later"})
+			return
+		}
+		if ok, retry := a.LoginLimiter.Allow(principal); !ok {
 			auth.WriteRetryAfter(w, retry)
 			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many attempts, try again later"})
 			return
@@ -193,7 +201,8 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 		}
 		if errors.Is(err, auth.ErrBadCredentials) {
 			if a.LoginLimiter != nil {
-				a.LoginLimiter.Failure(ip)
+				a.LoginLimiter.FailureIP(ip)
+				a.LoginLimiter.Failure(principal)
 			}
 			writeJSON(w, 401, map[string]string{"error": "invalid credentials"})
 			return
@@ -202,7 +211,8 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if a.LoginLimiter != nil {
-		a.LoginLimiter.Success(ip)
+		a.LoginLimiter.Success(principal)
+		a.LoginLimiter.SuccessIP(ip)
 	}
 	token, err := auth.IssueTokenForPassword(a.DB, u.ID, r.UserAgent(), u.PasswordHash)
 	if err != nil {

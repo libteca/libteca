@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"strconv"
 )
 
 // Token is a session/API token. Value is deliberately not part of this
@@ -33,9 +34,28 @@ func (d *DB) UpdateUserPassword(id int64, passwordHash string) error {
 }
 
 func (d *DB) RotatePassword(id int64, passwordHash string) error {
+	return d.RotatePasswordChecked(id, nil, passwordHash)
+}
+
+var ErrCredentialsChanged = errors.New("credentials changed; authenticate again")
+
+// RotatePasswordChecked swaps the hash, revokes tokens, closes open playback
+// sessions and drops the legacy Subsonic secret in ONE transaction. A
+// self-service change passes the hash that was actually verified so a request
+// paused between verification and rotation cannot overwrite a newer reset;
+// only the administrative reset path passes nil.
+func (d *DB) RotatePasswordChecked(id int64, expected *string, passwordHash string) error {
 	return d.Update(func(tx *Tx) error {
-		res, err := tx.Exec(`UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?`,
-			passwordHash, nowMilli(), id)
+		now := nowMilli()
+		var res sql.Result
+		var err error
+		if expected != nil {
+			res, err = tx.Exec(`UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ? AND password_hash = ?`,
+				passwordHash, now, id, *expected)
+		} else {
+			res, err = tx.Exec(`UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?`,
+				passwordHash, now, id)
+		}
 		if err != nil {
 			return err
 		}
@@ -44,12 +64,30 @@ func (d *DB) RotatePassword(id int64, passwordHash string) error {
 			return err
 		}
 		if n != 1 {
+			if expected != nil {
+				return ErrCredentialsChanged
+			}
 			return ErrNotFound
 		}
-		_, err = tx.Exec(`UPDATE tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`,
-			nowMilli(), id)
+		if _, err := tx.Exec(`UPDATE tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`, now, id); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`UPDATE playback_sessions SET closed_at = ?, updated_at = ? WHERE user_id = ? AND closed_at IS NULL`, now, now, id); err != nil {
+			return err
+		}
+		_, err = tx.Exec(`DELETE FROM settings WHERE key = ?`, "subsonic.pw."+strconv.FormatInt(id, 10))
 		return err
 	})
+}
+
+// RevokeTokenByValue revokes the exact token used for the current request;
+// server-side sign-out must not depend on the client discovering a token id.
+func (d *DB) RevokeTokenByValue(value string) error {
+	if value == "" {
+		return nil
+	}
+	_, err := d.Exec(`UPDATE tokens SET revoked_at = ? WHERE value = ? AND revoked_at IS NULL`, nowMilli(), value)
+	return err
 }
 
 func (d *DB) CountAdmins() (int, error) {
@@ -112,6 +150,9 @@ func (d *DB) DeleteUserGuarded(id int64) ([]string, error) {
 	if _, err := tx.Exec(`DELETE FROM progress WHERE user_id = ?`, id); err != nil {
 		return nil, err
 	}
+	if _, err := tx.Exec(`DELETE FROM settings WHERE key = ?`, "subsonic.pw."+strconv.FormatInt(id, 10)); err != nil {
+		return nil, err
+	}
 	if _, err := tx.Exec(`DELETE FROM tokens WHERE user_id = ?`, id); err != nil {
 		return nil, err
 	}
@@ -159,6 +200,9 @@ func (d *DB) DeleteUser(id int64) ([]string, error) {
 		return nil, err
 	}
 	if _, err := tx.Exec(`DELETE FROM progress WHERE user_id = ?`, id); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(`DELETE FROM settings WHERE key = ?`, "subsonic.pw."+strconv.FormatInt(id, 10)); err != nil {
 		return nil, err
 	}
 	if _, err := tx.Exec(`DELETE FROM tokens WHERE user_id = ?`, id); err != nil {

@@ -4,15 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/libteca/libteca/internal/auth"
 	"github.com/libteca/libteca/internal/store"
 	"github.com/neutron-build/neutron/go/neutron"
 )
-
-const minPasswordLen = 8
 
 // MountUsers registers the user and token management endpoints. Add this one
 // line to API.Mount in core.go:
@@ -26,6 +23,16 @@ func (a *API) MountUsers(r *neutron.Router) {
 	r.HandleFunc("GET /tokens", a.tokensList)
 	r.HandleFunc("POST /tokens", a.tokenIssue)
 	r.HandleFunc("DELETE /tokens/{id}", a.tokenRevoke)
+	r.HandleFunc("POST /logout", a.logout)
+}
+
+func (a *API) logout(w http.ResponseWriter, r *http.Request) {
+	if err := a.DB.RevokeTokenByValue(auth.Token(r)); err != nil {
+		writeJSON(w, 500, map[string]string{"error": "logout could not be completed"})
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (a *API) currentUser(r *http.Request) (*store.User, bool) {
@@ -86,15 +93,16 @@ func (a *API) userCreate(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 		IsAdmin  bool   `json:"isAdmin"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Name == "" {
-		writeJSON(w, 400, map[string]string{"error": "name required"})
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid request body"})
 		return
 	}
-	if len(body.Password) < minPasswordLen {
-		writeJSON(w, 400, map[string]string{"error": "password must be at least 8 characters"})
+	name, verr := auth.ValidateCredentials(body.Name, body.Password)
+	if verr != nil {
+		writeJSON(w, 400, map[string]string{"error": verr.Error()})
 		return
 	}
-	if _, err := a.DB.UserByName(body.Name); err == nil {
+	if _, err := a.DB.UserByName(name); err == nil {
 		writeJSON(w, 409, map[string]string{"error": "user exists"})
 		return
 	}
@@ -104,7 +112,7 @@ func (a *API) userCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "server busy, try again later"})
 		return
 	}
-	id, err := a.DB.CreateUser(body.Name, hash, body.IsAdmin)
+	id, err := a.DB.CreateUser(name, hash, body.IsAdmin)
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
@@ -151,8 +159,12 @@ func (a *API) userSetPassword(w http.ResponseWriter, r *http.Request) {
 		Password    string `json:"password"`
 		OldPassword string `json:"oldPassword"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.Password) < minPasswordLen {
-		writeJSON(w, 400, map[string]string{"error": "password must be at least 8 characters"})
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if verr := auth.ValidatePassword(body.Password); verr != nil {
+		writeJSON(w, 400, map[string]string{"error": verr.Error()})
 		return
 	}
 	if !cur.IsAdmin {
@@ -181,11 +193,20 @@ func (a *API) userSetPassword(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "server busy, try again later"})
 		return
 	}
-	if err := a.DB.RotatePassword(id, hash); err != nil {
-		writeJSON(w, 500, map[string]string{"error": "internal error"})
-		return
+	var expected *string
+	if !cur.IsAdmin {
+		verified := cur
+		expected = &verified.PasswordHash
 	}
-	if err := a.DB.DeleteSetting("subsonic.pw." + strconv.FormatInt(id, 10)); err != nil {
+	if err := a.DB.RotatePasswordChecked(id, expected, hash); err != nil {
+		if errors.Is(err, store.ErrCredentialsChanged) {
+			writeJSON(w, 409, map[string]string{"error": "credentials changed; authenticate again"})
+			return
+		}
+		if errors.Is(err, store.ErrNotFound) {
+			writeJSON(w, 404, map[string]string{"error": "user not found"})
+			return
+		}
 		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}

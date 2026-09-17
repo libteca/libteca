@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/crypto/argon2"
 
@@ -29,7 +31,38 @@ var (
 	ErrKDFBusy            = errors.New("password verification capacity exhausted")
 	ErrBadCredentials     = errors.New("invalid credentials")
 	ErrCredentialsChanged = errors.New("credentials changed; authenticate again")
+	ErrInvalidName        = errors.New("username must be valid UTF-8, 1-128 bytes, without control characters")
+	ErrInvalidPassword    = errors.New("password must be 8 to 1024 bytes")
 )
+
+// ValidatePassword is the password half of ValidateCredentials for paths
+// that do not create a name.
+func ValidatePassword(password string) error {
+	if len(password) < 8 || len(password) > 1024 {
+		return ErrInvalidPassword
+	}
+	return nil
+}
+
+// ValidateCredentials is the one name/password policy shared by
+// initialization, administrative creation and imports: trimmed bounded UTF-8
+// names without control characters, bounded byte-length passwords. Passwords
+// are never trimmed.
+func ValidateCredentials(name, password string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" || len(name) > 128 || !utf8.ValidString(name) {
+		return "", ErrInvalidName
+	}
+	for _, r := range name {
+		if unicode.IsControl(r) {
+			return "", ErrInvalidName
+		}
+	}
+	if len(password) < 8 || len(password) > 1024 {
+		return "", ErrInvalidPassword
+	}
+	return name, nil
+}
 
 var kdfSlots = make(chan struct{}, 2)
 
@@ -248,12 +281,9 @@ func Token(r *http.Request) string {
 }
 
 func InitAdmin(db *store.DB, name, password string) error {
-	name = strings.TrimSpace(name)
-	if name == "" || len(name) > 128 || strings.ContainsRune(name, '\x00') {
-		return fmt.Errorf("invalid admin name")
-	}
-	if len(password) < 8 || len(password) > 1024 {
-		return fmt.Errorf("password must be 8 to 1024 bytes")
+	name, err := ValidateCredentials(name, password)
+	if err != nil {
+		return err
 	}
 	u, err := db.UserByName(name)
 	if err == nil {
