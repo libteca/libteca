@@ -44,10 +44,6 @@ func New(db *store.DB, dataDir string) *Server {
 	return &Server{DB: db, Dir: dataDir, Core: core.New(db, dataDir)}
 }
 
-// Handler builds the route table once: every call used to construct another
-// transcode manager (removing the shared transcode directory under live
-// sessions) and overwrite the owned manager pointers, leaking the previous
-// manager outside Close's ownership.
 func (s *Server) Handler() http.Handler {
 	s.handlerOnce.Do(func() {
 		s.handler = s.buildHandler()

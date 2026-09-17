@@ -126,10 +126,6 @@ func (d *DB) WorksInLibrary(libID int64) ([]WorkView, error) {
 	return out, frows.Err()
 }
 
-// WorkViewByID loads one work with its editions and non-missing files in the
-// same shape WorksInLibrary produces, without materializing every work,
-// edition and file of the enclosing library: work detail used to scale with
-// unrelated library content.
 func (d *DB) WorkViewByID(id int64) (*WorkView, error) {
 	w, err := workRow(d, id)
 	if err != nil {

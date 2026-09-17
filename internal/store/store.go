@@ -20,9 +20,6 @@ type DB struct {
 }
 
 func Open(path string) (*DB, error) {
-	// A path containing ?, # or % would be reinterpreted as query, fragment
-	// or escape syntax by the driver's DSN parser; build the file URI
-	// through net/url so the path stays literal.
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return nil, err
@@ -41,9 +38,6 @@ func Open(path string) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Ownership transfers to the returned DB only on success: a failure in
-	// dialect setup, migrations or backfill used to leak the opened pool
-	// and its file handles.
 	success := false
 	defer func() {
 		if !success {

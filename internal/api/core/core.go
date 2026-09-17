@@ -63,9 +63,6 @@ func New(db *store.DB, dataDir string) *API {
 	return &API{DB: db, DataDir: dataDir, runs: map[int64]*scanRun{}, metaRuns: map[int64]*metaRun{}}
 }
 
-// launchJob registers owned background work so shutdown can drain it: a
-// bare goroutine launch was invisible to WaitJobs, and work admitted during
-// shutdown outlived the database close.
 func (a *API) launchJob(fn func()) bool {
 	a.jobsMu.Lock()
 	if a.jobsClosing {
@@ -81,8 +78,6 @@ func (a *API) launchJob(fn func()) bool {
 	return true
 }
 
-// WaitJobs stops admitting new background work and waits for registered
-// jobs to finish. Callers must not hold API mutexes.
 func (a *API) WaitJobs() {
 	a.jobsMu.Lock()
 	a.jobsClosing = true
@@ -145,9 +140,6 @@ func (a *API) Mount(r *neutron.Router) {
 // problem+json instead: the router's errInterceptor replaces any non-problem
 // 404 body with a generic "No route matches" document, which would swallow
 // the handler's specific message; problem+json passes through untouched.
-// The body is serialized BEFORE the status is written: a value that cannot
-// marshal (e.g. NaN imported through a non-JSON ingress) used to commit a
-// 200 and then emit an empty or truncated body.
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	contentType := "application/json"
 	if status == http.StatusNotFound {
@@ -212,9 +204,6 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 	if a.LoginLimiter != nil {
 		a.LoginLimiter.Success(ip)
 	}
-	// Issuance is conditional on the hash that just verified: a concurrent
-	// password rotation revokes tokens in the same transaction that swaps
-	// the hash, so an old-password login cannot mint a surviving token.
 	token, err := auth.IssueTokenForPassword(a.DB, u.ID, r.UserAgent(), u.PasswordHash)
 	if err != nil {
 		if errors.Is(err, auth.ErrCredentialsChanged) {
@@ -409,11 +398,6 @@ func (a *API) TriggerScan(ctx context.Context, libraryID int64) (int64, error) {
 
 const scanPersistInterval = 2 * time.Second
 
-// persistScanTerminal writes the terminal job state with bounded retry: a
-// discarded failure left the durable row 'running' while memory said
-// finished, wedging the admission and watcher paths until restart. Startup
-// reconciliation (FailRunningScanJobs) remains the backstop for a hard
-// crash between retries.
 func (a *API) persistScanTerminal(run *scanRun, status string, message *string) {
 	p := run.snapshot()
 	if err := a.DB.UpdateScanJobCounts(run.jobID, int64(p.FilesSeen), int64(p.FilesProbed), int64(p.FilesAdded), int64(p.FilesUpdated), int64(p.WorksChanged)); err != nil {
@@ -950,9 +934,6 @@ func (a *API) getProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p, err := a.DB.GetReadingProgress(auth.UserID(r), eid)
-	// Only ErrNotFound means a valid edition with no saved progress; any
-	// other read failure used to be served as a successful zero position,
-	// which clients could persist over real progress.
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		writeJSON(w, 500, map[string]string{"error": "progress unavailable"})
 		return
@@ -1069,9 +1050,6 @@ func (a *API) cover(w http.ResponseWriter, r *http.Request) {
 	serveFile(w, r, path)
 }
 
-// serveFile serves a stored media path. Stat errors and non-regular files
-// are handled instead of dereferenced: a vanished or replaced path used to
-// panic the request on a nil FileInfo.
 func serveFile(w http.ResponseWriter, r *http.Request, path string) {
 	before, err := os.Stat(path)
 	if err != nil || !before.Mode().IsRegular() {

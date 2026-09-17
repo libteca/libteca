@@ -32,10 +32,6 @@ func (d *DB) UpdateUserPassword(id int64, passwordHash string) error {
 	return err
 }
 
-// RotatePassword changes the hash and revokes every active token in one
-// transaction: the old separate statements left a partially completed
-// rotation behind when a later step failed, and a login verified against the
-// old hash could still mint a token after the revocation ran.
 func (d *DB) RotatePassword(id int64, passwordHash string) error {
 	return d.Update(func(tx *Tx) error {
 		res, err := tx.Exec(`UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?`,

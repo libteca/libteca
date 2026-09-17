@@ -11,10 +11,6 @@ import (
 
 // BackupTo writes a consistent snapshot of the database to dest via
 // VACUUM INTO. Stop-free: concurrent readers and writers keep going; the
-// output is a fully checkpointed, standalone database. An existing dest is
-// REFUSED, never removed: deleting the previous snapshot before the
-// replacement ran could destroy the only good backup when the second
-// snapshot fails.
 func (d *DB) BackupTo(dest string) error {
 	if _, err := os.Lstat(dest); err == nil {
 		return fmt.Errorf("backup destination already exists: %s", dest)
@@ -28,11 +24,6 @@ func (d *DB) BackupTo(dest string) error {
 // Snapshot writes data/backups/libteca-<date>.db (VACUUM INTO), mirrors
 // coversDir into backupsDir/covers (skipping the thumb cache), prunes the
 // oldest libteca-*.db backups beyond keep, and returns the new db path.
-// The snapshot is staged in a private directory and published with a
-// no-replace link, so two snapshots in the same second - or a repeated
-// local clock timestamp - can never overwrite a completed backup. The new
-// backup and its directory are fsynced before any prune runs, so a power
-// loss can never lose both the old and the new snapshot at once.
 func (d *DB) Snapshot(coversDir, backupsDir string, keep int) (string, error) {
 	if err := os.MkdirAll(backupsDir, 0o700); err != nil {
 		return "", err
@@ -52,9 +43,6 @@ func (d *DB) Snapshot(coversDir, backupsDir string, keep int) (string, error) {
 	suffix := strings.TrimPrefix(filepath.Base(stage), ".libteca-stage-")
 	dest := filepath.Join(backupsDir,
 		"libteca-"+time.Now().UTC().Format("20060102-150405.000000000")+"-"+suffix+".db")
-	// Link publishes without replacing: unlike rename it cannot clobber an
-	// existing path, so a colliding name surfaces as an error instead of a
-	// destroyed snapshot.
 	if err := os.Link(tmp, dest); err != nil {
 		return "", err
 	}
@@ -137,9 +125,6 @@ func copyTree(src, dst string) error {
 
 // pruneBackups deletes the oldest libteca-*.db backups beyond keep. keep < 1
 // prunes nothing — deleting every backup including the just-written one is
-// never wanted. The protected file counts toward the budget: the old loop
-// skipped it without deleting a replacement candidate, so a clock-skewed
-// protected name left keep+1 backups behind.
 func pruneBackups(dir string, keep int, protect string) error {
 	if keep < 1 {
 		return nil

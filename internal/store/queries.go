@@ -103,11 +103,6 @@ func (d *DB) DeleteLibrary(id int64) error {
 		if _, err := tx.Exec(`DELETE FROM podcast_episode_progress WHERE episode_id IN (`+eps+`)`, id); err != nil {
 			return err
 		}
-		// File ids MUST be captured before the episode rows go: episode rows
-		// hold the FK to files, and selecting file_id from already-deleted
-		// episodes matched nothing, leaving podcast file rows orphaned
-		// (podcast files have edition_id NULL, so the edition-based delete
-		// never covered them).
 		frows, err := tx.Query(`SELECT DISTINCT file_id FROM podcast_episodes
 			WHERE podcast_id IN (`+pods+`) AND file_id IS NOT NULL`, id)
 		if err != nil {

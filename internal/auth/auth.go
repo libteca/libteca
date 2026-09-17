@@ -31,9 +31,6 @@ var (
 	ErrCredentialsChanged = errors.New("credentials changed; authenticate again")
 )
 
-// kdfSlots bounds concurrent Argon2 derivations process-wide: each one costs
-// 64 MiB of working memory, and per-principal limiters do not cap simultaneous
-// memory-hard work across different buckets.
 var kdfSlots = make(chan struct{}, 2)
 
 func Hash(password string) string {
@@ -63,9 +60,6 @@ func HashRequest(ctx context.Context, password string) (string, error) {
 	return Hash(password), nil
 }
 
-// Verify accepts exactly the one parameter set Hash emits. Stored hashes come
-// from the database, not the requester, but a corrupted or imported row must
-// not be able to request arbitrary Argon2 work or panic the decoder.
 func Verify(password, encoded string) bool {
 	if len(password) > 1024 || len(encoded) > 256 {
 		return false
@@ -109,9 +103,6 @@ var dummyHash = Hash("libteca-non-account-dummy-password")
 
 func DummyHash() string { return dummyHash }
 
-// CheckPassword is the shared request-time credential check: unknown users
-// and wrong passwords cost the same KDF work and produce the same error, so
-// the faces cannot be probed for valid usernames by response time.
 func CheckPassword(ctx context.Context, db *store.DB, name, password string) (*store.User, error) {
 	u, lookupErr := db.UserByName(name)
 	if lookupErr != nil && !errors.Is(lookupErr, store.ErrNotFound) {
@@ -139,10 +130,6 @@ func newTokenValue() (string, error) {
 	return hex.EncodeToString(raw), nil
 }
 
-// IssueToken mints an unconditional token. Request handlers must use
-// IssueTokenForPassword or IssueTokenFromParent so issuance cannot outlive
-// the credential that authorized it; this path remains for tooling and test
-// fixtures that seed tokens directly.
 func IssueToken(db *store.DB, userID int64, label string) (string, error) {
 	value, err := newTokenValue()
 	if err != nil {
@@ -153,9 +140,6 @@ func IssueToken(db *store.DB, userID int64, label string) (string, error) {
 	return value, err
 }
 
-// IssueTokenForPassword mints a token only when the verified hash is still
-// the user's current hash: a password rotation that races the login must not
-// leave an old-password-authenticated token active.
 func IssueTokenForPassword(db *store.DB, userID int64, label, verifiedHash string) (string, error) {
 	value, err := newTokenValue()
 	if err != nil {
@@ -177,8 +161,6 @@ func IssueTokenForPassword(db *store.DB, userID int64, label, verifiedHash strin
 	return value, nil
 }
 
-// IssueTokenFromParent mints a token only while the authorizing token is
-// still active: a revocation that races the mint must not spawn a successor.
 func IssueTokenFromParent(db *store.DB, userID int64, label, parent string) (string, error) {
 	value, err := newTokenValue()
 	if err != nil {
@@ -200,10 +182,6 @@ func IssueTokenFromParent(db *store.DB, userID int64, label, parent string) (str
 	return value, nil
 }
 
-// UserForToken resolves the bearer token against the database on every
-// request. A positive cache could resurrect a revoked credential when
-// revocation races a lookup, never consulted revoked_at on hits, and shared
-// results across DB instances in one process.
 func UserForToken(db *store.DB, value string) (*store.User, bool) {
 	if value == "" || len(value) > 256 {
 		return nil, false
@@ -269,10 +247,6 @@ func Token(r *http.Request) string {
 	return ""
 }
 
-// InitAdmin validates its inputs like the web user-management path and makes
-// the empty-install check plus the insert atomic: the old sequence could
-// create the account, fail on the token insert, and report an error while
-// the admin silently existed.
 func InitAdmin(db *store.DB, name, password string) error {
 	name = strings.TrimSpace(name)
 	if name == "" || len(name) > 128 || strings.ContainsRune(name, '\x00') {

@@ -20,8 +20,6 @@ import (
 
 // downloadPending downloads pending episodes newest-first, up to
 // maxEpisodes this round; the remainder are marked seen (handled, not kept)
-// so a deep back catalog is not re-chewed on every refresh. Failures are
-// returned so callers can retry instead of only logging them away.
 func (s *Service) downloadPending(ctx context.Context, p *store.Podcast) error {
 	pending, err := s.DB.PendingEpisodes(p.ID)
 	if err != nil {
@@ -44,9 +42,6 @@ func (s *Service) downloadPending(ctx context.Context, p *store.Podcast) error {
 	return errors.Join(failures...)
 }
 
-// maxEpisodeBytes caps one enclosure; maxEpisodeReadTime caps the whole
-// body read however optimistic the declared Content-Length is. Unbounded
-// io.Copy let a subscribed feed exhaust the disk.
 const maxEpisodeBytes int64 = 2 << 30
 const maxEpisodeReadTime = 2 * time.Hour
 
@@ -70,10 +65,6 @@ func (s *Service) downloadEpisode(ctx context.Context, p *store.Podcast, ep *sto
 	path := filepath.Join(dir, name+"."+ext)
 	if otherID, err := s.DB.EpisodeUsingFilePath(path); err == nil && otherID != ep.ID {
 		path = filepath.Join(dir, fmt.Sprintf("%s-%d.%s", name, ep.ID, ext))
-		// The title-shaped fallback can itself be another episode's real
-		// path (a literal "A-3" title vs episode 3 titled "A"): fall all
-		// the way back to the immutable episode id instead of renaming
-		// onto that episode's file.
 		if otherID, err := s.DB.EpisodeUsingFilePath(path); err == nil && otherID != ep.ID {
 			path = filepath.Join(dir, strconv.FormatInt(ep.ID, 10)+"."+ext)
 		}

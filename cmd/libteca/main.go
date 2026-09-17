@@ -55,9 +55,6 @@ func main() {
 		return
 	}
 
-	// An explicitly supplied flag wins over the environment: the old
-	// block let LIBTECA_WATCH overwrite a deliberate --watch=false, and
-	// invalid env values were silently ignored.
 	watchWasSet := false
 	flag.Visit(func(f *flag.Flag) {
 		if f.Name == "watch" {
@@ -167,21 +164,12 @@ func main() {
 
 	h := &http.Server{
 		Addr: net.JoinHostPort(*host, strconv.Itoa(*port)),
-		// Requests get the shutdown context: in-flight work observes
-		// cancellation instead of running past the close sequence below.
 		BaseContext: func(net.Listener) context.Context { return ctx },
 		Handler:     srv.Handler(),
-		// ReadHeaderTimeout alone left a slow body unbounded; ReadTimeout
-		// covers header+body while leaving long media/SSE writes alone
-		// (no WriteTimeout). Hijacked websocket upgrades drop these
-		// deadlines, so /socket keeps its own lifecycle.
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
-	// The main goroutine owns shutdown: returning as soon as
-	// ListenAndServe reports ErrServerClosed used to race the graceful
-	// shutdown, worker drain and transcode cleanup with process exit.
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- h.ListenAndServe() }()
 	fmt.Printf("libteca %s listening on %s (data: %s)\n", version, h.Addr, abs)

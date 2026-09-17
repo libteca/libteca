@@ -72,9 +72,6 @@ func validAccel(s string) bool {
 	return false
 }
 
-// ValidAccel reports whether s is an acceptable --hwaccel value ("auto"
-// included). Startup validates explicit requests instead of silently
-// continuing on another mode.
 func ValidAccel(s string) bool {
 	return s == "auto" || validAccel(s)
 }

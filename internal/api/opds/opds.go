@@ -53,12 +53,6 @@ const (
 	pageLimit = 50 // corpus: page param base (0) + per-page size unverified against KOReader/Chunky
 )
 
-// Basic auth: username + argon2 password via the shared auth path. The
-// expensive verification RESULT is cached briefly per API instance, keyed by
-// the current stored hash — a rotated or deleted password can never select a
-// stale proof, so the cache is a cost optimization, never the authorization
-// authority. OPDS clients send Basic on every request; PSE browsing would
-// otherwise re-run argon2 per page.
 const basicTTLMillis = 15 * 60 * 1000
 const basicProofsMax = 1024
 

@@ -110,9 +110,6 @@ func webSessionID(editionID int64) (string, error) {
 	return transcode.NewSessionID("web-", editionID)
 }
 
-// webSessionID stays available for ticket issuance, but a session id alone
-// no longer authorizes work: ids are issued only through the ticket
-// registry, which binds each id to its user and edition.
 
 type webTicket struct {
 	userID    int64
@@ -148,8 +145,6 @@ func (a *API) issueWebTicket(userID, editionID int64) (string, error) {
 	return sid, nil
 }
 
-// checkWebTicket validates id ownership. Non-removing checks refresh the
-// expiry so an active viewing session keeps its ticket; remove consumes it.
 func (a *API) checkWebTicket(sid string, userID int64, remove bool) (int64, bool) {
 	a.ticketMu.Lock()
 	defer a.ticketMu.Unlock()
@@ -197,9 +192,6 @@ func browserPlayable(ed *store.EditionView) bool {
 	return (vcodec == "h264" || vcodec == "vp9" || vcodec == "av1") && audioOK && containerOK
 }
 
-// streamable reports whether an edition carries audio or video a transcoder
-// could consume. Games are download-then-play by design; routing a ROM or a
-// book toward ffmpeg spawned a process that could never produce segments.
 func streamable(ed *store.EditionView) bool {
 	if len(ed.Files) == 0 || strings.HasPrefix(ed.Format, "game-") {
 		return false
@@ -267,8 +259,6 @@ func (a *API) hlsStop(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "bad session id"})
 		return
 	}
-	// Ownership check through the ticket registry: knowing (or guessing)
-	// another user's session id must not close their playback.
 	if _, ok := a.checkWebTicket(sid, auth.UserID(r), true); !ok {
 		writeJSON(w, 404, map[string]string{"error": "session not found"})
 		return
@@ -294,9 +284,6 @@ func (a *API) hlsFile(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 503, map[string]string{"error": "transcode unavailable"})
 		return
 	}
-	// The edition comes from the caller's own ticket, never from parsing a
-	// client-constructed id: a syntactically valid "web-<edition>..." used
-	// to spawn work for any edition without any proof of issuance.
 	eid, ok := a.checkWebTicket(sid, auth.UserID(r), false)
 	if !ok {
 		writeJSON(w, 404, map[string]string{"error": "session not found"})

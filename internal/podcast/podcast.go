@@ -193,8 +193,6 @@ func (s *Service) Subscribe(ctx context.Context, feedURL string, autoDownload bo
 	if err := s.applyFeed(ctx, p, feed); err != nil {
 		return p, err
 	}
-	// Validators are a commit marker: writing them before the feed was
-	// applied made a later 304 skip episodes a failed apply never ingested.
 	if err := s.DB.UpdatePodcastFetch(p.ID, nilOrEmpty(etag), nilOrEmpty(lastModified), nowMs()); err != nil {
 		return p, err
 	}
@@ -225,10 +223,6 @@ func (s *Service) refresh(ctx context.Context, p *store.Podcast) (*store.Podcast
 		return p, false, err
 	}
 	if !changed {
-		// Episode delivery is work independent of feed representation:
-		// pending downloads (e.g. auto-download enabled after the last
-		// apply) must run even when the feed answered 304, and so must
-		// retention after a recovered download.
 		if p.AutoDownload {
 			if err := s.downloadPending(ctx, p); err != nil {
 				return p, false, err
@@ -254,9 +248,6 @@ func (s *Service) refresh(ctx context.Context, p *store.Podcast) (*store.Podcast
 	if err := s.applyFeed(ctx, p, feed); err != nil {
 		return p, true, err
 	}
-	// Validators advance only after the feed applied successfully: an
-	// early write made the next conditional fetch answer 304 and skip the
-	// episodes the failed apply never ingested.
 	if err := s.DB.UpdatePodcastFetch(p.ID, nilOrEmpty(newETag), nilOrEmpty(newMod), nowMs()); err != nil {
 		return p, true, err
 	}
@@ -267,8 +258,6 @@ func (s *Service) refresh(ctx context.Context, p *store.Podcast) (*store.Podcast
 // applyFeed upserts all feed episodes, then (if auto-download is on)
 // downloads the newest pending episodes up to maxEpisodes — the rest are
 // marked seen so the back catalog is not re-chewed every refresh — and
-// finally enforces retention. A failed download surfaces as an error so the
-// caller does not advance the feed validators past unapplied work.
 func (s *Service) applyFeed(ctx context.Context, p *store.Podcast, feed *Feed) error {
 	for i := range feed.Episodes {
 		ep := &feed.Episodes[i]

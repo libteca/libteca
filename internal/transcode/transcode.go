@@ -151,9 +151,6 @@ func (m *Manager) Get(sessionID string, edition int64, source string, startSecs 
 		s.kill()
 		delete(m.sessions, sessionID)
 	}
-	// Only genuinely idle sessions are reclaimed at capacity: evicting the
-	// least-recently-touched one killed a viewer mid-playback whenever a
-	// ninth request arrived. Excess admission is rejected instead.
 	now := time.Now()
 	for id, s := range m.sessions {
 		if now.Sub(time.Unix(0, s.lastHit.Load())) > idleSessionTTL {
@@ -234,9 +231,6 @@ func (s *Session) launch(startSecs float64, accel string) error {
 	return nil
 }
 
-// watchFallback retries a hardware session on software if its ffmpeg FAILS
-// within fallbackWindow of starting. A clean early exit is a completed short
-// transcode, not a failure; death by kill() is never retried.
 func (s *Session) watchFallback(startSecs float64) {
 	defer func() {
 		s.mu.Lock()
@@ -311,9 +305,6 @@ func (m *Manager) reaper() {
 	}
 }
 
-// CloseAll kills every session, drops its segments, stops the reaper, and
-// refuses all further admissions (graceful shutdown; also safe to call more
-// than once).
 func (m *Manager) CloseAll() {
 	m.stopOnce.Do(func() { close(m.stop) })
 	m.mu.Lock()

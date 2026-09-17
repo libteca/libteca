@@ -206,11 +206,6 @@ func parseDateMs(s string) int64 {
 	return 0
 }
 
-// parseDurationSecs accepts "SS", "MM:SS", "HH:MM:SS" (fractional allowed,
-// one to three fields). Non-finite, negative, over-59 sub-fields, more than
-// three components and totals beyond 30 days parse as 0 - the established
-// unknown-duration convention: a feed-supplied "NaN" used to flow straight
-// into episode metadata and progress arithmetic.
 func parseDurationSecs(s string) float64 {
 	s = strings.TrimSpace(s)
 	if s == "" {
