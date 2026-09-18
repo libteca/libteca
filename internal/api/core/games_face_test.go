@@ -9,8 +9,8 @@ import (
 	"github.com/libteca/libteca/internal/api/abs"
 	"github.com/libteca/libteca/internal/api/jellyfin"
 	"github.com/libteca/libteca/internal/auth"
-	"github.com/neutron-build/neutron/go/neutron"
 	"github.com/libteca/libteca/internal/store"
+	"github.com/neutron-build/neutron/go/neutron"
 )
 
 // Games libraries are core-API-only: no client protocol face has a shape for

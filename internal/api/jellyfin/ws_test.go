@@ -124,7 +124,7 @@ func (f *fakeClient) enqueue(msg []byte) bool {
 
 func (f *fakeClient) shutdown()      { f.dropped = true }
 func (f *fakeClient) device() string { return f.dev }
-func (f *fakeClient) user() int64   { return 1 }
+func (f *fakeClient) user() int64    { return 1 }
 
 func TestHubBroadcastSubscribedOnly(t *testing.T) {
 	h := newHub()

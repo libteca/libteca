@@ -1,8 +1,8 @@
 package opds
 
 import (
-	"fmt"
 	"archive/zip"
+	"fmt"
 	"io"
 	"path/filepath"
 	"sort"

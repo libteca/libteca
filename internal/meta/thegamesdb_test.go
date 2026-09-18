@@ -60,7 +60,7 @@ func TestTheGamesDBSearchAndFetch(t *testing.T) {
 				"data": map[string]any{
 					"base_url": "https://cdn.example/original/",
 					"count":    1,
-					"images":  []map[string]any{{"type": "boxart_front", "filename": "123.jpg"}},
+					"images":   []map[string]any{{"type": "boxart_front", "filename": "123.jpg"}},
 				},
 			})
 		default:

@@ -20,8 +20,8 @@ import (
 )
 
 var (
-	ErrCapacity = errors.New("transcode capacity exhausted")
-	ErrClosed   = errors.New("transcode manager closed")
+	ErrCapacity      = errors.New("transcode capacity exhausted")
+	ErrClosed        = errors.New("transcode manager closed")
 	ErrSessionParams = errors.New("transcode session parameters changed")
 )
 

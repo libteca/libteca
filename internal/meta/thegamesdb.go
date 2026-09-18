@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"sync"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -79,8 +79,8 @@ type tgdbGamesResponse struct {
 	Code   int    `json:"code"`
 	Status string `json:"status"`
 	Data   struct {
-		Count  int `json:"count"`
-		Games  []tgdbGame `json:"games"`
+		Count int        `json:"count"`
+		Games []tgdbGame `json:"games"`
 		// include=platforms
 		Platforms map[string]tgdbPlatform `json:"platforms"`
 	} `json:"data"`
@@ -107,10 +107,10 @@ type tgdbPlatform struct {
 }
 
 type tgdbImagesResponse struct {
-	Code int    `json:"code"`
+	Code int `json:"code"`
 	Data struct {
-		BaseURL string     `json:"base_url"`
-		Count   int        `json:"count"`
+		BaseURL string      `json:"base_url"`
+		Count   int         `json:"count"`
 		Images  []tgdbImage `json:"images"`
 	} `json:"data"`
 }
