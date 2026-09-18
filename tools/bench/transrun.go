@@ -81,7 +81,7 @@ func runTranscode(args []string) error {
 	for i := 0; i < *runs; i++ {
 		id := fmt.Sprintf("bench-p%02d", i)
 		start := time.Now()
-		s, err := m.Get(id, 1, *source, 0)
+		s, err := m.Get(id, 1, *source, 0, func() (*os.File, error) { return os.Open(*source) })
 		if err != nil {
 			return err
 		}
@@ -148,7 +148,7 @@ func ladderRung(m *transcode.Manager, source string, n int) rungResult {
 	start := time.Now()
 	for i := 0; i < n; i++ {
 		id := fmt.Sprintf("bench-l%d-%d", n, i)
-		s, err := m.Get(id, int64(1000+i), source, 0)
+		s, err := m.Get(id, int64(1000+i), source, 0, func() (*os.File, error) { return os.Open(source) })
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "bench: ladder %d: %v\n", n, err)
 			continue

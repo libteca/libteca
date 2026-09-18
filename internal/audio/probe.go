@@ -5,10 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/libteca/libteca/internal/procfd"
 )
 
 type Chapter struct {
@@ -85,29 +88,34 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func ProbeContext(parent context.Context, path string) (*Info, error) {
-	ctx, cancel := context.WithTimeout(parent, 60*time.Second)
+// ProbeFile runs ffprobe against an already opened, rooted media
+// descriptor: the pathname never reaches the child and the protocol
+// whitelist blocks demuxer-chased secondary resources (audit F03).
+func ProbeFile(ctx context.Context, f *os.File) (*Info, error) {
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
+	inArgs, err := procfd.Args("ffprobe")
+	if err != nil {
+		return nil, err
+	}
 	stdout := &boundedBuffer{limit: probeOutputLimit, cancel: cancel}
-	cmd := exec.CommandContext(ctx, "ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", "-show_chapters", path)
+	args := append([]string{"-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", "-show_chapters"}, inArgs...)
+	cmd := exec.CommandContext(ctx, "ffprobe", args...)
+	cmd.ExtraFiles = []*os.File{f}
 	cmd.Stdout = stdout
 	if err := cmd.Run(); err != nil {
 		if stdout.over {
-			return nil, fmt.Errorf("ffprobe %s: output exceeds %d bytes", path, probeOutputLimit)
+			return nil, fmt.Errorf("ffprobe %s: output exceeds %d bytes", f.Name(), probeOutputLimit)
 		}
 		if ctx.Err() != nil {
-			return nil, fmt.Errorf("ffprobe %s: %w", path, ctx.Err())
+			return nil, fmt.Errorf("ffprobe %s: %w", f.Name(), ctx.Err())
 		}
-		return nil, fmt.Errorf("ffprobe %s: %w", path, err)
+		return nil, fmt.Errorf("ffprobe %s: %w", f.Name(), err)
 	}
 	if stdout.over {
-		return nil, fmt.Errorf("ffprobe %s: output exceeds %d bytes", path, probeOutputLimit)
+		return nil, fmt.Errorf("ffprobe %s: output exceeds %d bytes", f.Name(), probeOutputLimit)
 	}
-	return parseProbe(stdout.Bytes(), path)
-}
-
-func Probe(path string) (*Info, error) {
-	return ProbeContext(context.Background(), path)
+	return parseProbe(stdout.Bytes(), f.Name())
 }
 
 func parseProbe(out []byte, path string) (*Info, error) {

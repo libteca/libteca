@@ -107,7 +107,9 @@ func TestSessionStoppedWritesOnceAndClosesTranscode(t *testing.T) {
 	}
 	tc := transcode.New(dir)
 	sid := "ps-42"
-	_, getErr := tc.Get(sid, 1, filepath.Join(dir, "missing.mkv"), 0)
+	_, getErr := tc.Get(sid, 1, filepath.Join(dir, "missing.mkv"), 0, func() (*os.File, error) {
+		return os.Open(filepath.Join(dir, "missing.mkv"))
+	})
 	if getErr != nil {
 		if _, err := os.Stat(filepath.Join(dir, "transcode", sid)); !os.IsNotExist(err) {
 			t.Fatalf("failed session dir must be cleaned: %v", err)

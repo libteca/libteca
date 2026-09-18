@@ -69,7 +69,12 @@ func (a *API) editionThumbs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	itemID := "e" + strconv.FormatInt(ed.ID, 10)
-	m, err := a.trickplayer().Manifest(r.Context(), itemID, ed.Files[0].Path, thumbsWidth)
+	open, oerr := a.openEditionFile(ed)
+	if oerr != nil {
+		writeJSON(w, 404, map[string]string{"error": "not found"})
+		return
+	}
+	m, err := a.trickplayer().Manifest(r.Context(), itemID, open, thumbsWidth)
 	if errors.Is(err, trickplay.ErrNoFFmpeg) {
 		w.Header().Set("Retry-After", "120")
 		writeJSON(w, 503, map[string]string{"error": "ffmpeg unavailable"})
@@ -94,7 +99,12 @@ func (a *API) editionThumbTile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	itemID := "e" + strconv.FormatInt(ed.ID, 10)
-	path, err := a.trickplayer().Tile(r.Context(), itemID, ed.Files[0].Path, thumbsWidth, index)
+	open, oerr := a.openEditionFile(ed)
+	if oerr != nil {
+		writeJSON(w, 404, map[string]string{"error": "not found"})
+		return
+	}
+	path, err := a.trickplayer().Tile(r.Context(), itemID, open, thumbsWidth, index)
 	if errors.Is(err, trickplay.ErrNotFound) {
 		writeJSON(w, 404, map[string]string{"error": "not found"})
 		return
@@ -334,7 +344,12 @@ func (a *API) hlsFile(w http.ResponseWriter, r *http.Request) {
 		}
 		start = value
 	}
-	s, err := a.TC.Get(sid, ed.ID, ed.Files[0].Path, start)
+	open, oerr := a.openEditionFile(ed)
+	if oerr != nil {
+		writeJSON(w, 404, map[string]string{"error": "edition not found"})
+		return
+	}
+	s, err := a.TC.Get(sid, ed.ID, ed.Files[0].Path, start, open)
 	if err != nil {
 		if errors.Is(err, transcode.ErrSessionParams) {
 			w.Header().Set("Cache-Control", "no-store")

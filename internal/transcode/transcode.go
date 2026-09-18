@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/libteca/libteca/internal/procfd"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -46,10 +47,14 @@ type process interface {
 	kill()
 }
 
-type realProcess struct{ cmd *exec.Cmd }
+type realProcess struct {
+	cmd   *exec.Cmd
+	files []*os.File
+}
 
 func (p *realProcess) start() error {
 	p.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	p.cmd.ExtraFiles = p.files
 	return p.cmd.Start()
 }
 
@@ -75,7 +80,9 @@ type Session struct {
 
 	StartSecs       float64
 	accel           string
-	spawn           func(argv []string) process
+	spawn           func(argv []string, extra []*os.File) process
+	fdArgs          func(extra ...string) ([]string, error)
+	input           *os.File
 	proc            process
 	done            chan struct{}
 	exitErr         error
@@ -101,14 +108,18 @@ type Manager struct {
 	hwSet  string
 	hwMode string
 
-	spawn    func(argv []string) process
+	spawn    func(argv []string, extra []*os.File) process
+	fdArgs   func(extra ...string) ([]string, error)
 	probeRun func(argv []string) (string, error)
 }
 
 func New(dataDir string) *Manager {
 	m := &Manager{DataDir: dataDir, sessions: map[string]*Session{}, stop: make(chan struct{})}
-	m.spawn = func(argv []string) process {
-		return &realProcess{cmd: exec.Command("ffmpeg", argv...)}
+	m.spawn = func(argv []string, extra []*os.File) process {
+		return &realProcess{cmd: exec.Command("ffmpeg", argv...), files: extra}
+	}
+	m.fdArgs = func(extra ...string) ([]string, error) {
+		return procfd.Args("ffmpeg", extra...)
 	}
 	m.probeRun = func(argv []string) (string, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -140,7 +151,7 @@ func NewSessionID(prefix string, editionID int64) (string, error) {
 	return fmt.Sprintf("%s%d-%s", prefix, editionID, hex.EncodeToString(b[:])), nil
 }
 
-func (m *Manager) Get(sessionID string, edition int64, source string, startSecs float64) (*Session, error) {
+func (m *Manager) Get(sessionID string, edition int64, source string, startSecs float64, open func() (*os.File, error)) (*Session, error) {
 	// Session ids become directory names under DataDir/transcode via
 	// filepath.Join, which cleans ".." — an unvalidated id resolves outside
 	// its slot, and Session.kill() runs os.RemoveAll(s.Dir). Reject anything
@@ -174,6 +185,10 @@ func (m *Manager) Get(sessionID string, edition int64, source string, startSecs 
 	if len(m.sessions) >= MaxSessions {
 		return nil, ErrCapacity
 	}
+	input, err := open()
+	if err != nil {
+		return nil, err
+	}
 	dir := filepath.Join(m.DataDir, "transcode", sessionID)
 	os.MkdirAll(dir, 0o700)
 	s := &Session{
@@ -185,11 +200,14 @@ func (m *Manager) Get(sessionID string, edition int64, source string, startSecs 
 		StartSecs: startSecs,
 		accel:     m.accelMode(),
 		spawn:     m.spawn,
+		fdArgs:    m.fdArgs,
+		input:     input,
 	}
 	s.lastHit.Store(time.Now().UnixNano())
 	m.sessions[sessionID] = s
 	if err := s.start(startSecs); err != nil {
 		delete(m.sessions, sessionID)
+		s.releaseInput()
 		os.RemoveAll(dir)
 		return nil, err
 	}
@@ -218,16 +236,26 @@ func (s *Session) start(startSecs float64) error {
 }
 
 func (s *Session) launch(startSecs float64, accel string) error {
-	args := buildArgs(accel, s.Source, s.Dir, startSecs, DefaultVideoBitrate)
+	inArgs, err := s.fdArgs("file")
+	if err != nil {
+		return err
+	}
+	args := buildArgs(accel, inArgs, s.Dir, startSecs, DefaultVideoBitrate)
 	s.lifecycle.Lock()
 	defer s.lifecycle.Unlock()
 	s.mu.Lock()
 	closed := s.killed
+	input := s.input
 	s.mu.Unlock()
 	if closed {
 		return ErrClosed
 	}
-	p := s.spawn(args)
+	if input != nil {
+		if _, serr := input.Seek(0, 0); serr != nil {
+			return serr
+		}
+	}
+	p := s.spawn(args, []*os.File{input})
 	if err := p.start(); err != nil {
 		return err
 	}
@@ -300,11 +328,23 @@ func (s *Session) kill() {
 		case <-done:
 		case <-time.After(2 * time.Second):
 			slog.Warn("transcode exit pending; preserving output directory", "session", s.ID)
+			s.releaseInput()
 			return
 		}
 	}
+	s.releaseInput()
 	if err := os.RemoveAll(s.Dir); err != nil {
 		slog.Warn("transcode cleanup failed", "session", s.ID, "err", err)
+	}
+}
+
+func (s *Session) releaseInput() {
+	s.mu.Lock()
+	input := s.input
+	s.input = nil
+	s.mu.Unlock()
+	if input != nil {
+		input.Close()
 	}
 }
 

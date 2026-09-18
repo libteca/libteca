@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/libteca/libteca/internal/procfd"
 )
 
 const (
@@ -54,7 +56,8 @@ type Generator struct {
 	ffmpeg string
 	mu     sync.Mutex
 	gen    map[string]*generation
-	run    func(ctx context.Context, name string, args ...string) ([]byte, error)
+	run    func(ctx context.Context, name string, files []*os.File, args ...string) ([]byte, error)
+	fdArgs func(extra ...string) ([]string, error)
 }
 
 func New(dataDir string) *Generator {
@@ -62,11 +65,15 @@ func New(dataDir string) *Generator {
 	if _, err := exec.LookPath("ffmpeg"); err == nil {
 		ff = "ffmpeg"
 	}
-	return &Generator{dir: dataDir, ffmpeg: ff, gen: map[string]*generation{}, run: ffmpegRun}
+	return &Generator{dir: dataDir, ffmpeg: ff, gen: map[string]*generation{}, run: ffmpegRun, fdArgs: func(extra ...string) ([]string, error) {
+		return procfd.Args("ffmpeg", extra...)
+	}}
 }
 
-func ffmpegRun(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+func ffmpegRun(ctx context.Context, name string, files []*os.File, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.ExtraFiles = files
+	return cmd.CombinedOutput()
 }
 
 var reItemID = regexp.MustCompile(`^[A-Za-z0-9]+$`)
@@ -97,7 +104,9 @@ func (g *Generator) widthDir(itemID string, width int) string {
 // the full sheet set lazily. Concurrent callers for the same (itemID, width)
 // block until the winning generation finishes. Returns ErrNotFound when the
 // index is beyond the generated set, ErrNoFFmpeg when ffmpeg is absent.
-func (g *Generator) Tile(ctx context.Context, itemID, source string, width, index int) (string, error) {
+// open supplies the rooted input descriptor; the source pathname never
+// reaches ffmpeg (audit F03).
+func (g *Generator) Tile(ctx context.Context, itemID string, open func() (*os.File, error), width, index int) (string, error) {
 	if !reItemID.MatchString(itemID) {
 		return "", ErrBadItemID
 	}
@@ -114,7 +123,7 @@ func (g *Generator) Tile(ctx context.Context, itemID, source string, width, inde
 		}
 		return "", ErrNotFound
 	}
-	if err := g.ensure(ctx, itemID, source, width); err != nil {
+	if err := g.ensure(ctx, itemID, open, width); err != nil {
 		return "", err
 	}
 	if _, err := os.Stat(path); err != nil {
@@ -126,8 +135,8 @@ func (g *Generator) Tile(ctx context.Context, itemID, source string, width, inde
 // Manifest generates (lazily) and describes the tile set for (itemID, width).
 // Height is the per-frame pixel height derived from the first sheet's JPEG
 // dimensions; TileCount counts sheets on disk; Bandwidth is their total bytes.
-func (g *Generator) Manifest(ctx context.Context, itemID, source string, width int) (*Manifest, error) {
-	if _, err := g.Tile(ctx, itemID, source, width, 0); err != nil {
+func (g *Generator) Manifest(ctx context.Context, itemID string, open func() (*os.File, error), width int) (*Manifest, error) {
+	if _, err := g.Tile(ctx, itemID, open, width, 0); err != nil {
 		return nil, err
 	}
 	dir := g.widthDir(itemID, width)
@@ -156,7 +165,7 @@ func (g *Generator) Manifest(ctx context.Context, itemID, source string, width i
 	return m, nil
 }
 
-func (g *Generator) ensure(ctx context.Context, itemID, source string, width int) error {
+func (g *Generator) ensure(ctx context.Context, itemID string, open func() (*os.File, error), width int) error {
 	key := itemID + "/" + strconv.Itoa(width)
 	g.mu.Lock()
 	if call, ok := g.gen[key]; ok {
@@ -172,7 +181,7 @@ func (g *Generator) ensure(ctx context.Context, itemID, source string, width int
 	g.gen[key] = call
 	g.mu.Unlock()
 
-	call.err = g.generate(ctx, itemID, source, width)
+	call.err = g.generate(ctx, itemID, open, width)
 	close(call.done)
 
 	g.mu.Lock()
@@ -188,13 +197,22 @@ func (g *Generator) complete(itemID string, width int) bool {
 	return err == nil
 }
 
-func (g *Generator) generate(ctx context.Context, itemID, source string, width int) error {
+func (g *Generator) generate(ctx context.Context, itemID string, open func() (*os.File, error), width int) error {
 	if g.complete(itemID, width) {
 		return nil
 	}
 	if g.ffmpeg == "" {
 		return ErrNoFFmpeg
 	}
+	inArgs, err := g.fdArgs("file")
+	if err != nil {
+		return err
+	}
+	input, err := open()
+	if err != nil {
+		return err
+	}
+	defer input.Close()
 	select {
 	case generationSlots <- struct{}{}:
 		defer func() { <-generationSlots }()
@@ -208,13 +226,15 @@ func (g *Generator) generate(ctx context.Context, itemID, source string, width i
 	}
 	args := []string{
 		"-y", "-nostdin", "-v", "error",
-		"-i", source,
+	}
+	args = append(args, inArgs...)
+	args = append(args,
 		"-vf", fmt.Sprintf("fps=1/%d,scale=%d:-2,tile=%dx%d", Interval, width, TileCols, TileRows),
 		"-q:v", "4",
 		"-start_number", "0",
 		filepath.Join(dir, "%d.jpg"),
-	}
-	if out, err := g.run(ctx, g.ffmpeg, args...); err != nil {
+	)
+	if out, err := g.run(ctx, g.ffmpeg, []*os.File{input}, args...); err != nil {
 		os.RemoveAll(dir)
 		return fmt.Errorf("trickplay ffmpeg: %w: %s", err, out)
 	}

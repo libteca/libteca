@@ -39,18 +39,20 @@ func TestSessionParametersChangedOnReuse(t *testing.T) {
 	if err := m.SetHwAccel(AccelNone); err != nil {
 		t.Fatal(err)
 	}
+	stubFDArgs(m)
+	open := tempOpener(t)
 	lg := &spawnLog{procs: []*fakeProcess{newFake(-1)}}
 	m.spawn = lg.spawn
-	if _, err := m.Get("web-1-abc", 1, "/lib/a.mp4", 0); err != nil {
+	if _, err := m.Get("web-1-abc", 1, "/lib/a.mp4", 0, open); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.Get("web-1-abc", 1, "/lib/a.mp4", 30); err != ErrSessionParams {
+	if _, err := m.Get("web-1-abc", 1, "/lib/a.mp4", 30, open); err != ErrSessionParams {
 		t.Fatalf("seek with the same id = %v, want ErrSessionParams", err)
 	}
-	if _, err := m.Get("web-1-abc", 1, "/lib/b.mp4", 0); err != ErrSessionParams {
+	if _, err := m.Get("web-1-abc", 1, "/lib/b.mp4", 0, open); err != ErrSessionParams {
 		t.Fatalf("source change with the same id = %v, want ErrSessionParams", err)
 	}
-	if _, err := m.Get("web-1-abc", 1, "/lib/a.mp4", 0); err != nil {
+	if _, err := m.Get("web-1-abc", 1, "/lib/a.mp4", 0, open); err != nil {
 		t.Fatalf("identical reuse must keep working: %v", err)
 	}
 	m.CloseAll()

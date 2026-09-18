@@ -18,6 +18,7 @@ import (
 	"github.com/libteca/libteca/internal/auth"
 	"github.com/libteca/libteca/internal/meta"
 	"github.com/libteca/libteca/internal/podcast"
+	"github.com/libteca/libteca/internal/procfd"
 	"github.com/libteca/libteca/internal/scan"
 	"github.com/libteca/libteca/internal/server"
 	"github.com/libteca/libteca/internal/store"
@@ -105,6 +106,7 @@ func main() {
 	}
 	defer db.Close()
 	meta.SetKeyLookup(db.GetSetting)
+	procfd.Startup()
 
 	if *initAdmin != "" {
 		name, pass, ok := cut(*initAdmin, ':')

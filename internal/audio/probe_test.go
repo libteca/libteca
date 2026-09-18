@@ -1,7 +1,9 @@
 package audio
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -107,9 +109,23 @@ func installFakeFFProbe(t *testing.T, stdout string, exit int) {
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
+func probeTemp(t *testing.T, name string) (*Info, error) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	return ProbeFile(context.Background(), f)
+}
+
 func TestProbeM4BFixture(t *testing.T) {
 	installFakeFFProbe(t, fixtureM4B, 0)
-	info, err := Probe("book.m4b")
+	info, err := probeTemp(t, "book.m4b")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +171,7 @@ func TestProbeM4BFixture(t *testing.T) {
 
 func TestProbeStreamDurationAndNoCover(t *testing.T) {
 	installFakeFFProbe(t, fixtureStreamDuration, 0)
-	info, err := Probe("talk.mp3")
+	info, err := probeTemp(t, "talk.mp3")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,15 +204,48 @@ func TestProbeStreamDurationAndNoCover(t *testing.T) {
 
 func TestProbeFFProbeFailure(t *testing.T) {
 	installFakeFFProbe(t, "", 1)
-	if _, err := Probe("missing.m4b"); err == nil {
+	if _, err := probeTemp(t, "missing.m4b"); err == nil {
 		t.Fatal("want error when ffprobe exits non-zero")
 	}
 }
 
 func TestProbeBadJSON(t *testing.T) {
 	installFakeFFProbe(t, "not json", 0)
-	if _, err := Probe("x.m4b"); err == nil {
+	if _, err := probeTemp(t, "x.m4b"); err == nil {
 		t.Fatal("want error on malformed ffprobe json")
+	}
+}
+
+func TestProbeFileDescriptorIntegration(t *testing.T) {
+	if _, err := exec.LookPath("ffprobe"); err != nil {
+		t.Skip("ffprobe not installed")
+	}
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg not installed")
+	}
+	dir := t.TempDir()
+	src := filepath.Join(dir, "tone.wav")
+	if out, err := exec.Command("ffmpeg", "-y", "-v", "error", "-f", "lavfi",
+		"-i", "sine=frequency=440:duration=0.3", "-c:a", "pcm_s16le", src).CombinedOutput(); err != nil {
+		t.Skipf("could not generate tone: %v: %s", err, out)
+	}
+	f, err := os.Open(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	info, err := ProbeFile(context.Background(), f)
+	if err != nil {
+		t.Fatalf("probe over descriptor: %v", err)
+	}
+	if info.Duration < 0.2 || info.Duration > 0.5 {
+		t.Fatalf("duration = %v, want ~0.3s", info.Duration)
+	}
+	if info.Codec != "pcm_s16le" || info.SampleRate == 0 || info.Channels != 1 {
+		t.Fatalf("stream info = %+v", info)
+	}
+	if info.Container != "wav" {
+		t.Fatalf("container = %q, want wav", info.Container)
 	}
 }
 

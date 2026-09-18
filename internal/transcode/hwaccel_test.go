@@ -3,6 +3,7 @@ package transcode
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -21,8 +22,8 @@ func setFallbackWindow(t *testing.T, d time.Duration) {
 func has(args []string, v string) bool { return slices.Contains(args, v) }
 
 func TestBuildArgsGolden(t *testing.T) {
-	const src = "/media/x.mp4"
 	const dir = "/data/transcode/s1"
+	fdIn := []string{"-protocol_whitelist", "fd,file", "-fd", "3", "-i", "fd:"}
 	tail := []string{
 		"-c:a", "aac", "-b:a", "192k", "-ac", "2",
 		"-muxdelay", "0",
@@ -48,27 +49,27 @@ func TestBuildArgsGolden(t *testing.T) {
 		expect []string
 	}{
 		{"software", AccelNone, 0, concat(
-			[]string{"-y", "-v", "quiet", "-i", src, "-map", "0:v:0?", "-map", "0:a:0?"},
+			[]string{"-y", "-v", "quiet"}, fdIn, []string{"-map", "0:v:0?", "-map", "0:a:0?"},
 			[]string{"-c:v", "libx264", "-preset", "veryfast", "-crf", "21"}, tail)},
 		{"software-seek", AccelNone, 12.34, concat(
-			[]string{"-y", "-v", "quiet", "-ss", "12.34", "-i", src, "-map", "0:v:0?", "-map", "0:a:0?"},
+			[]string{"-y", "-v", "quiet", "-ss", "12.34"}, fdIn, []string{"-map", "0:v:0?", "-map", "0:a:0?"},
 			[]string{"-c:v", "libx264", "-preset", "veryfast", "-crf", "21"}, tail)},
 		{"videotoolbox", AccelVideoToolbox, 0, concat(
-			[]string{"-y", "-v", "quiet", "-i", src, "-map", "0:v:0?", "-map", "0:a:0?"},
+			[]string{"-y", "-v", "quiet"}, fdIn, []string{"-map", "0:v:0?", "-map", "0:a:0?"},
 			[]string{"-c:v", "h264_videotoolbox", "-allow_sw", "1", "-realtime", "1", "-b:v", "6M"}, tail)},
 		{"vaapi", AccelVAAPI, 0, concat(
-			[]string{"-y", "-v", "quiet", "-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi", "-vaapi_device", "/dev/dri/renderD128", "-i", src, "-map", "0:v:0?", "-map", "0:a:0?"},
+			[]string{"-y", "-v", "quiet", "-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi", "-vaapi_device", "/dev/dri/renderD128"}, fdIn, []string{"-map", "0:v:0?", "-map", "0:a:0?"},
 			[]string{"-vf", "format=nv12,hwupload", "-c:v", "h264_vaapi"}, tail)},
 		{"nvenc", AccelNVENC, 0, concat(
-			[]string{"-y", "-v", "quiet", "-i", src, "-map", "0:v:0?", "-map", "0:a:0?"},
+			[]string{"-y", "-v", "quiet"}, fdIn, []string{"-map", "0:v:0?", "-map", "0:a:0?"},
 			[]string{"-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-b:v", "6M"}, tail)},
 		{"qsv", AccelQSV, 0, concat(
-			[]string{"-y", "-v", "quiet", "-hwaccel", "qsv", "-i", src, "-map", "0:v:0?", "-map", "0:a:0?"},
+			[]string{"-y", "-v", "quiet", "-hwaccel", "qsv"}, fdIn, []string{"-map", "0:v:0?", "-map", "0:a:0?"},
 			[]string{"-c:v", "h264_qsv"}, tail)},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := buildArgs(c.accel, src, dir, c.seek, "")
+			got := buildArgs(c.accel, fdIn, dir, c.seek, "")
 			if !reflect.DeepEqual(got, c.expect) {
 				t.Fatalf("args mismatch:\n got  %v\n want %v", got, c.expect)
 			}
@@ -78,7 +79,7 @@ func TestBuildArgsGolden(t *testing.T) {
 
 func TestBuildArgsBitrateOverride(t *testing.T) {
 	for _, accel := range []string{AccelVideoToolbox, AccelNVENC} {
-		args := buildArgs(accel, "/s.mp4", "/d", 0, "3M")
+		args := buildArgs(accel, []string{"-i", "fd:3"}, "/d", 0, "3M")
 		if !has(args, "3M") || has(args, "6M") {
 			t.Fatalf("%s: want override 3M without default, got %v", accel, args)
 		}
@@ -258,7 +259,7 @@ type spawnLog struct {
 	procs []*fakeProcess
 }
 
-func (l *spawnLog) spawn(argv []string) process {
+func (l *spawnLog) spawn(argv []string, extra []*os.File) process {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	i := len(l.calls)
@@ -319,8 +320,10 @@ func TestFallbackNotOnCleanExit(t *testing.T) {
 		t.Fatal(err)
 	}
 	lg := &spawnLog{procs: []*fakeProcess{newCleanFake(40 * time.Millisecond), newFake(-1)}}
+	stubFDArgs(m)
+	open := tempOpener(t)
 	m.spawn = lg.spawn
-	s, err := m.Get("clean", 1, "/src.mp4", 0)
+	s, err := m.Get("clean", 1, "/src.mp4", 0, open)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,8 +356,10 @@ func TestFallbackRetriesSoftware(t *testing.T) {
 		t.Fatal(err)
 	}
 	lg := &spawnLog{procs: []*fakeProcess{newFake(40 * time.Millisecond), newFake(-1)}}
+	stubFDArgs(m)
+	open := tempOpener(t)
 	m.spawn = lg.spawn
-	s, err := m.Get("fb", 1, "/src.mp4", 0)
+	s, err := m.Get("fb", 1, "/src.mp4", 0, open)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -390,8 +395,10 @@ func TestFallbackNotAfterWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	lg := &spawnLog{procs: []*fakeProcess{newFake(400 * time.Millisecond)}}
+	stubFDArgs(m)
+	open := tempOpener(t)
 	m.spawn = lg.spawn
-	s, err := m.Get("late", 1, "/src.mp4", 0)
+	s, err := m.Get("late", 1, "/src.mp4", 0, open)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -418,8 +425,10 @@ func TestKilledSessionNoFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	lg := &spawnLog{procs: []*fakeProcess{newFake(-1), newFake(-1)}}
+	stubFDArgs(m)
+	open := tempOpener(t)
 	m.spawn = lg.spawn
-	s, err := m.Get("k", 1, "/src.mp4", 0)
+	s, err := m.Get("k", 1, "/src.mp4", 0, open)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -439,8 +448,10 @@ func TestSoftwareModeNoWatcher(t *testing.T) {
 		t.Fatal(err)
 	}
 	lg := &spawnLog{procs: []*fakeProcess{newFake(30 * time.Millisecond), newFake(-1)}}
+	stubFDArgs(m)
+	open := tempOpener(t)
 	m.spawn = lg.spawn
-	s, err := m.Get("sw", 1, "/src.mp4", 0)
+	s, err := m.Get("sw", 1, "/src.mp4", 0, open)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -461,8 +472,10 @@ func TestPrebufferHeldThroughFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	lg := &spawnLog{procs: []*fakeProcess{newFake(60 * time.Millisecond), newFake(-1)}}
+	stubFDArgs(m)
+	open := tempOpener(t)
 	m.spawn = lg.spawn
-	s, err := m.Get("pb", 1, "/src.mp4", 0)
+	s, err := m.Get("pb", 1, "/src.mp4", 0, open)
 	if err != nil {
 		t.Fatal(err)
 	}

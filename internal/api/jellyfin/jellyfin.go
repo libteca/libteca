@@ -1071,6 +1071,21 @@ func (a *API) serveEditionFile(w http.ResponseWriter, r *http.Request, ed *store
 	http.ServeContent(w, r, filepath.Base(ed.Files[0].Path), fi.ModTime(), f)
 }
 
+// openEditionFile yields the descriptor opener processor paths use instead
+// of a pathname, resolved through an os.Root pinned to the edition's
+// library (audit F03).
+func (a *API) openEditionFile(ed *store.EditionView) (func() (*os.File, error), error) {
+	if len(ed.Files) == 0 {
+		return nil, store.ErrNotFound
+	}
+	root, err := a.DB.LibraryRootForEdition(ed.ID)
+	if err != nil {
+		return nil, err
+	}
+	path := ed.Files[0].Path
+	return func() (*os.File, error) { return mediafs.Open(root, path) }, nil
+}
+
 func (a *API) hlsMaster(w http.ResponseWriter, r *http.Request) {
 	ed, err := a.resolvePlayable(r.PathValue("id"))
 	if err != nil {
@@ -1115,14 +1130,19 @@ func (a *API) hlsMaster(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "transcode unavailable", 503)
 		return
 	}
-	s, err := a.TC.Get(sessionID, ed.ID, ed.Files[0].Path, start)
+	open, oerr := a.openEditionFile(ed)
+	if oerr != nil {
+		http.Error(w, "not found", 404)
+		return
+	}
+	s, err := a.TC.Get(sessionID, ed.ID, ed.Files[0].Path, start, open)
 	if errors.Is(err, transcode.ErrSessionParams) {
 		sessionID, err = freshSession()
 		if err != nil {
 			http.Error(w, "session creation failed", 500)
 			return
 		}
-		s, err = a.TC.Get(sessionID, ed.ID, ed.Files[0].Path, start)
+		s, err = a.TC.Get(sessionID, ed.ID, ed.Files[0].Path, start, open)
 	}
 	if err != nil {
 		if errors.Is(err, transcode.ErrCapacity) {
@@ -1364,7 +1384,12 @@ func (a *API) trickplayTile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	itemID := "e" + strconv.FormatInt(ed.ID, 10)
-	path, err := a.trickplayer().Tile(r.Context(), itemID, ed.Files[0].Path, width, index)
+	open, oerr := a.openEditionFile(ed)
+	if oerr != nil {
+		http.Error(w, "not found", 404)
+		return
+	}
+	path, err := a.trickplayer().Tile(r.Context(), itemID, open, width, index)
 	if errors.Is(err, trickplay.ErrNotFound) {
 		http.Error(w, "not found", 404)
 		return
@@ -1410,7 +1435,12 @@ func (a *API) trickplayManifest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	itemID := "e" + strconv.FormatInt(ed.ID, 10)
-	m, err := a.trickplayer().Manifest(r.Context(), itemID, ed.Files[0].Path, width)
+	open, oerr := a.openEditionFile(ed)
+	if oerr != nil {
+		http.Error(w, "not found", 404)
+		return
+	}
+	m, err := a.trickplayer().Manifest(r.Context(), itemID, open, width)
 	if errors.Is(err, trickplay.ErrNoFFmpeg) {
 		w.Header().Set("Retry-After", "120")
 		http.Error(w, "ffmpeg unavailable", 503)

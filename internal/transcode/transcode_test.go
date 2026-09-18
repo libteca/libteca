@@ -21,6 +21,26 @@ func writeFile(t *testing.T, path, contents string) {
 	}
 }
 
+func stubFDArgs(m *Manager) {
+	m.fdArgs = func(extra ...string) ([]string, error) {
+		return []string{"-protocol_whitelist", "fd", "-i", "fd:3"}, nil
+	}
+}
+
+func fileOpener(t *testing.T, path string) func() (*os.File, error) {
+	t.Helper()
+	return func() (*os.File, error) { return os.Open(path) }
+}
+
+func tempOpener(t *testing.T) func() (*os.File, error) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "src")
+	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return fileOpener(t, path)
+}
+
 func TestPrebufferSatisfiedImmediately(t *testing.T) {
 	s := &Session{ID: "x", Dir: t.TempDir()}
 	writeFile(t, filepath.Join(s.Dir, "seg00000.ts"), "x")
@@ -143,9 +163,10 @@ var errStartFail = os.ErrInvalid
 
 func TestGetRejectsTraversalSessionIDs(t *testing.T) {
 	m := New(t.TempDir())
-	m.spawn = func([]string) process { return startFailProcess{} }
+	stubFDArgs(m)
+	m.spawn = func([]string, []*os.File) process { return startFailProcess{} }
 	for _, sid := range []string{"..", ".", "", "x/../../y", "a/b", `a\b`} {
-		if _, err := m.Get(sid, 1, "src", 0); err == nil {
+		if _, err := m.Get(sid, 1, "src", 0, tempOpener(t)); err == nil {
 			t.Fatalf("Get(%q) must reject unsafe session ids", sid)
 		}
 	}
@@ -159,9 +180,10 @@ func TestGetRejectsTraversalSessionIDs(t *testing.T) {
 
 func TestGetStartFailureCleansSession(t *testing.T) {
 	m := New(t.TempDir())
+	stubFDArgs(m)
 	m.probeRun = func([]string) (string, error) { return "", errStartFail }
-	m.spawn = func([]string) process { return startFailProcess{} }
-	if _, err := m.Get("boom", 1, "src", 0); err == nil {
+	m.spawn = func([]string, []*os.File) process { return startFailProcess{} }
+	if _, err := m.Get("boom", 1, "src", 0, tempOpener(t)); err == nil {
 		t.Fatal("Get must fail when ffmpeg cannot start")
 	}
 	if _, err := os.Stat(filepath.Join(m.DataDir, "transcode", "boom")); !os.IsNotExist(err) {
@@ -195,9 +217,11 @@ func (p *sleepProcess) kill() {
 
 func TestMaxSessionsEvictsOldest(t *testing.T) {
 	m := New(t.TempDir())
+	stubFDArgs(m)
+	open := tempOpener(t)
 	m.probeRun = func([]string) (string, error) { return "", errStartFail }
 	procs := map[string]*sleepProcess{}
-	m.spawn = func(argv []string) process {
+	m.spawn = func(argv []string, extra []*os.File) process {
 		p := newSleepProcess()
 		procs[filepath.Base(filepath.Dir(argv[len(argv)-1]))] = p
 		return p
@@ -208,14 +232,14 @@ func TestMaxSessionsEvictsOldest(t *testing.T) {
 		if i == 0 {
 			first = id
 		}
-		if _, err := m.Get(id, int64(i+1), "src", 0); err != nil {
+		if _, err := m.Get(id, int64(i+1), "src", 0, open); err != nil {
 			t.Fatalf("Get(%s): %v", id, err)
 		}
 	}
 	m.mu.Lock()
 	m.sessions[first].lastHit.Store(time.Now().Add(-time.Hour).UnixNano())
 	m.mu.Unlock()
-	if _, err := m.Get("overflow", 99, "src", 0); err != nil {
+	if _, err := m.Get("overflow", 99, "src", 0, open); err != nil {
 		t.Fatalf("Get(overflow): %v", err)
 	}
 	m.mu.Lock()
@@ -238,15 +262,17 @@ func TestMaxSessionsEvictsOldest(t *testing.T) {
 
 func TestMaxSessionsRejectsWhenAllActive(t *testing.T) {
 	m := New(t.TempDir())
+	stubFDArgs(m)
+	open := tempOpener(t)
 	m.probeRun = func([]string) (string, error) { return "", errStartFail }
-	m.spawn = func([]string) process { return newSleepProcess() }
+	m.spawn = func([]string, []*os.File) process { return newSleepProcess() }
 	defer m.CloseAll()
 	for i := 0; i < MaxSessions; i++ {
-		if _, err := m.Get(fmt.Sprintf("s%d", i), int64(i+1), "src", 0); err != nil {
+		if _, err := m.Get(fmt.Sprintf("s%d", i), int64(i+1), "src", 0, open); err != nil {
 			t.Fatalf("Get(s%d): %v", i, err)
 		}
 	}
-	if _, err := m.Get("ninth", 99, "src", 0); err != ErrCapacity {
+	if _, err := m.Get("ninth", 99, "src", 0, open); err != ErrCapacity {
 		t.Fatalf("Get at capacity = %v, want ErrCapacity", err)
 	}
 	m.mu.Lock()
@@ -260,14 +286,16 @@ func TestMaxSessionsRejectsWhenAllActive(t *testing.T) {
 func TestGetAfterCloseAll(t *testing.T) {
 	data := t.TempDir()
 	m := New(data)
+	stubFDArgs(m)
+	open := tempOpener(t)
 	m.probeRun = func([]string) (string, error) { return "", errStartFail }
-	m.spawn = func([]string) process { return newSleepProcess() }
-	if _, err := m.Get("live", 1, "src", 0); err != nil {
+	m.spawn = func([]string, []*os.File) process { return newSleepProcess() }
+	if _, err := m.Get("live", 1, "src", 0, open); err != nil {
 		t.Fatal(err)
 	}
 	m.CloseAll()
 	m.CloseAll()
-	if _, err := m.Get("after", 2, "src", 0); err != ErrClosed {
+	if _, err := m.Get("after", 2, "src", 0, open); err != ErrClosed {
 		t.Fatalf("Get after CloseAll = %v, want ErrClosed", err)
 	}
 	if _, err := os.Stat(filepath.Join(data, "transcode", "after")); !os.IsNotExist(err) {
@@ -277,11 +305,13 @@ func TestGetAfterCloseAll(t *testing.T) {
 
 func TestSessionLastHitConcurrentAccess(t *testing.T) {
 	m := New(t.TempDir())
+	stubFDArgs(m)
+	open := tempOpener(t)
 	m.probeRun = func([]string) (string, error) { return "", errStartFail }
-	m.spawn = func([]string) process { return newSleepProcess() }
+	m.spawn = func([]string, []*os.File) process { return newSleepProcess() }
 	defer m.CloseAll()
 	for i := 0; i < MaxSessions; i++ {
-		if _, err := m.Get(fmt.Sprintf("s%d", i), int64(i+1), "src", 0); err != nil {
+		if _, err := m.Get(fmt.Sprintf("s%d", i), int64(i+1), "src", 0, open); err != nil {
 			t.Fatalf("Get(s%d): %v", i, err)
 		}
 	}
@@ -293,7 +323,7 @@ func TestSessionLastHitConcurrentAccess(t *testing.T) {
 			for i := 0; i < 200; i++ {
 				id := fmt.Sprintf("s%d", i%MaxSessions)
 				m.TouchSession(id)
-				if _, err := m.Get(id, int64(i%MaxSessions+1), "src", 0); err != nil {
+				if _, err := m.Get(id, int64(i%MaxSessions+1), "src", 0, open); err != nil {
 					t.Errorf("Get(%s): %v", id, err)
 					return
 				}
@@ -315,7 +345,7 @@ func TestPrebufferIntegrationFFmpeg(t *testing.T) {
 	}
 	m := New(t.TempDir())
 	defer m.Close("itest")
-	s, err := m.Get("itest", 1, src, 0)
+	s, err := m.Get("itest", 1, src, 0, fileOpener(t, src))
 	if err != nil {
 		t.Skipf("ffmpeg failed to start: %v", err)
 	}

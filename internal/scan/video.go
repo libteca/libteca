@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/libteca/libteca/internal/audio"
+	"github.com/libteca/libteca/internal/mediafs"
 	"github.com/libteca/libteca/internal/store"
 )
 
@@ -45,16 +46,22 @@ type vidFile struct {
 	hash      string
 }
 
-func (v *vidFile) probe(ctx context.Context) error {
-	info, err := audio.ProbeContext(ctx, v.path)
+func (v *vidFile) probe(ctx context.Context, root string) error {
+	f, err := mediafs.Open(root, v.path)
 	if err != nil {
 		return err
 	}
+	defer f.Close()
+	info, err := audio.ProbeFile(ctx, f)
+	if err != nil {
+		return err
+	}
+	f.Seek(0, 0)
 	v.duration = info.Duration
 	v.bitrate = info.Bitrate
 	v.container = info.Container
 	v.codec = info.Codec
-	v.vcodec, v.width, v.height = probeVideo(v.path)
+	v.vcodec, v.width, v.height = probeVideoFile(f)
 	v.hash = hashFile(v.path, v.size)
 	return nil
 }
@@ -148,7 +155,7 @@ func scanVideoLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 			title, year := titleYear(filepath.Base(top))
 			authorPtr := nullable(year)
 			if id, ok := db.FindWorkID(lib.ID, title, &authorPtr); ok {
-				if err := ensureCoverVideo(ctx, db, id, top, group[0].path, coversDir); err != nil {
+				if err := ensureCoverVideo(ctx, db, abs, id, top, group[0].path, coversDir); err != nil {
 					return count, err
 				}
 			}
@@ -182,7 +189,7 @@ func scanVideoLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 			if skip[i] {
 				continue
 			}
-			if err := f.probe(ctx); err != nil {
+			if err := f.probe(ctx, abs); err != nil {
 				if cerr := ctx.Err(); cerr != nil {
 					return count, cerr
 				}
@@ -252,14 +259,14 @@ func scanVideoLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 		if err != nil {
 			return count, err
 		}
-		if err := ensureCoverVideo(ctx, db, workID, top, group[0].path, coversDir); err != nil {
+		if err := ensureCoverVideo(ctx, db, abs, workID, top, group[0].path, coversDir); err != nil {
 			return count, err
 		}
 	}
 	return count, errors.Join(itemErrors...)
 }
 
-func ensureCoverVideo(ctx context.Context, db *store.DB, workID int64, top, mediaPath, coversDir string) error {
+func ensureCoverVideo(ctx context.Context, db *store.DB, root string, workID int64, top, mediaPath, coversDir string) error {
 	ok, err := importSidecarPoster(db, workID, top, coversDir, findWorkNFO(top) != "")
 	if err != nil || ok {
 		if err == nil {
@@ -275,8 +282,13 @@ func ensureCoverVideo(ctx context.Context, db *store.DB, workID int64, top, medi
 		return err
 	}
 	dst := filepath.Join(coversDir, fmt.Sprintf("%d.jpg", workID))
-	if cmd := extractCmd(ctx, mediaPath, dst); cmd != nil && cmd.Run() == nil {
-		_ = db.SetWorkCover(workID, fmt.Sprintf("%d.jpg", workID))
+	if src, oerr := mediafs.Open(root, mediaPath); oerr == nil {
+		cmd := extractCmd(ctx, src, dst)
+		ran := cmd != nil && cmd.Run() == nil
+		src.Close()
+		if ran {
+			_ = db.SetWorkCover(workID, fmt.Sprintf("%d.jpg", workID))
+		}
 	}
 	importFanart(workID, top, mediaPath, coversDir)
 	return nil
@@ -426,7 +438,7 @@ func scanMusicLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 			}
 			artistPtr := nullable(artist)
 			if id, ok := db.FindWorkID(lib.ID, title, &artistPtr); ok {
-				if err := ensureCoverVideo(ctx, db, id, top, group[0].path, coversDir); err != nil {
+				if err := ensureCoverVideo(ctx, db, abs, id, top, group[0].path, coversDir); err != nil {
 					return count, err
 				}
 			}
@@ -452,7 +464,16 @@ func scanMusicLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 			if skip[i] {
 				continue
 			}
-			info, err := audio.ProbeContext(ctx, t.path)
+			tf, oerr := mediafs.Open(abs, t.path)
+			if oerr != nil {
+				if cerr := ctx.Err(); cerr != nil {
+					return count, cerr
+				}
+				itemErrors = append(itemErrors, fmt.Errorf("probe %s: %w", t.path, oerr))
+				continue
+			}
+			info, err := audio.ProbeFile(ctx, tf)
+			tf.Close()
 			if err != nil {
 				if cerr := ctx.Err(); cerr != nil {
 					return count, cerr
@@ -518,7 +539,7 @@ func scanMusicLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 		if err != nil {
 			return count, err
 		}
-		if err := ensureCoverVideo(ctx, db, workID, top, group[0].path, coversDir); err != nil {
+		if err := ensureCoverVideo(ctx, db, abs, workID, top, group[0].path, coversDir); err != nil {
 			return count, err
 		}
 	}

@@ -18,6 +18,7 @@ import (
 
 	"github.com/libteca/libteca/internal/auth"
 	"github.com/libteca/libteca/internal/mediafs"
+	"github.com/libteca/libteca/internal/procfd"
 	"github.com/libteca/libteca/internal/store"
 )
 
@@ -25,8 +26,10 @@ var srtStamp = regexp.MustCompile(`(\d{1,2}:\d{2}:\d{2}),(\d{1,3})`)
 
 var (
 	ffmpegLookPath = exec.LookPath
-	ffmpegRun      = func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		return exec.CommandContext(ctx, name, args...).Output()
+	ffmpegRun      = func(ctx context.Context, name string, files []*os.File, args ...string) ([]byte, error) {
+		cmd := exec.CommandContext(ctx, name, args...)
+		cmd.ExtraFiles = files
+		return cmd.Output()
 	}
 	errSubtitleBusy = errors.New("subtitle extraction capacity exhausted")
 )
@@ -176,13 +179,19 @@ func writeCacheAtomic(dst string, data []byte) error {
 	return nil
 }
 
-func extractEmbedded(ctx context.Context, src string) ([]byte, error) {
+func extractEmbedded(ctx context.Context, src *os.File) ([]byte, error) {
 	if _, err := ffmpegLookPath("ffmpeg"); err != nil {
+		return nil, err
+	}
+	inArgs, err := procfd.Args("ffmpeg", "pipe")
+	if err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	return ffmpegRun(ctx, "ffmpeg", "-i", src, "-map", "0:s:0", "-f", "webvtt", "-")
+	args := append([]string{"-v", "error"}, inArgs...)
+	args = append(args, "-map", "0:s:0", "-f", "webvtt", "-")
+	return ffmpegRun(ctx, "ffmpeg", []*os.File{src}, args...)
 }
 
 func (a *API) embeddedVTT(ctx context.Context, f *store.FileRec) ([]byte, error) {
@@ -201,7 +210,18 @@ func (a *API) embeddedVTT(ctx context.Context, f *store.FileRec) ([]byte, error)
 	default:
 		return nil, errSubtitleBusy
 	}
-	data, err := extractEmbedded(ctx, f.Path)
+	data, err := func() ([]byte, error) {
+		root, rerr := a.confinedRoot(f.EditionID)
+		if rerr != nil {
+			return nil, rerr
+		}
+		src, oerr := mediafs.Open(root, f.Path)
+		if oerr != nil {
+			return nil, oerr
+		}
+		defer src.Close()
+		return extractEmbedded(ctx, src)
+	}()
 	if err != nil {
 		return nil, err
 	}

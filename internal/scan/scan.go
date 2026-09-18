@@ -13,6 +13,7 @@ import (
 	"github.com/cespare/xxhash/v2"
 
 	"github.com/libteca/libteca/internal/audio"
+	"github.com/libteca/libteca/internal/mediafs"
 	"github.com/libteca/libteca/internal/natural"
 	"github.com/libteca/libteca/internal/store"
 )
@@ -192,7 +193,7 @@ func scanAudioLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 		}
 		group := groups[top]
 		sort.Slice(group, func(i, j int) bool { return natLess(relPath(top, group[i].path), relPath(top, group[j].path)) })
-		if err := scanBook(ctx, db, lib, top, group, coversDir, tr); err != nil {
+		if err := scanBook(ctx, db, lib, abs, top, group, coversDir, tr); err != nil {
 			if cerr := ctx.Err(); cerr != nil {
 				return count, cerr
 			}
@@ -204,7 +205,7 @@ func scanAudioLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 	return count, errors.Join(itemErrors...)
 }
 
-func scanBook(ctx context.Context, db *store.DB, lib *store.Library, top string, group []bookFile, coversDir string, tr *tracker) error {
+func scanBook(ctx context.Context, db *store.DB, lib *store.Library, root, top string, group []bookFile, coversDir string, tr *tracker) error {
 	unchanged := true
 	for _, f := range group {
 		if !fileUnchanged(db, f.path, f.size, f.mtime, f.mtimeNs) {
@@ -216,7 +217,7 @@ func scanBook(ctx context.Context, db *store.DB, lib *store.Library, top string,
 		title, author := titleAuthor(top, bookFile{})
 		authorPtr := nullable(author)
 		if id, ok := db.FindWorkID(lib.ID, title, &authorPtr); ok {
-			if err := ensureCover(ctx, db, id, top, group, coversDir); err != nil {
+			if err := ensureCover(ctx, db, root, id, top, group, coversDir); err != nil {
 				return err
 			}
 		}
@@ -233,9 +234,14 @@ func scanBook(ctx context.Context, db *store.DB, lib *store.Library, top string,
 
 	for i := range group {
 		f := &group[i]
-		probe, err := audio.ProbeContext(ctx, f.path)
+		pf, err := mediafs.Open(root, f.path)
 		if err != nil {
 			return err
+		}
+		probe, perr := audio.ProbeFile(ctx, pf)
+		pf.Close()
+		if perr != nil {
+			return perr
 		}
 		f.info = probe
 		f.hash = hashFile(f.path, f.size)
@@ -330,10 +336,10 @@ func scanBook(ctx context.Context, db *store.DB, lib *store.Library, top string,
 		return txErr
 	}
 
-	return ensureCover(ctx, db, workID, top, group, coversDir)
+	return ensureCover(ctx, db, root, workID, top, group, coversDir)
 }
 
-func ensureCover(ctx context.Context, db *store.DB, workID int64, top string, group []bookFile, coversDir string) error {
+func ensureCover(ctx context.Context, db *store.DB, root string, workID int64, top string, group []bookFile, coversDir string) error {
 	ok, err := importSidecarPoster(db, workID, top, coversDir, findWorkNFO(top) != "")
 	if err != nil || ok {
 		return err
@@ -341,8 +347,14 @@ func ensureCover(ctx context.Context, db *store.DB, workID int64, top string, gr
 	dst := filepath.Join(coversDir, fmt.Sprintf("%d.jpg", workID))
 	for _, f := range group {
 		if f.info != nil && f.info.HasVideo {
-			cmd := extractCmd(ctx, f.path, dst)
-			if cmd != nil && cmd.Run() == nil {
+			src, oerr := mediafs.Open(root, f.path)
+			if oerr != nil {
+				continue
+			}
+			cmd := extractCmd(ctx, src, dst)
+			ran := cmd != nil && cmd.Run() == nil
+			src.Close()
+			if ran {
 				return db.SetWorkCover(workID, fmt.Sprintf("%d.jpg", workID))
 			}
 		}

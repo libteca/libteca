@@ -36,9 +36,10 @@ func (p *trackingProcess) kill() {
 func TestKillAfterStartAlwaysReaps(t *testing.T) {
 	m := New(t.TempDir())
 	m.probeRun = func([]string) (string, error) { return "", errStartFail }
+	stubFDArgs(m)
 	tp := &trackingProcess{releaseWait: make(chan struct{})}
-	m.spawn = func([]string) process { return tp }
-	if _, err := m.Get("k", 1, "src", 0); err != nil {
+	m.spawn = func([]string, []*os.File) process { return tp }
+	if _, err := m.Get("k", 1, "src", 0, tempOpener(t)); err != nil {
 		t.Fatal(err)
 	}
 	m.Close("k")
@@ -64,9 +65,10 @@ func TestKillAfterStartAlwaysReaps(t *testing.T) {
 func TestLaunchAfterKillRefused(t *testing.T) {
 	m := New(t.TempDir())
 	m.probeRun = func([]string) (string, error) { return "", errStartFail }
+	stubFDArgs(m)
 	tp := &trackingProcess{releaseWait: make(chan struct{})}
-	m.spawn = func([]string) process { return tp }
-	if _, err := m.Get("k2", 1, "src", 0); err != nil {
+	m.spawn = func([]string, []*os.File) process { return tp }
+	if _, err := m.Get("k2", 1, "src", 0, tempOpener(t)); err != nil {
 		t.Fatal(err)
 	}
 	s := m.sessions["k2"]

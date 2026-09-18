@@ -117,8 +117,10 @@ func accelAvailable(accel string, p hwProbe) bool {
 }
 
 // buildArgs assembles the ffmpeg HLS command for an accel mode. Audio and
-// HLS sections are identical across modes.
-func buildArgs(accel, source, dir string, startSecs float64, bitrate string) []string {
+// HLS sections are identical across modes. The input arrives as an already
+// opened, rooted descriptor (audit F03): inArgs is the protocol-whitelisted
+// fd fragment and the source pathname never reaches the child.
+func buildArgs(accel string, inArgs []string, dir string, startSecs float64, bitrate string) []string {
 	if bitrate == "" {
 		bitrate = DefaultVideoBitrate
 	}
@@ -132,7 +134,8 @@ func buildArgs(accel, source, dir string, startSecs float64, bitrate string) []s
 	case AccelQSV:
 		args = append(args, "-hwaccel", "qsv")
 	}
-	args = append(args, "-i", source, "-map", "0:v:0?", "-map", "0:a:0?")
+	args = append(args, inArgs...)
+	args = append(args, "-map", "0:v:0?", "-map", "0:a:0?")
 	switch accel {
 	case AccelVideoToolbox:
 		args = append(args, "-c:v", "h264_videotoolbox", "-allow_sw", "1", "-realtime", "1", "-b:v", bitrate)

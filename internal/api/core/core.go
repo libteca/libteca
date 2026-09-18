@@ -1084,6 +1084,21 @@ func (a *API) confinedRoot(editionID int64) (string, error) {
 	return a.DB.LibraryRootForEdition(editionID)
 }
 
+// openEditionFile yields the opener every processor path uses instead of a
+// pathname: the file is resolved through an os.Root pinned to the edition's
+// library, so ffmpeg/ffprobe children only ever see the descriptor (audit F03).
+func (a *API) openEditionFile(ed *store.EditionView) (func() (*os.File, error), error) {
+	if len(ed.Files) == 0 {
+		return nil, store.ErrNotFound
+	}
+	root, err := a.confinedRoot(ed.ID)
+	if err != nil {
+		return nil, err
+	}
+	path := ed.Files[0].Path
+	return func() (*os.File, error) { return mediafs.Open(root, path) }, nil
+}
+
 func serveConfined(w http.ResponseWriter, r *http.Request, root, path string) {
 	f, fi, err := mediafs.OpenWithin(root, path)
 	if err != nil {
