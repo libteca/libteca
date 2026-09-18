@@ -1,7 +1,9 @@
 package store
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"strconv"
 )
@@ -15,6 +17,14 @@ type Token struct {
 	CreatedAt  int64
 	LastSeenAt *int64
 	RevokedAt  *int64
+}
+
+// TokenDigest is the only form of a token value that is ever stored: rows
+// hold sha256(value), every lookup and revocation hashes the presented
+// value and compares against the digest (audit F09).
+func TokenDigest(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
 }
 
 func (d *DB) CreateUser(name, passwordHash string, isAdmin bool) (int64, error) {
@@ -79,7 +89,7 @@ func (d *DB) RevokeTokenByValue(value string) error {
 	if value == "" {
 		return nil
 	}
-	_, err := d.Exec(`UPDATE tokens SET revoked_at = ? WHERE value = ? AND revoked_at IS NULL`, nowMilli(), value)
+	_, err := d.Exec(`UPDATE tokens SET revoked_at = ? WHERE value = ? AND revoked_at IS NULL`, nowMilli(), TokenDigest(value))
 	return err
 }
 
@@ -164,8 +174,8 @@ func (d *DB) DeleteUserGuarded(id int64) ([]string, error) {
 
 // DeleteUser removes the user along with their tokens, progress and
 // playback sessions (all foreign-keyed to users) and returns the deleted
-// token values so callers can drop them from the auth cache. The last-admin
-// guarantee is the caller's business; admins go through DeleteUserGuarded.
+// stored token values (digests at rest). The last-admin guarantee is the
+// caller's business; admins go through DeleteUserGuarded.
 func (d *DB) DeleteUser(id int64) ([]string, error) {
 	tx, err := d.Begin()
 	if err != nil {
@@ -265,8 +275,8 @@ func (d *DB) TokenByID(id int64) (*Token, error) {
 	return &t, err
 }
 
-// RevokeToken marks a token revoked and returns its value for cache
-// invalidation. The value must never be sent to clients.
+// RevokeToken marks a token revoked and returns its stored value (the
+// digest at rest). The stored value must never be sent to clients.
 func (d *DB) RevokeToken(id int64) (string, error) {
 	var value string
 	err := d.QueryRow(`SELECT value FROM tokens WHERE id = ?`, id).Scan(&value)

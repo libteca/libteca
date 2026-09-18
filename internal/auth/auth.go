@@ -163,8 +163,8 @@ func IssueToken(db *store.DB, userID int64, label string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	_, err = db.Exec(`INSERT INTO tokens (user_id, label, value, created_at) VALUES (?,?,?,?)`,
-		userID, label, value, time.Now().UnixMilli())
+	_, err = db.Exec(`INSERT INTO tokens (user_id, label, value, digested, created_at) VALUES (?,?,?,1,?)`,
+		userID, label, store.TokenDigest(value), time.Now().UnixMilli())
 	return value, err
 }
 
@@ -173,9 +173,9 @@ func IssueTokenForPassword(db *store.DB, userID int64, label, verifiedHash strin
 	if err != nil {
 		return "", err
 	}
-	res, err := db.Exec(`INSERT INTO tokens (user_id, label, value, created_at)
-		SELECT id, ?, ?, ? FROM users WHERE id = ? AND password_hash = ?`,
-		label, value, time.Now().UnixMilli(), userID, verifiedHash)
+	res, err := db.Exec(`INSERT INTO tokens (user_id, label, value, digested, created_at)
+		SELECT id, ?, ?, 1, ? FROM users WHERE id = ? AND password_hash = ?`,
+		label, store.TokenDigest(value), time.Now().UnixMilli(), userID, verifiedHash)
 	if err != nil {
 		return "", err
 	}
@@ -194,9 +194,9 @@ func IssueTokenFromParent(db *store.DB, userID int64, label, parent string) (str
 	if err != nil {
 		return "", err
 	}
-	res, err := db.Exec(`INSERT INTO tokens (user_id, label, value, created_at)
-		SELECT user_id, ?, ?, ? FROM tokens WHERE value = ? AND user_id = ? AND revoked_at IS NULL`,
-		label, value, time.Now().UnixMilli(), parent, userID)
+	res, err := db.Exec(`INSERT INTO tokens (user_id, label, value, digested, created_at)
+		SELECT user_id, ?, ?, 1, ? FROM tokens WHERE value = ? AND user_id = ? AND revoked_at IS NULL`,
+		label, store.TokenDigest(value), time.Now().UnixMilli(), store.TokenDigest(parent), userID)
 	if err != nil {
 		return "", err
 	}
@@ -214,10 +214,11 @@ func LookupTokenUser(db *store.DB, value string) (*store.User, error) {
 	if value == "" || len(value) > 256 {
 		return nil, store.ErrNotFound
 	}
+	digest := store.TokenDigest(value)
 	var u store.User
 	err := db.QueryRow(`SELECT u.id, u.name, u.password_hash, u.is_admin, u.created_at, u.updated_at
 		FROM tokens t JOIN users u ON u.id = t.user_id
-		WHERE t.value = ? AND t.revoked_at IS NULL`, value).
+		WHERE t.value = ? AND t.revoked_at IS NULL`, digest).
 		Scan(&u.ID, &u.Name, &u.PasswordHash, &u.IsAdmin, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -228,7 +229,7 @@ func LookupTokenUser(db *store.DB, value string) (*store.User, error) {
 	now := time.Now().UnixMilli()
 	if _, err := db.Exec(`UPDATE tokens SET last_seen_at = ?
 		WHERE value = ? AND revoked_at IS NULL AND (last_seen_at IS NULL OR last_seen_at < ?)`,
-		now, value, now-60_000); err != nil {
+		now, digest, now-60_000); err != nil {
 		slog.Warn("libteca: token activity update failed", "err", err)
 	}
 	return &u, nil

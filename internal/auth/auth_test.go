@@ -200,7 +200,7 @@ func TestIssueTokenFromParentRevocation(t *testing.T) {
 	if _, err := IssueTokenFromParent(db, uid, "child", parent); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`UPDATE tokens SET revoked_at = 1 WHERE value = ?`, parent); err != nil {
+	if _, err := db.Exec(`UPDATE tokens SET revoked_at = 1 WHERE value = ?`, store.TokenDigest(parent)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := IssueTokenFromParent(db, uid, "child", parent); err != ErrCredentialsChanged {

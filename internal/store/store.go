@@ -55,6 +55,9 @@ func Open(path string) (*DB, error) {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 	d := &DB{sdb}
+	if err := d.digestTokens(); err != nil {
+		return nil, fmt.Errorf("token digest convergence: %w", err)
+	}
 	if err := d.backfillWorkSearch(); err != nil {
 		return nil, fmt.Errorf("backfill works search columns: %w", err)
 	}
@@ -112,6 +115,42 @@ func (d *DB) backfillWorkSearch() error {
 		for _, p := range batch {
 			titleL, authorL := workSearchCols(p.title, p.author)
 			if _, err := tx.Exec(`UPDATE works SET title_l = ?, author_l = ? WHERE id = ?`, titleL, authorL, p.id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// digestTokens converges legacy plaintext token values to sha256 digests in
+// ONE transaction, before the server can serve a single request: a
+// half-applied rewrite would lock out every existing install. Idempotent via
+// the migration 0013 marker column; empty on fresh databases.
+func (d *DB) digestTokens() error {
+	return d.Update(func(tx *Tx) error {
+		rows, err := tx.Query(`SELECT id, value FROM tokens WHERE digested = 0`)
+		if err != nil {
+			return err
+		}
+		type pending struct {
+			id    int64
+			value string
+		}
+		var batch []pending
+		for rows.Next() {
+			var p pending
+			if err := rows.Scan(&p.id, &p.value); err != nil {
+				rows.Close()
+				return err
+			}
+			batch = append(batch, p)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		for _, p := range batch {
+			if _, err := tx.Exec(`UPDATE tokens SET value = ?, digested = 1 WHERE id = ?`, TokenDigest(p.value), p.id); err != nil {
 				return err
 			}
 		}
