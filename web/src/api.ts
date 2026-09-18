@@ -62,12 +62,17 @@ export function setToken(t: string) { token = t; }
 export const api = async (path: string, opts: RequestInit = {}) => {
   const headers = new Headers(opts.headers);
   if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
-  if (token && !headers.has("Authorization")) headers.set("Authorization", `Bearer ${token}`);
+  // Capture the token used for THIS request: a slow response from before a
+  // re-login must not clear the newer credential on a 401.
+  const usedToken = token;
+  if (usedToken && !headers.has("Authorization")) headers.set("Authorization", `Bearer ${usedToken}`);
   const res = await fetch(`/api/core${path}`, { ...opts, headers });
   if (res.status === 401) {
-    setToken("");
-    try { localStorage.removeItem("libteca-token"); } catch { /* storage unavailable */ }
-    location.reload();
+    if (usedToken === token) {
+      setToken("");
+      try { localStorage.removeItem("libteca-token"); } catch { /* storage unavailable */ }
+      location.reload();
+    }
     throw new Error("unauthorized");
   }
   const text = await res.text();

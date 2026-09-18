@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import type { ComponentChildren, CSSProperties } from "preact";
 import { api, apiChecked, media } from "../api";
+import { ProgressQueue, type ProgressPatch as QueuePatch } from "../progressQueue";
 import { c, font, iconBtn } from "../styles";
 
 export type ReaderMode = "single" | "double" | "webtoon";
@@ -108,45 +109,55 @@ export function savePref(key: string, value: string): void {
 
 export function useProgressSaver(editionId: number) {
   const [state, setState] = useState<SaveState>("idle");
-  const queued = useRef<ProgressPost | null>(null);
   const timer = useRef<number | undefined>(undefined);
   const lastSent = useRef(0);
+  // One serial, merge-preserving queue per edition: patches merge instead of
+  // replacing (page + completion both survive), a failed delivery is retried
+  // with backoff under newer patches, and only one request is ever in flight.
+  // A changed editionId replaces the queue so patches never post to a stale
+  // edition when the reader view is reused.
+  const queueRef = useRef<{ edition: number; queue: ProgressQueue } | null>(null);
+  if (queueRef.current === null || queueRef.current.edition !== editionId) {
+    queueRef.current?.queue.stop();
+    queueRef.current = {
+      edition: editionId,
+      queue: new ProgressQueue({
+        send: async (patch: QueuePatch) => {
+          setState("saving");
+          await apiChecked(`/progress/${editionId}`, {
+            method: "POST",
+            body: JSON.stringify(patch),
+          });
+          setState("saved");
+          window.setTimeout(() => setState((s) => (s === "saved" ? "idle" : s)), 1600);
+        },
+        onError: () => setState("error"),
+      }),
+    };
+  }
+  const queue = queueRef.current.queue;
 
-  const post = useCallback(async (body: ProgressPost, beacon: boolean) => {
-    if (beacon) {
-      const url = media(`/progress/${editionId}`);
-      const payload = JSON.stringify(body);
-      let sent = false;
-      if (navigator.sendBeacon) {
-        try { sent = navigator.sendBeacon(url, new Blob([payload], { type: "application/json" })); } catch { sent = false; }
-      }
-      if (!sent) {
-        try { await fetch(url, { method: "POST", body: payload, headers: { "Content-Type": "application/json" }, keepalive: true }); } catch { /* best effort */ }
-      }
-      return;
+  const postBeacon = useCallback(async (body: ProgressPost) => {
+    const url = media(`/progress/${editionId}`);
+    const payload = JSON.stringify(body);
+    let sent = false;
+    if (navigator.sendBeacon) {
+      try { sent = navigator.sendBeacon(url, new Blob([payload], { type: "application/json" })); } catch { sent = false; }
     }
-    setState("saving");
-    try {
-      await apiChecked(`/progress/${editionId}`, { method: "POST", body: JSON.stringify(body) });
-      setState("saved");
-      window.setTimeout(() => setState((s) => (s === "saved" ? "idle" : s)), 1600);
-    } catch {
-      setState("error");
+    if (!sent) {
+      try { await fetch(url, { method: "POST", body: payload, headers: { "Content-Type": "application/json" }, keepalive: true }); } catch { /* best effort */ }
     }
   }, [editionId]);
 
   const deliver = useCallback(() => {
     if (timer.current !== undefined) { clearTimeout(timer.current); timer.current = undefined; }
-    const body = queued.current;
-    queued.current = null;
-    if (!body) return;
     lastSent.current = Date.now();
-    void post(body, false);
-  }, [post]);
+    void queue.flush();
+  }, []);
 
   const save = useCallback((body: ProgressPost) => {
-    queued.current = body;
     const wait = SAVE_INTERVAL_MS - (Date.now() - lastSent.current);
+    queue.enqueue(body);
     if (wait <= 0) { deliver(); return; }
     if (timer.current === undefined) {
       timer.current = window.setTimeout(() => { timer.current = undefined; deliver(); }, wait);
@@ -155,11 +166,10 @@ export function useProgressSaver(editionId: number) {
 
   const flush = useCallback(() => {
     if (timer.current !== undefined) { clearTimeout(timer.current); timer.current = undefined; }
-    const body = queued.current;
-    queued.current = null;
-    if (!body) return;
-    void post(body, true);
-  }, [post]);
+    const pending = queue.snapshot();
+    if (Object.keys(pending).length === 0) return;
+    void postBeacon(pending as ProgressPost);
+  }, [postBeacon]);
 
   useEffect(() => {
     const onVis = () => { if (document.visibilityState === "hidden") flush(); };
