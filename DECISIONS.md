@@ -485,3 +485,23 @@ backup = `libteca backup` (15g); neutron-go published (17).
    Omilator library-screen browse/download/launch integration shipped
    same day (b156761): Server page in the library pager, same grid +
    platform filters as local games.
+40. **Token digests at rest + descriptor-confined processor inputs
+    (2026-09-18, audit pass-6 F09 / pass-8 F03).** (a) Tokens store
+    sha256(value) only - migration 0013's marker column makes the
+    one-transaction startup rewrite idempotent and self-describing (a
+    digest row can never be re-hashed), and every reader/writer hashes the
+    presented value, so plaintext exists solely in the single issuance
+    response. Alternative rejected: rewriting the column without a marker
+    cannot distinguish 64-hex digests from 64-hex legacy values, so a crash
+    between partial updates could double-hash and lock out installs - the
+    exact recorded risk. Expiry policy stays a product decision. (b) All
+    ffmpeg/ffprobe inputs arrive as ExtraFiles descriptors opened through
+    per-library os.Root with `-protocol_whitelist` and a once-per-process
+    capability probe (fd option, fd URL, /dev/fd/N forms cover ffmpeg
+    5.x-9.x distributions); processor paths fail closed rather than
+    falling back to pathnames. Transcode sessions own their descriptor
+    across the hardware-to-software fallback (Seek(0) before relaunch).
+    CBR stays pathname-bound: unar/unrar accept no descriptor input.
+    Reverse: (a) re-exposes every token to at-rest theft; (b) re-opens the
+    racy check-then-reopen boundary the audits flagged for serving and
+    processors alike.

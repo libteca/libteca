@@ -149,13 +149,16 @@ Deferred (product/architecture decisions, not contained fixes):
   Interim posture: the captured secret is hash-validated on every use and
   dropped on rotation (already the case). Audit 7's F02 re-raises this with
   the same evidence base; the deferral stands.
-- **F09 token digests at rest + expiry policy (MEDIUM):** storing sha256
-  instead of raw values requires rewriting every token reader/writer plus a
-  data migration in one atomic pass (half-applied = lockout), and an expiry
-  policy for interactive vs device tokens is a product decision. Revisit
-  together with F04's credential work. Audit 7's F14 (binding ABS playback
-  session URLs to their issuing token plus a fixed expiry) is the same
-  credential-lifecycle family; that deferral covers it too.
+- **F09 token digests at rest (MEDIUM): DIGESTS LANDED 2026-09-18**
+  (`fix(auth)` commit, migration 0013): token values are stored as sha256
+  digests; ONE transactional startup rewrite converges legacy plaintext
+  rows (idempotent via the marker column; half-applied = lockout was the
+  recorded risk); every token writer/reader hashes the presented value.
+  The expiry-policy half of this item (interactive vs device token
+  lifetimes) remains a product decision and is still open - revisit with
+  F04's credential work as originally recorded. Audit 7's F14 (ABS
+  playback-URL token binding + fixed expiry) is the same credential-
+  lifecycle family; the deferral stands for it.
 - **F15 per-snapshot cover generations (MEDIUM, durability half fixed):**
   switching backups/ to generation directories changes the on-disk layout,
   restore procedure and retention docs - a product decision. Durability
@@ -393,12 +396,19 @@ Fixed (verified against source first; `audit 8-NN` commits):
 Deferred (standing families confirmed against current source, plus new
 architectural items; `docs:` commit):
 
-- **F03 processor inputs unconfined (HIGH):** fd-passing ffmpeg inputs
-  (ExtraFiles + protocol_whitelist fd, capability probe, fail-closed
-  fallback) across transcode/trickplay/subtitles is an architectural
-  refactor of the process factories and session lifecycles; the pass-7
-  residual note stands (scan-time regular-file check bounds it). Revisit as
-  one deliberate change, not per-caller patches.
+- **F03 processor inputs unconfined (HIGH): RESOLVED 2026-09-18**
+  (`fix(media)` commit). Every ffmpeg/ffprobe child now receives its input
+  as an already-opened descriptor (exec ExtraFiles -> child fd 3, argv
+  `-protocol_whitelist fd[,file|pipe]` + `-fd 3 -i fd:`) resolved through a
+  per-library os.Root: transcode (session-owned fd surviving the hw->sw
+  fallback with offset reset), trickplay, embedded subtitle extraction,
+  audio/video probe and scanner cover extraction. internal/procfd probes
+  the installed binaries once per process (fd-option, fd-URL and
+  /dev/fd/N forms, logged at startup) and every processor path fails
+  closed when confinement is unavailable - there is no pathname fallback.
+  Residual: CBR listing/extraction still hands the archive pathname to
+  unar/unrar (they accept no descriptor input); inputs remain scan-time
+  regular-file checks within the library, outputs stay under DataDir.
 - **F04/F05 credential lifecycle (HIGH):** ABS playback-URL token binding +
   expiry and the Subsonic plaintext-password capture are the pass-6 F04/F09
   / pass-7 F02/F14 deferrals; no materially new evidence beyond what those
@@ -421,6 +431,35 @@ Also noted: the audit's additional hardening items (transcode byte quotas,
 subsonic Argon2-on-success under legacy auth, VAAPI filter-chain
 validation, cross-adapter service extraction, SBOM/provenance) remain
 unimplemented recommendations, consistent with pass-7 H01-H08 posture.
+
+## Audit deferrals closed 2026-09-18 - pass-6 F09 digests + pass-8 F03 processor confinement
+
+Both landed as one deliberate change each, verified against current source
+first (commits `fix(auth)` aa87c5c, `fix(media)` 485cf8a):
+
+- **F09 digests at rest (pass-6) + pass-7 F14 family:** migration 0013 adds
+  the per-row marker; store.Open converges legacy plaintext tokens in one
+  transaction before the server serves anything; issuance/lookup/parent
+  check/revocation all compare digests. Live convergence verified on the
+  demo database: 72/72 legacy rows digested, a pre-captured plaintext token
+  authenticates after restart. Token expiry policy remains open (product
+  decision, see the pass-6 F09 entry above).
+- **F03 fd-passing confinement (pass-8, closes the pass-7 F03 residual
+  note):** the audit's recommended shape landed - ExtraFiles descriptors
+  rooted per-library, protocol_whitelist, capability probe, fail-closed.
+  Live smoke on demo media: HEVC/MKV HLS transcode (hwaccel videotoolbox)
+  and trickplay tiles generated entirely through descriptors; a rescan of
+  the movies library stayed a warm no-op. Regressions cover mp4/mkv/
+  audio-only + input-seek over descriptors, fallback fd reuse with offset
+  reset, argv pathname-leak refusal, symlink escape via os.Root, and
+  fail-closed refusals. CBR pathname residual documented in the pass-8
+  entry above.
+
+Verification: go vet ./... clean; go test ./... -count=1 -timeout 600s
+green; go test -race on transcode/trickplay/scan/core/mediafs/procfd/auth
+green; live demo-server smoke (startup probe logs, 72-token convergence,
+HEVC transcode + segment fetch, trickplay tile, rescan 202->no-op,
+health 200) (2026-09-18).
 
 ## Housekeeping (2026-09-17) - pass-8 F32 resolved, gofmt drift cleared
 
