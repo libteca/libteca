@@ -416,15 +416,28 @@ architectural items; `docs:` commit):
 - **F27 backup cover generations (HIGH):** pass-6 F15 / pass-7 F05
   deferral stands (on-disk layout + restore-doc product decision); the
   in-place durability fixes from those passes remain.
-- **F32 container USER (MEDIUM):** switching the runtime stage to uid 10001
-  breaks every existing bind-mounted /data on upgrade with no migration
-  machinery; needs a release-notes migration path (audit's snippet is the
-  shape). Same class as pass-7 H02.
 
 Also noted: the audit's additional hardening items (transcode byte quotas,
 subsonic Argon2-on-success under legacy auth, VAAPI filter-chain
 validation, cross-adapter service extraction, SBOM/provenance) remain
 unimplemented recommendations, consistent with pass-7 H01-H08 posture.
+
+## Housekeeping (2026-09-17) - pass-8 F32 resolved, gofmt drift cleared
+
+- **F32 container USER (MEDIUM): RESOLVED** (`fix(docker)` commit). The
+  runtime stage creates a dedicated uid/gid 10001 identity (addgroup/adduser,
+  chown /data) and runs USER 10001:10001. Nothing in the image needs root:
+  every writable path (database, covers, backups, transcode/subtitle caches,
+  .server.lock) lives under /data. The Dockerfile comment and
+  deploy/README.md document the one-time `chown -R 10001:10001 <data>`
+  bind-mount migration (the application never chowns host paths itself);
+  named volumes initialize from the image and need nothing; read-only media
+  mounts keep working. Pass-7 H02 (container USER) closes with it.
+- **gofmt drift cleared** (`style` commit): gofmt -w over the six drifted
+  files (core/games_face_test.go, jellyfin/ws_test.go, opds/cbz.go,
+  meta/thegamesdb.go + test, transcode/transcode.go) - pure formatting,
+  verified against git diff. The earlier per-pass gofmt-dirty notes above
+  are historical.
 
 Verification: go vet ./... clean; go test ./... -count=1 -timeout 600s
 green; go test -race on transcode/podcast/scan/core/watch/auth green; web
