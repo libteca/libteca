@@ -1,13 +1,13 @@
 package jellyfin
 
 import (
-	"fmt"
 	"bufio"
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/libteca/libteca/internal/auth"
+	"github.com/libteca/libteca/internal/store"
 )
 
 // Minimal server-side RFC 6455 (websocket) for the Jellyfin /socket.
@@ -376,7 +377,7 @@ func (c *socketConn) shutdown() {
 }
 
 func (c *socketConn) device() string { return c.dev }
-func (c *socketConn) user() int64   { return c.uidv }
+func (c *socketConn) user() int64    { return c.uidv }
 
 func (c *socketConn) requestClose(code int) {
 	select {
@@ -670,11 +671,16 @@ func (a *API) handleSocket(w http.ResponseWriter, r *http.Request) {
 			token = m[1]
 		}
 	}
-	user, ok := auth.UserForToken(a.DB, token)
-	if !ok {
+	user, err := auth.LookupTokenUser(a.DB, token)
+	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(401)
-		w.Write([]byte(`{"error":"unauthorized"}`))
+		if errors.Is(err, store.ErrNotFound) {
+			w.WriteHeader(401)
+			w.Write([]byte(`{"error":"unauthorized"}`))
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte(`{"error":"authentication unavailable"}`))
 		return
 	}
 	// A missing DeviceId used to fall back to a SHARED "dev-0": every

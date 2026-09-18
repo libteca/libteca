@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -209,9 +210,12 @@ func IssueTokenFromParent(db *store.DB, userID int64, label, parent string) (str
 	return value, nil
 }
 
-func UserForToken(db *store.DB, value string) (*store.User, bool) {
+// LookupTokenUser resolves a bearer token to its user, distinguishing a
+// missing or revoked token (store.ErrNotFound) from an operational database
+// failure, so callers can answer 401 versus 503 honestly.
+func LookupTokenUser(db *store.DB, value string) (*store.User, error) {
 	if value == "" || len(value) > 256 {
-		return nil, false
+		return nil, store.ErrNotFound
 	}
 	var u store.User
 	err := db.QueryRow(`SELECT u.id, u.name, u.password_hash, u.is_admin, u.created_at, u.updated_at
@@ -219,7 +223,10 @@ func UserForToken(db *store.DB, value string) (*store.User, bool) {
 		WHERE t.value = ? AND t.revoked_at IS NULL`, value).
 		Scan(&u.ID, &u.Name, &u.PasswordHash, &u.IsAdmin, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
-		return nil, false
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, store.ErrNotFound
+		}
+		return nil, err
 	}
 	now := time.Now().UnixMilli()
 	if _, err := db.Exec(`UPDATE tokens SET last_seen_at = ?
@@ -227,7 +234,12 @@ func UserForToken(db *store.DB, value string) (*store.User, bool) {
 		now, value, now-60_000); err != nil {
 		slog.Warn("libteca: token activity update failed", "err", err)
 	}
-	return &u, true
+	return &u, nil
+}
+
+func UserForToken(db *store.DB, value string) (*store.User, bool) {
+	u, err := LookupTokenUser(db, value)
+	return u, err == nil
 }
 
 func Middleware(db *store.DB) func(http.Handler) http.Handler {
@@ -238,11 +250,17 @@ func Middleware(db *store.DB) func(http.Handler) http.Handler {
 			if value == "" {
 				value = r.URL.Query().Get("token")
 			}
-			user, ok := UserForToken(db, value)
-			if !ok {
+			user, err := LookupTokenUser(db, value)
+			if err != nil {
 				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusUnauthorized)
-				w.Write([]byte(`{"error":"unauthorized"}`))
+				if errors.Is(err, store.ErrNotFound) {
+					w.WriteHeader(http.StatusUnauthorized)
+					w.Write([]byte(`{"error":"unauthorized"}`))
+					return
+				}
+				slog.Error("libteca: token lookup failed", "err", err)
+				w.WriteHeader(http.StatusServiceUnavailable)
+				w.Write([]byte(`{"error":"authentication unavailable"}`))
 				return
 			}
 			ctx := context.WithValue(r.Context(), userIDKey, user.ID)

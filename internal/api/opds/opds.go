@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/libteca/libteca/internal/auth"
+	"github.com/libteca/libteca/internal/mediafs"
 	"github.com/libteca/libteca/internal/store"
 	"github.com/neutron-build/neutron/go/neutron"
 )
@@ -507,8 +508,13 @@ func (a *API) download(w http.ResponseWriter, r *http.Request, _ int64) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	file, err := os.Open(f.Path)
-	if err != nil {
+	root, rerr := a.DB.LibraryRootForEdition(eid)
+	if rerr != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	file, _, oerr := mediafs.OpenWithin(root, f.Path)
+	if oerr != nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
@@ -696,19 +702,29 @@ func (a *API) psePage(w http.ResponseWriter, r *http.Request, _ int64) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	zr, err := zip.OpenReader(f.Path)
+	root, rerr := a.DB.LibraryRootForEdition(eid)
+	if rerr != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	fh, fi, oerr := mediafs.OpenWithin(root, f.Path)
+	if oerr != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	defer fh.Close()
+	zr, err := zip.NewReader(fh, fi.Size())
 	if err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	defer zr.Close()
-	names := cbzPageNames(&zr.Reader)
+	names := cbzPageNames(zr)
 	if page > len(names) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
 	name := names[page-1]
-	data, err := readZipPage(&zr.Reader, name)
+	data, err := readZipPage(zr, name)
 	if err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return

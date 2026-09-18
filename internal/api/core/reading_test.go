@@ -61,9 +61,13 @@ func newReadingEnv(t *testing.T) *readingEnv {
 
 // seedFileOnDisk writes content to a temp file and links it as the edition's
 // single file row; the download endpoint must serve exactly these bytes.
-func seedFileOnDisk(t *testing.T, db *store.DB, editionID int64, name string, content []byte) string {
+func seedFileOnDisk(t *testing.T, db *store.DB, libID int64, editionID int64, name string, content []byte) string {
 	t.Helper()
-	p := filepath.Join(t.TempDir(), name)
+	var libDir string
+	if err := db.QueryRow(`SELECT path FROM libraries WHERE id = ?`, libID).Scan(&libDir); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(libDir, name)
 	if err := os.WriteFile(p, content, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +106,7 @@ func TestEditionDownload(t *testing.T) {
 	w := seedWork(t, env.db, lib, "The Trial", ptr("Franz Kafka"), nil, 1, 1)
 	epub := seedBookEdition(t, env.db, w, "epub", ptr(3))
 	content := []byte("PK\x03\x04 epub bytes")
-	seedFileOnDisk(t, env.db, epub, "trial.epub", content)
+	seedFileOnDisk(t, env.db, lib, epub, "trial.epub", content)
 
 	resp, body := readingReq(t, env, "GET", env.base+fmt.Sprintf("/editions/%d/download", epub), env.token, "")
 	if resp.StatusCode != 200 {
@@ -144,8 +148,8 @@ func TestEditionDownloadContentTypes(t *testing.T) {
 	w := seedWork(t, env.db, lib, "C", nil, nil, 1, 1)
 	cbz := seedBookEdition(t, env.db, w, "cbz", ptr(24))
 	pdf := seedBookEdition(t, env.db, w, "pdf", ptr(120))
-	seedFileOnDisk(t, env.db, cbz, "c.cbz", []byte("PK cbz"))
-	seedFileOnDisk(t, env.db, pdf, "c.pdf", []byte("%PDF-1.4"))
+	seedFileOnDisk(t, env.db, lib, cbz, "c.cbz", []byte("PK cbz"))
+	seedFileOnDisk(t, env.db, lib, pdf, "c.pdf", []byte("%PDF-1.4"))
 
 	for id, want := range map[int64]string{cbz: "application/zip", pdf: "application/pdf"} {
 		resp, _ := readingReq(t, env, "GET", env.base+fmt.Sprintf("/editions/%d/download", id), env.token, "")
@@ -160,7 +164,7 @@ func TestProgressReadingRoundtrip(t *testing.T) {
 	lib, _ := env.db.AddLibrary("Books", "books", t.TempDir())
 	w := seedWork(t, env.db, lib, "The Trial", nil, nil, 1, 1)
 	epub := seedBookEdition(t, env.db, w, "epub", ptr(3))
-	seedFileOnDisk(t, env.db, epub, "trial.epub", []byte("PK"))
+	seedFileOnDisk(t, env.db, lib, epub, "trial.epub", []byte("PK"))
 
 	post := func(body string) (int, string) {
 		resp, b := readingReq(t, env, "POST", env.base+fmt.Sprintf("/progress/%d", epub), env.token, body)
@@ -216,7 +220,7 @@ func TestProgressReadingRoundtrip(t *testing.T) {
 
 	// Fresh edition: GET returns the classic default shape with no reading keys.
 	other := seedBookEdition(t, env.db, w, "cbz", ptr(24))
-	seedFileOnDisk(t, env.db, other, "c.cbz", []byte("PK"))
+	seedFileOnDisk(t, env.db, lib, other, "c.cbz", []byte("PK"))
 	_, body = readingReq(t, env, "GET", env.base+fmt.Sprintf("/progress/%d", other), env.token, "")
 	if strings.Contains(body, `"page"`) || strings.Contains(body, `"percent"`) || strings.Contains(body, `"locator"`) {
 		t.Fatalf("default shape leaked reading keys: %s", body)
@@ -229,8 +233,8 @@ func TestWorkDetailPageCount(t *testing.T) {
 	w := seedWork(t, env.db, lib, "The Trial", ptr("Franz Kafka"), nil, 1, 1)
 	epub := seedBookEdition(t, env.db, w, "epub", ptr(312))
 	audio := seedBookEdition(t, env.db, w, "audio", nil)
-	seedFileOnDisk(t, env.db, epub, "t.epub", []byte("PK"))
-	seedFileOnDisk(t, env.db, audio, "t.m4b", []byte("m4b"))
+	seedFileOnDisk(t, env.db, lib, epub, "t.epub", []byte("PK"))
+	seedFileOnDisk(t, env.db, lib, audio, "t.m4b", []byte("m4b"))
 
 	_, body := readingReq(t, env, "GET", env.base+fmt.Sprintf("/works/%d", w), env.token, "")
 	var resp struct {

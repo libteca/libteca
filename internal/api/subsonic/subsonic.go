@@ -21,6 +21,7 @@ import (
 	"github.com/cespare/xxhash/v2"
 	"github.com/libteca/libteca/internal/audio"
 	"github.com/libteca/libteca/internal/auth"
+	"github.com/libteca/libteca/internal/mediafs"
 	"github.com/libteca/libteca/internal/store"
 	"github.com/neutron-build/neutron/go/neutron"
 )
@@ -480,8 +481,13 @@ func (a *API) stream(w http.ResponseWriter, r *http.Request, _ int64) {
 		http.Error(w, "not found", 404)
 		return
 	}
-	f, err := os.Open(song.File.Path)
-	if err != nil {
+	root, rerr := a.DB.LibraryRootForEdition(song.Edition.ID)
+	if rerr != nil {
+		http.Error(w, "gone", 404)
+		return
+	}
+	f, _, oerr := mediafs.OpenWithin(root, song.File.Path)
+	if oerr != nil {
 		http.Error(w, "gone", 404)
 		return
 	}
@@ -529,7 +535,7 @@ func (a *API) getCoverArt(w http.ResponseWriter, r *http.Request, _ int64) {
 	}
 	// corpus: size param ignored (no thumbnailer)
 	w.Header().Set("Content-Type", "image/jpeg")
-	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Header().Set("Cache-Control", "private, max-age=86400")
 	http.ServeContent(w, r, "cover.jpg", fi.ModTime(), f)
 }
 

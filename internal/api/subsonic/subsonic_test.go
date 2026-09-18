@@ -98,7 +98,16 @@ func (e *env) addAlbum(t *testing.T, libID int64, artist, title string, tracks [
 		t.Fatalf("seed work: %v", err)
 	}
 	workID, _ := res.LastInsertId()
-	mediaDir := t.TempDir()
+	var libDir string
+	if err := e.db.QueryRow(`SELECT path FROM libraries WHERE id = ?`, libID).Scan(&libDir); err != nil {
+		t.Fatalf("seed album library: %v", err)
+	}
+	// Files live under their library root: the stream route serves through
+	// library-root confinement.
+	mediaDir := filepath.Join(libDir, fmt.Sprintf("album-%d", workID))
+	if err := os.MkdirAll(mediaDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	for i, tr := range tracks {
 		eres, err := e.db.Exec(`INSERT INTO editions (work_id, format, title, duration_secs, position, created_at) VALUES (?,?,?,?,?,?)`,
 			workID, "mp3", tr.title, tr.dur, i+1, createdAt)

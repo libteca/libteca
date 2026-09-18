@@ -31,8 +31,15 @@ func (a *API) editionDownload(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 404, map[string]string{"error": "edition not found"})
 		return
 	}
+	root, rerr := a.confinedRoot(f.EditionID)
+	if rerr != nil {
+		writeJSON(w, 404, map[string]string{"error": "edition not found"})
+		return
+	}
 	// Path safety (PLAN §11): the served path comes only from the files
-	// table; the client controls the edition id, never a filesystem path.
+	// table and is opened through the library-root confinement every other
+	// media route uses — the client controls the edition id, never a
+	// filesystem path.
 	ct := downloadContentTypes[format]
 	if ct == "" {
 		ct = mime.TypeByExtension(filepath.Ext(f.Path))
@@ -41,5 +48,5 @@ func (a *API) editionDownload(w http.ResponseWriter, r *http.Request) {
 		ct = "application/octet-stream"
 	}
 	w.Header().Set("Content-Type", ct)
-	serveFile(w, r, f.Path)
+	serveConfined(w, r, root, f.Path)
 }

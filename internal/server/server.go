@@ -13,6 +13,7 @@ import (
 	"github.com/libteca/libteca/internal/auth"
 	"github.com/libteca/libteca/internal/store"
 	"github.com/libteca/libteca/internal/transcode"
+	"github.com/libteca/libteca/internal/trickplay"
 	"github.com/neutron-build/neutron/go/neutron"
 )
 
@@ -84,6 +85,13 @@ func (s *Server) buildHandler() http.Handler {
 	jf.Mount(r)
 	s.tm = tm
 	s.jf = jf
+
+	// One trickplay generator serves both adapters: each API lazily creating
+	// its own meant two independent job maps racing over the same
+	// e<edition>/<width> cache namespace with no mutual serialization.
+	tp := trickplay.New(s.Dir)
+	c.SetTrickplayGenerator(tp)
+	jf.SetTrickplayGenerator(tp)
 
 	a := abs.New(s.DB, s.Dir)
 	a.LoginLimiter = loginLimiter

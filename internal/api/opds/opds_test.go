@@ -100,6 +100,20 @@ func (e *testEnv) addWork(t *testing.T, libID int64, title, author string, creat
 
 func (e *testEnv) addEdition(t *testing.T, workID int64, format, path string, pageCount *int, createdAt int64) int64 {
 	t.Helper()
+	var libDir string
+	if err := e.db.QueryRow(`SELECT l.path FROM works w JOIN libraries l ON l.id = w.library_id WHERE w.id = ?`, workID).Scan(&libDir); err != nil {
+		t.Fatalf("seed edition library: %v", err)
+	}
+	// Confined serving requires the file to live under its library root;
+	// relocate the fixture bytes there before linking the row.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read book fixture: %v", err)
+	}
+	path = filepath.Join(libDir, filepath.Base(path))
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("stage book fixture: %v", err)
+	}
 	res, err := e.db.Exec(`INSERT INTO editions (work_id, format, title, page_count, created_at) VALUES (?,?,?,?,?)`,
 		workID, format, "edition", pageCount, createdAt)
 	if err != nil {
@@ -646,8 +660,8 @@ func TestNewestFeed(t *testing.T) {
 	oldest := e.addWork(t, lib, "Oldest", "", 1000)
 	middle := e.addWork(t, lib, "Middle", "", 2000)
 	newest := e.addWork(t, lib, "Newest", "", 3000)
-	for _, w := range []int64{oldest, middle, newest} {
-		e.addEdition(t, w, "epub", writeBookFile(t, []byte("x"), "n.epub"), nil, 3000)
+	for i, w := range []int64{oldest, middle, newest} {
+		e.addEdition(t, w, "epub", writeBookFile(t, []byte("x"), fmt.Sprintf("n%d.epub", i)), nil, 3000)
 	}
 	f := decodeFeed(t, e.get(t, "/opds/newest"))
 	if f.Total != 3 {
