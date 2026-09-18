@@ -2,7 +2,12 @@ package core
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
@@ -13,6 +18,7 @@ import (
 
 	"github.com/libteca/libteca/internal/auth"
 	"github.com/libteca/libteca/internal/mediafs"
+	"github.com/libteca/libteca/internal/store"
 )
 
 var srtStamp = regexp.MustCompile(`(\d{1,2}:\d{2}:\d{2}),(\d{1,3})`)
@@ -22,7 +28,12 @@ var (
 	ffmpegRun      = func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		return exec.CommandContext(ctx, name, args...).Output()
 	}
+	errSubtitleBusy = errors.New("subtitle extraction capacity exhausted")
 )
+
+var subtitleSlots = make(chan struct{}, 2)
+
+const subtitleCacheLimit = 16 << 20
 
 func (a *API) subtitles(w http.ResponseWriter, r *http.Request) {
 	fid := auth.Atoi64(r.PathValue("fileId"))
@@ -44,7 +55,7 @@ func (a *API) subtitles(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer sf.Close()
-		data, err := io.ReadAll(io.LimitReader(sf, 16<<20))
+		data, err := io.ReadAll(io.LimitReader(sf, subtitleCacheLimit))
 		if err != nil {
 			writeJSON(w, 404, map[string]string{"error": "no subtitles"})
 			return
@@ -52,8 +63,13 @@ func (a *API) subtitles(w http.ResponseWriter, r *http.Request) {
 		writeVTT(w, []byte(srtToVTT(string(data))))
 		return
 	}
-	data, err := embeddedVTT(r.Context(), f.Path)
+	data, err := a.embeddedVTT(r.Context(), f)
 	if err != nil {
+		if errors.Is(err, errSubtitleBusy) {
+			w.Header().Set("Retry-After", "5")
+			writeJSON(w, 503, map[string]string{"error": "subtitle extraction busy"})
+			return
+		}
 		writeJSON(w, 404, map[string]string{"error": "no subtitles"})
 		return
 	}
@@ -107,25 +123,62 @@ func sidecarSRT(media string) (string, bool) {
 	return "", false
 }
 
-func libtecaVTT(media string) string {
-	return strings.TrimSuffix(media, filepath.Ext(media)) + ".libteca.vtt"
+// subtitleCacheKey derives the on-disk cache name from the file's identity
+// and recorded version, so a replaced or re-probed media file can never be
+// served a stale extraction and the cache never lives inside the library
+// (where media mounts are read-only and a library writer could plant or
+// poison it).
+func subtitleCacheKey(f *store.FileRec) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("v1\x00%d\x00%s\x00%d\x00%d", f.ID, f.Path, f.MtimeSecs, f.MtimeNS)))
+	return hex.EncodeToString(sum[:])
 }
 
-func cachedVTT(media string) ([]byte, bool) {
-	cache := libtecaVTT(media)
-	ci, err := os.Stat(cache)
+func readBoundedCache(path string) ([]byte, error) {
+	fi, err := os.Stat(path)
 	if err != nil {
-		return nil, false
+		return nil, err
 	}
-	si, err := os.Stat(media)
-	if err != nil || ci.ModTime().Before(si.ModTime()) {
-		return nil, false
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("not a regular cache file")
 	}
-	data, err := os.ReadFile(cache)
+	if fi.Size() > subtitleCacheLimit {
+		return nil, fmt.Errorf("subtitle cache exceeds budget")
+	}
+	fh, err := os.Open(path)
 	if err != nil {
-		return nil, false
+		return nil, err
 	}
-	return data, true
+	defer fh.Close()
+	data, err := io.ReadAll(io.LimitReader(fh, subtitleCacheLimit+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > subtitleCacheLimit {
+		return nil, fmt.Errorf("subtitle cache exceeds budget")
+	}
+	return data, nil
+}
+
+func writeCacheAtomic(dst string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(dst), ".subtitle-*")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(name)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(name)
+		return err
+	}
+	if err := os.Rename(name, dst); err != nil {
+		os.Remove(name)
+		return err
+	}
+	return nil
 }
 
 func extractEmbedded(ctx context.Context, src string) ([]byte, error) {
@@ -137,15 +190,33 @@ func extractEmbedded(ctx context.Context, src string) ([]byte, error) {
 	return ffmpegRun(ctx, "ffmpeg", "-i", src, "-map", "0:s:0", "-f", "webvtt", "-")
 }
 
-func embeddedVTT(ctx context.Context, media string) ([]byte, error) {
-	if data, ok := cachedVTT(media); ok {
+func (a *API) embeddedVTT(ctx context.Context, f *store.FileRec) ([]byte, error) {
+	dir := filepath.Join(a.DataDir, "subtitles")
+	dst := filepath.Join(dir, subtitleCacheKey(f)+".vtt")
+	if data, err := readBoundedCache(dst); err == nil {
 		return data, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		slog.Warn("libteca: subtitle cache unreadable; re-extracting", "err", err)
 	}
-	data, err := extractEmbedded(ctx, media)
+	select {
+	case subtitleSlots <- struct{}{}:
+		defer func() { <-subtitleSlots }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+		return nil, errSubtitleBusy
+	}
+	data, err := extractEmbedded(ctx, f.Path)
 	if err != nil {
 		return nil, err
 	}
-	_ = os.WriteFile(libtecaVTT(media), data, 0o644)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		slog.Warn("libteca: subtitle cache directory unavailable", "err", err)
+		return data, nil
+	}
+	if err := writeCacheAtomic(dst, data); err != nil {
+		slog.Warn("libteca: subtitle cache write failed", "err", err)
+	}
 	return data, nil
 }
 

@@ -1,11 +1,17 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,6 +23,7 @@ import (
 
 	"github.com/libteca/libteca/internal/auth"
 	"github.com/libteca/libteca/internal/meta"
+	"github.com/libteca/libteca/internal/podcast"
 	"github.com/libteca/libteca/internal/store"
 	"github.com/neutron-build/neutron/go/neutron"
 )
@@ -348,7 +355,13 @@ func (a *API) applyResult(ctx context.Context, w *store.Work, libType string, re
 	}
 	summary := map[string]any{"cover": false, "chapters": int64(0), "genres": 0, "episodes": 0}
 	if res.CoverURL != "" && (w.CoverPath == nil || *w.CoverPath == "") {
-		saved, cerr := a.downloadCover(w.ID, res.CoverURL)
+		saved, cerr := a.downloadCover(ctx, w.ID, res.CoverURL)
+		if cerr != nil {
+			// The apply summary stays honest about the partial result
+			// without echoing provider URLs into the response.
+			slog.Warn("libteca: metadata cover download failed", "work", w.ID)
+			summary["coverWarning"] = "cover download failed"
+		}
 		if cerr == nil && saved {
 			if lerr := a.DB.SetWorkCover(w.ID, fmt.Sprintf("%d.jpg", w.ID)); lerr != nil {
 				return nil, fmt.Errorf("link cover to work: %w", lerr)
@@ -506,7 +519,9 @@ func genericChapters(path, stored string) bool {
 	return true
 }
 
-func (a *API) downloadCover(workID int64, url string) (bool, error) {
+var coverHTTPClient = podcast.EgressGuardedClient(coverTimeout)
+
+func (a *API) downloadCover(ctx context.Context, workID int64, url string) (bool, error) {
 	dir := filepath.Join(a.DataDir, "covers")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return false, err
@@ -516,13 +531,12 @@ func (a *API) downloadCover(workID int64, url string) (bool, error) {
 	if _, err := os.Stat(dst); err == nil {
 		return true, nil
 	}
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return false, err
 	}
 	req.Header.Set("User-Agent", providerUA)
-	client := &http.Client{Timeout: coverTimeout}
-	resp, err := client.Do(req)
+	resp, err := coverHTTPClient.Do(req)
 	if err != nil {
 		return false, err
 	}
@@ -541,7 +555,37 @@ func (a *API) downloadCover(workID int64, url string) (bool, error) {
 	if len(data) == 0 {
 		return false, fmt.Errorf("cover download: empty body")
 	}
-	if err := os.WriteFile(dst, data, 0o644); err != nil {
+	cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return false, fmt.Errorf("cover download: not a decodable image")
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width > 16384 || cfg.Height > 16384 ||
+		int64(cfg.Width)*int64(cfg.Height) > 16_000_000 {
+		return false, fmt.Errorf("cover download: dimensions exceed budget")
+	}
+	if format != "jpeg" && format != "png" && format != "gif" {
+		return false, fmt.Errorf("cover download: unsupported image format %q", format)
+	}
+	tmp, err := os.CreateTemp(dir, ".cover-*")
+	if err != nil {
+		return false, err
+	}
+	tmpName := tmp.Name()
+	_, werr := tmp.Write(data)
+	if werr == nil {
+		werr = tmp.Close()
+	} else {
+		tmp.Close()
+	}
+	if werr != nil {
+		os.Remove(tmpName)
+		return false, werr
+	}
+	// Publish atomically: a direct write left a truncated final file behind
+	// on interruption or a full disk, and the existing-file shortcut above
+	// then treated the corrupt bytes as a valid cover forever.
+	if err := os.Rename(tmpName, dst); err != nil {
+		os.Remove(tmpName)
 		return false, err
 	}
 	return true, nil

@@ -1,9 +1,12 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/jpeg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -199,8 +202,16 @@ func addMultiFileWork(t *testing.T, db *store.DB, libID int64, format, title str
 
 func newImageServer(t *testing.T) string {
 	t.Helper()
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, image.NewRGBA(image.Rect(0, 0, 1, 1)), nil); err != nil {
+		t.Fatal(err)
+	}
+	payload := buf.Bytes()
+	orig := coverHTTPClient
+	coverHTTPClient = &http.Client{}
+	t.Cleanup(func() { coverHTTPClient = orig })
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("JPEGDATA"))
+		w.Write(payload)
 	}))
 	t.Cleanup(srv.Close)
 	return srv.URL + "/cover.jpg"
@@ -288,8 +299,11 @@ func TestRefreshMetaAutoApply(t *testing.T) {
 	}
 	coverFile := filepath.Join(a.DataDir, "covers", strconv.FormatInt(workID, 10)+".jpg")
 	data, err := os.ReadFile(coverFile)
-	if err != nil || string(data) != "JPEGDATA" {
-		t.Fatalf("cover file = %v %q", err, data)
+	if err != nil {
+		t.Fatalf("cover file = %v", err)
+	}
+	if _, fm, derr := image.DecodeConfig(bytes.NewReader(data)); derr != nil || fm != "jpeg" {
+		t.Fatalf("cover file is not jpeg: %v %q", derr, fm)
 	}
 	chapters := fileChaptersByPath(t, db, "Project Hail Mary.m4b")
 	if !strings.Contains(chapters, `"title":"Chapter 1"`) || !strings.Contains(chapters, `"end":150`) {

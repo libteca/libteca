@@ -4,13 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
-	"time"
+
+	"github.com/libteca/libteca/internal/auth"
+	"github.com/libteca/libteca/internal/store"
+	"github.com/neutron-build/neutron/go/neutron"
 )
 
 func swapFFmpeg(t *testing.T, look func(string) (string, error), run func(context.Context, string, ...string) ([]byte, error)) {
@@ -22,34 +26,45 @@ func swapFFmpeg(t *testing.T, look func(string) (string, error), run func(contex
 	})
 }
 
-func TestLibtecaVTTPath(t *testing.T) {
-	got := libtecaVTT("/movies/Foo.Bar.mkv")
-	if got != "/movies/Foo.Bar.libteca.vtt" {
-		t.Fatalf("got %q", got)
+func TestSubtitleCacheKeyChangesWithMtime(t *testing.T) {
+	base := &store.FileRec{ID: 7, Path: "/lib/film.mkv", MtimeSecs: 100, MtimeNS: 200}
+	changed := *base
+	changed.MtimeNS = 201
+	other := *base
+	other.Path = "/lib/other.mkv"
+	if subtitleCacheKey(base) == subtitleCacheKey(&changed) {
+		t.Fatal("key must change with mtime")
+	}
+	if subtitleCacheKey(base) == subtitleCacheKey(&other) {
+		t.Fatal("key must change with path")
+	}
+	if k := subtitleCacheKey(base); len(k) != 64 {
+		t.Fatalf("key = %q, want 64 hex characters", k)
 	}
 }
 
-func TestCachedVTTFreshAndStale(t *testing.T) {
-	dir := t.TempDir()
-	media := filepath.Join(dir, "film.mkv")
-	cache := filepath.Join(dir, "film.libteca.vtt")
-	if err := os.WriteFile(media, []byte("x"), 0o644); err != nil {
+func newSubtitleEnv(t *testing.T) (*store.DB, string, string, *API) {
+	t.Helper()
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(cache, []byte("WEBVTT\n\ncached\n"), 0o644); err != nil {
+	t.Cleanup(func() { db.Close() })
+	res, err := db.Exec(`INSERT INTO users (name, password_hash, is_admin, created_at, updated_at) VALUES ('u','x',0,0,0)`)
+	if err != nil {
 		t.Fatal(err)
 	}
-	data, ok := cachedVTT(media)
-	if !ok || !strings.Contains(string(data), "cached") {
-		t.Fatalf("fresh cache miss: ok=%v data=%q", ok, data)
-	}
-	later := time.Now().Add(2 * time.Second)
-	if err := os.Chtimes(media, later, later); err != nil {
+	uid, _ := res.LastInsertId()
+	token, err := auth.IssueToken(db, uid, "test")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := cachedVTT(media); ok {
-		t.Fatal("stale cache hit")
-	}
+	a := New(db, t.TempDir())
+	app := neutron.New()
+	a.Mount(app.Router().Group("/api/core", auth.Middleware(db)))
+	srv := httptest.NewServer(app.Handler())
+	t.Cleanup(srv.Close)
+	return db, srv.URL + "/api/core", token, a
 }
 
 func TestSubtitlesSidecarPreferredOverExtract(t *testing.T) {
@@ -102,7 +117,7 @@ func TestSubtitlesExtractWritesCache(t *testing.T) {
 			return vtt, nil
 		},
 	)
-	db, base, token := newDiscoveryEnv(t)
+	db, base, token, a := newSubtitleEnv(t)
 	dir := t.TempDir()
 	lib, _ := db.AddLibrary("m", "movies", dir)
 	w := seedWork(t, db, lib, "Film", ptr("Dir"), nil, 1, 1)
@@ -124,7 +139,15 @@ func TestSubtitlesExtractWritesCache(t *testing.T) {
 	if !reflect.DeepEqual(gotArgs, wantArgs) {
 		t.Fatalf("args = %#v want %#v", gotArgs, wantArgs)
 	}
-	cached, err := os.ReadFile(libtecaVTT(media))
+	if _, err := os.Stat(media + ".libteca.vtt"); !os.IsNotExist(err) {
+		t.Fatalf("library-side cache must not exist: %v", err)
+	}
+	cacheDir := filepath.Join(a.DataDir, "subtitles")
+	entries, err := os.ReadDir(cacheDir)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("cache entries = %v err = %v, want exactly one", entries, err)
+	}
+	cached, err := os.ReadFile(filepath.Join(cacheDir, entries[0].Name()))
 	if err != nil {
 		t.Fatal(err)
 	}
