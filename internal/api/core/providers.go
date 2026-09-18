@@ -357,8 +357,6 @@ func (a *API) applyResult(ctx context.Context, w *store.Work, libType string, re
 	if res.CoverURL != "" && (w.CoverPath == nil || *w.CoverPath == "") {
 		saved, cerr := a.downloadCover(ctx, w.ID, res.CoverURL)
 		if cerr != nil {
-			// The apply summary stays honest about the partial result
-			// without echoing provider URLs into the response.
 			slog.Warn("libteca: metadata cover download failed", "work", w.ID)
 			summary["coverWarning"] = "cover download failed"
 		}
@@ -581,9 +579,6 @@ func (a *API) downloadCover(ctx context.Context, workID int64, url string) (bool
 		os.Remove(tmpName)
 		return false, werr
 	}
-	// Publish atomically: a direct write left a truncated final file behind
-	// on interruption or a full disk, and the existing-file shortcut above
-	// then treated the corrupt bytes as a valid cover forever.
 	if err := os.Rename(tmpName, dst); err != nil {
 		os.Remove(tmpName)
 		return false, err

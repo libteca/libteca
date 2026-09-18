@@ -51,10 +51,6 @@ func validateScanRoot(root string) error {
 	return nil
 }
 
-// scanRoot resolves the directory a scanner walks. filepath.WalkDir does not
-// follow the root symlink itself, so a symlinked library root scanned as an
-// empty library: walk the resolved directory instead, while every recorded
-// path keeps its stored alias spelling so rooted serving stays consistent.
 func scanRoot(abs string) (string, func(string) string, error) {
 	if err := validateScanRoot(abs); err != nil {
 		return "", nil, err
@@ -174,10 +170,6 @@ func scanAudioLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 	if err != nil {
 		return 0, err
 	}
-	// Verified disappearances are marked before the first upsert so a
-	// renamed file's new path can relink onto its old row in this same
-	// scan; running it after the upserts left the old row unmissed and the
-	// identity lost until a second scan that no longer happened.
 	if _, err := db.MarkMissingLibraryFiles(lib.ID); err != nil {
 		return 0, err
 	}

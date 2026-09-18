@@ -93,10 +93,6 @@ func main() {
 			fatal(err)
 		}
 	}
-	// Every process that opens or mutates the data directory takes a
-	// lifetime exclusive lock: a second server used to run startup recovery
-	// (failing scan jobs) and the transcode directory wipe before its port
-	// bind failed, damaging the running instance from the outside.
 	release, err := lockDataDir(abs)
 	if err != nil {
 		fatal(err)
@@ -214,11 +210,6 @@ func fatal(err error) {
 	os.Exit(1)
 }
 
-// lockDataDir holds an exclusive advisory lock on <data>/.server.lock for
-// the process lifetime. The lock file is never unlinked: an unlink window
-// would let a second process create a fresh inode and lock it
-// simultaneously. The server, scan and init paths all take it; backups use
-// their own .backup.lock.
 func lockDataDir(dir string) (func(), error) {
 	f, err := os.OpenFile(filepath.Join(dir, ".server.lock"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {

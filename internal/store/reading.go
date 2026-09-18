@@ -62,9 +62,6 @@ func (d *DB) SetReadingProgressPatch(p *ReadingProgress, finishedProvided bool) 
 	return d.SetReadingProgressFields(p, ProgressFields{Finished: finishedProvided})
 }
 
-// ProgressFields selects which progress columns a patch overwrites; omitted
-// columns keep their stored value, so a finished-only or page-only update
-// cannot reset playback position, duration or device.
 type ProgressFields struct {
 	Position bool
 	Duration bool

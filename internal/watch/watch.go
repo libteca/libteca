@@ -145,10 +145,6 @@ func (w *Watcher) handleEvent(e fsnotify.Event) {
 	if isDir {
 		switch {
 		case e.Has(fsnotify.Remove | fsnotify.Rename):
-			// A removed or renamed directory takes its whole subtree with
-			// it: unwatching only the exact path left descendant entries
-			// in the map, and their presence then made addDir skip the
-			// replacement directory's children as "already watched".
 			w.unwatchTree(name)
 		case e.Has(fsnotify.Create):
 			w.watchTree(name, libID)
@@ -254,9 +250,6 @@ func (w *Watcher) staleLibrary(lib *store.Library) bool {
 	if jobs[0].Status == "running" {
 		return false
 	}
-	// A terminal status other than done is retryable immediately: waiting
-	// out the full staleness age after a failed or interrupted scan delayed
-	// recovery by a day. Boot and the periodic sweep bound the retry rate.
 	if jobs[0].Status != "done" {
 		return true
 	}
@@ -326,10 +319,6 @@ func (w *Watcher) addDir(dir string, libID int64) {
 	w.dirs[dir] = libID
 }
 
-// unwatchTree removes the root and every descendant from the watch map.
-// fsnotify may already have dropped the kernel-side watch when the
-// directory vanished; the Remove error is irrelevant — the bookkeeping is
-// what gates future addDir calls.
 func (w *Watcher) unwatchTree(root string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()

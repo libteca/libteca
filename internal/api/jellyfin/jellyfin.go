@@ -52,9 +52,6 @@ func (a *API) trickplayer() *trickplay.Generator {
 	return a.tp
 }
 
-// SetTrickplayGenerator installs a shared generator so two adapters cannot
-// race independent generators over the same e<edition>/<width> cache
-// namespace. Without an injection the lazy fallback stays per-API.
 func (a *API) SetTrickplayGenerator(g *trickplay.Generator) {
 	a.tpOnce.Do(func() {})
 	a.tp = g
@@ -1120,10 +1117,6 @@ func (a *API) hlsMaster(w http.ResponseWriter, r *http.Request) {
 	}
 	s, err := a.TC.Get(sessionID, ed.ID, ed.Files[0].Path, start)
 	if errors.Is(err, transcode.ErrSessionParams) {
-		// The client reused a play-session id for a seek or a different
-		// source: the stored session keeps its timeline, so a fresh session
-		// id is minted for the new parameters instead of silently serving
-		// the old one.
 		sessionID, err = freshSession()
 		if err != nil {
 			http.Error(w, "session creation failed", 500)
@@ -1206,10 +1199,6 @@ func (a *API) hlsSegment(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad", 400)
 		return
 	}
-	// Segment URLs are owner-bound at creation (bindPlaySession rewrites
-	// every non-admin id that reaches the manager), so a sid belonging to
-	// another user is rejected before it can touch or refresh that session.
-	// Unprefixed ids can only be admin-created, so they stay admin-only.
 	var segOwner int64
 	if n, err := fmt.Sscanf(sid, "u%d-", &segOwner); err == nil && n == 1 {
 		if segOwner != uid(r) && !adminRequest(r) {
@@ -1225,8 +1214,6 @@ func (a *API) hlsSegment(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", 404)
 		return
 	}
-	// The URL's item must match the session's edition: without this check
-	// the segment route was a weaker, unbound copy of the master route.
 	if _, ok := a.TC.Existing(sid, ed.ID); !ok {
 		http.Error(w, "not found", 404)
 		return

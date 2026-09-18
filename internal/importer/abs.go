@@ -279,9 +279,6 @@ func ABS(dataDir string, db *store.DB, dryRun bool) (*Plan, error) {
 		if _, ok := libType[b.libID]; !ok {
 			continue
 		}
-		// A vanished directory is ordinary foreign-database drift and stays
-		// a per-book skip; anything else (permissions, unreadable subtree)
-		// fails the import instead of silently planning a partial library.
 		if _, serr := os.Stat(b.dir); serr != nil && errors.Is(serr, os.ErrNotExist) {
 			plan.Libraries[libIndex[b.libID]].Skipped++
 			plan.warnf("book %q: directory %q is gone; skipped", b.title, b.dir)

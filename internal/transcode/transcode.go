@@ -22,10 +22,6 @@ import (
 var (
 	ErrCapacity = errors.New("transcode capacity exhausted")
 	ErrClosed   = errors.New("transcode manager closed")
-	// ErrSessionParams reports a Get call reusing a live session id with a
-	// different source or start position: the stored session keeps its
-	// timeline, so the caller must mint a fresh session instead of silently
-	// receiving the old one.
 	ErrSessionParams = errors.New("transcode session parameters changed")
 )
 

@@ -477,8 +477,6 @@ func (a *API) runScan(ctx context.Context, run *scanRun, lib *store.Library) {
 		fmt.Println("libteca: scan:", err)
 		return
 	}
-	// A scanner that swallowed cancellation near its last item would
-	// otherwise publish a healthy 'done' for an incomplete traversal.
 	if cerr := ctx.Err(); cerr != nil {
 		cancelMsg := "cancelled"
 		a.persistScanTerminal(run, "error", &cancelMsg)
@@ -1049,9 +1047,6 @@ func (a *API) setProgress(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "progress metadata too large"})
 		return
 	}
-	// Presence-aware patch: omitted position/duration/device leave the
-	// stored values alone, so a finished-only or page-only update cannot
-	// reset playback state the client did not send.
 	fields := store.ProgressFields{Finished: body.Finished != nil}
 	p := &store.ReadingProgress{
 		Progress: store.Progress{UserID: auth.UserID(r), EditionID: eid},

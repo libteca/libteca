@@ -45,9 +45,6 @@ func (a *API) trickplayer() *trickplay.Generator {
 	return a.tp
 }
 
-// SetTrickplayGenerator installs a shared generator so two adapters cannot
-// race independent generators over the same e<edition>/<width> cache
-// namespace. Without an injection the lazy fallback stays per-API.
 func (a *API) SetTrickplayGenerator(g *trickplay.Generator) {
 	a.tpMu.Lock()
 	defer a.tpMu.Unlock()
@@ -340,9 +337,6 @@ func (a *API) hlsFile(w http.ResponseWriter, r *http.Request) {
 	s, err := a.TC.Get(sid, ed.ID, ed.Files[0].Path, start)
 	if err != nil {
 		if errors.Is(err, transcode.ErrSessionParams) {
-			// A ticket reused with a different start no longer matches its
-			// stored session; the client's expired-session retry path
-			// bootstraps a fresh ticket and session.
 			w.Header().Set("Cache-Control", "no-store")
 			writeJSON(w, http.StatusGone, map[string]string{"error": "playback session expired"})
 			return

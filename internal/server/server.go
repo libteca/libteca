@@ -86,9 +86,6 @@ func (s *Server) buildHandler() http.Handler {
 	s.tm = tm
 	s.jf = jf
 
-	// One trickplay generator serves both adapters: each API lazily creating
-	// its own meant two independent job maps racing over the same
-	// e<edition>/<width> cache namespace with no mutual serialization.
 	tp := trickplay.New(s.Dir)
 	c.SetTrickplayGenerator(tp)
 	jf.SetTrickplayGenerator(tp)

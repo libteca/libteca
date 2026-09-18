@@ -238,9 +238,6 @@ func (s *Service) enforceRetention(p *store.Podcast) error {
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("purge episode %d: %w", ep.ID, err)
 		}
-		// Only after the bytes are gone does the episode lose its link and
-		// the file row go missing, in one transaction: marking first left
-		// the on-disk file stranded indefinitely when the unlink failed.
 		if err := s.DB.PurgeEpisode(ep.ID, *ep.FileID); err != nil {
 			return err
 		}

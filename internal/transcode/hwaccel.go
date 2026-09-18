@@ -159,9 +159,6 @@ func buildArgs(accel, source, dir string, startSecs float64, bitrate string) []s
 	return args
 }
 
-// SetHwAccel pins the accel mode (Accel* constants, or "auto" to force
-// detection with the environment override ignored). Takes precedence over
-// LIBTECA_HWACCEL. Applies to new sessions; running sessions are unaffected.
 func (m *Manager) SetHwAccel(accel string) error {
 	switch accel {
 	case AccelNone, AccelVideoToolbox, AccelVAAPI, AccelNVENC, AccelQSV:

@@ -37,9 +37,6 @@ func (a *API) editionDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Path safety (PLAN §11): the served path comes only from the files
-	// table and is opened through the library-root confinement every other
-	// media route uses — the client controls the edition id, never a
-	// filesystem path.
 	ct := downloadContentTypes[format]
 	if ct == "" {
 		ct = mime.TypeByExtension(filepath.Ext(f.Path))

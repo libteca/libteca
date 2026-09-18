@@ -80,10 +80,6 @@ func newGetRequest(ctx context.Context, url string) (*http.Request, error) {
 }
 
 // normalizeFeedURL canonicalizes a feed URL for storage and duplicate
-// detection: the fragment is dropped and trailing slashes trimmed, but the
-// scheme is preserved verbatim — upgrading http to https changed the
-// resource identity and could make an HTTP-only feed permanently
-// unreachable before any request was made.
 func normalizeFeedURL(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {

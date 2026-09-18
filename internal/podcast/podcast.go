@@ -131,9 +131,6 @@ func New(db *store.DB, dataDir string) *Service {
 	return NewWithClient(db, dataDir, publicHTTPClient(30*time.Second), publicHTTPClient(0))
 }
 
-// EgressGuardedClient exposes the guarded outbound transport for other
-// packages fetching provider-supplied URLs (metadata covers): destination
-// validation must not be podcast-only policy.
 func EgressGuardedClient(timeout time.Duration) *http.Client {
 	return publicHTTPClient(timeout)
 }
@@ -236,9 +233,6 @@ func (s *Service) refresh(ctx context.Context, p *store.Podcast) (*store.Podcast
 				errs = append(errs, err)
 			}
 		}
-		// Retention runs even when a download failed: one permanently bad
-		// enclosure used to suppress purging forever while other episodes
-		// kept arriving, defeating the retained-episode count.
 		if err := s.enforceRetention(p); err != nil {
 			errs = append(errs, err)
 		}
@@ -272,8 +266,6 @@ func (s *Service) refresh(ctx context.Context, p *store.Podcast) (*store.Podcast
 // applyFeed upserts all feed episodes, then (if auto-download is on)
 // downloads the newest pending episodes up to maxEpisodes — the rest are
 // marked seen so the back catalog is not re-chewed every refresh — and
-// finally enforces retention. A download failure does not skip retention:
-// both errors are reported.
 func (s *Service) applyFeed(ctx context.Context, p *store.Podcast, feed *Feed) error {
 	for i := range feed.Episodes {
 		ep := &feed.Episodes[i]

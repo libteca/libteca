@@ -123,11 +123,6 @@ func sidecarSRT(media string) (string, bool) {
 	return "", false
 }
 
-// subtitleCacheKey derives the on-disk cache name from the file's identity
-// and recorded version, so a replaced or re-probed media file can never be
-// served a stale extraction and the cache never lives inside the library
-// (where media mounts are read-only and a library writer could plant or
-// poison it).
 func subtitleCacheKey(f *store.FileRec) string {
 	sum := sha256.Sum256([]byte(fmt.Sprintf("v1\x00%d\x00%s\x00%d\x00%d", f.ID, f.Path, f.MtimeSecs, f.MtimeNS)))
 	return hex.EncodeToString(sum[:])

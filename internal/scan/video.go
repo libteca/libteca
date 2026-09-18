@@ -203,8 +203,6 @@ func scanVideoLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 			probed = append(probed, probedVid{f: f, edTitle: edTitle, rawTitle: rawTitle})
 		}
 		if len(probed) == 0 {
-			// Every changed file in this group failed probing: creating the
-			// work anyway left an empty edition behind a 'done' scan.
 			continue
 		}
 		var workID int64

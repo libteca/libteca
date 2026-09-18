@@ -99,9 +99,6 @@ var audioExts = map[string]string{
 
 // audioPathsIn lists the audio files under dir (hidden dirs skipped),
 // naturally sorted like the scanner would see them. Durations are the
-// caller's problem — foreign metadata carries them. Traversal errors fail
-// the discovery instead of silently producing a partial import plan, and
-// only regular files are accepted.
 func audioPathsIn(dir string) ([]string, error) {
 	var names []string
 	err := filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
@@ -192,9 +189,6 @@ func applyUsers(db *store.DB, users []foreignUser, plan *Plan, commit bool) (map
 			up.Exists = true
 			ids[u.ID] = existing.ID
 		} else if errors.Is(err, store.ErrNotFound) && commit {
-			// Only a confirmed-missing user is created: treating an
-			// arbitrary lookup failure as "not exists" created users from
-			// database faults.
 			pw := tempPassword()
 			id, err := db.CreateUser(u.Name, auth.Hash(pw), u.IsAdmin)
 			if err != nil {
@@ -236,8 +230,6 @@ func ensureLibrary(db *store.DB, name, typ, fallbackPath string, plan *Plan, lib
 }
 
 // applyFiles stats each resolved file and upserts it under the edition.
-// Only regular files are accepted: a symlink or device node with an audio
-// extension must fail the import rather than become a served path.
 func applyFiles(db *store.DB, editionID int64, files []fileSpec) ([]int64, error) {
 	var ids []int64
 	for i, f := range files {

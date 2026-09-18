@@ -63,11 +63,6 @@ func (d *DB) AddLibrary(name, typ, path string) (int64, error) {
 
 var ErrLibraryOverlap = errors.New("library path overlaps an existing library")
 
-// AddLibraryChecked inserts a library with the overlap invariant enforced
-// inside the same immediate-write transaction, so two concurrent creations
-// cannot both pass a read-then-insert check. The conflict callback receives
-// each existing root and reports overlap; filesystem resolution stays with
-// the caller.
 func (d *DB) AddLibraryChecked(name, typ, path string, conflict func(existing string) bool) (int64, error) {
 	var id int64
 	err := d.Update(func(tx *Tx) error {

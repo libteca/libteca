@@ -145,10 +145,6 @@ func (a *API) me(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) userPayload(userID int64) (map[string]any, error) {
-	// Both lookups are checked: an ignored error nil-dereferenced below when
-	// a user was deleted between authentication and payload construction,
-	// and a progress-list failure silently presented an empty history as a
-	// successful response.
 	u, err := a.DB.User(userID)
 	if err != nil {
 		return nil, err
@@ -431,8 +427,6 @@ func (a *API) getProgress(w http.ResponseWriter, r *http.Request) {
 	}
 	p, err := a.DB.GetProgress(auth.UserID(r), ctx.ed.ID)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		// Only a genuinely missing row answers the default zero payload;
-		// an operational failure used to masquerade as fresh progress.
 		serverError(w, r, err)
 		return
 	}

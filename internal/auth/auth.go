@@ -210,9 +210,6 @@ func IssueTokenFromParent(db *store.DB, userID int64, label, parent string) (str
 	return value, nil
 }
 
-// LookupTokenUser resolves a bearer token to its user, distinguishing a
-// missing or revoked token (store.ErrNotFound) from an operational database
-// failure, so callers can answer 401 versus 503 honestly.
 func LookupTokenUser(db *store.DB, value string) (*store.User, error) {
 	if value == "" || len(value) > 256 {
 		return nil, store.ErrNotFound
