@@ -657,12 +657,12 @@ func TestDownloadEpisodeDripFeedTimesOut(t *testing.T) {
 
 func TestNormalizeFeedURL(t *testing.T) {
 	cases := map[string]string{
-		"http://example.com/feed":        "https://example.com/feed",
-		"http://example.com/feed/":       "https://example.com/feed",
+		"http://example.com/feed":        "http://example.com/feed",
+		"http://example.com/feed/":       "http://example.com/feed",
 		"https://example.com/feed/":      "https://example.com/feed",
 		"https://example.com/feed#frag":  "https://example.com/feed",
-		"http://example.com/feed/?q=1#f": "https://example.com/feed?q=1",
-		"http://example.com/":            "https://example.com",
+		"http://example.com/feed/?q=1#f": "http://example.com/feed?q=1",
+		"http://example.com/":            "http://example.com",
 		"https://example.com":            "https://example.com",
 		"http://localhost/feed":          "http://localhost/feed",
 		"http://127.0.0.1:8096/feed/":    "http://127.0.0.1:8096/feed",

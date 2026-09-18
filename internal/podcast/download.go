@@ -225,13 +225,23 @@ func (s *Service) enforceRetention(p *store.Podcast) error {
 	}
 	for i := 0; i < overflow; i++ {
 		ep := downloaded[i]
-		if path, ok := paths[*ep.FileID]; ok && s.purgeablePath(path) {
-			osRemove(path)
+		if ep.FileID == nil {
+			return fmt.Errorf("purge episode %d: downloaded episode has no file", ep.ID)
 		}
-		if err := s.DB.MarkFileMissing(*ep.FileID); err != nil {
-			return err
+		path, ok := paths[*ep.FileID]
+		if !ok {
+			return fmt.Errorf("purge episode %d: file %d is not tracked", ep.ID, *ep.FileID)
 		}
-		if err := s.DB.MarkEpisodePurged(ep.ID); err != nil {
+		if !s.purgeablePath(path) {
+			return fmt.Errorf("purge episode %d: refusing to remove uncontained path %s", ep.ID, path)
+		}
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("purge episode %d: %w", ep.ID, err)
+		}
+		// Only after the bytes are gone does the episode lose its link and
+		// the file row go missing, in one transaction: marking first left
+		// the on-disk file stranded indefinitely when the unlink failed.
+		if err := s.DB.PurgeEpisode(ep.ID, *ep.FileID); err != nil {
 			return err
 		}
 	}
