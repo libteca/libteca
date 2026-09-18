@@ -78,6 +78,17 @@ docker run -d --name libteca -p 8096:8096 -v libteca-data:/data \
   libteca:dev --init-admin admin:changeme
 ```
 
+The container runs as the unprivileged uid/gid 10001 (`libteca`); only `/data`
+must be writable, so media library mounts can be read-only. Upgrading a
+bind-mounted data directory from an older root-mode image needs a one-time
+ownership migration on the host — the server never chowns host paths itself:
+
+```sh
+chown -R 10001:10001 /path/to/data
+```
+
+Named volumes initialize from the image and need no migration.
+
 ffmpeg note: transcoding in-container is software-only by default — the
 teploy format has no device mapping yet, so `/dev/dri` passthrough is
 pending there. Plain `docker run --device /dev/dri ...` works; with
