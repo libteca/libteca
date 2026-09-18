@@ -2,6 +2,7 @@ package scan
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -50,6 +51,30 @@ func validateScanRoot(root string) error {
 	return nil
 }
 
+// scanRoot resolves the directory a scanner walks. filepath.WalkDir does not
+// follow the root symlink itself, so a symlinked library root scanned as an
+// empty library: walk the resolved directory instead, while every recorded
+// path keeps its stored alias spelling so rooted serving stays consistent.
+func scanRoot(abs string) (string, func(string) string, error) {
+	if err := validateScanRoot(abs); err != nil {
+		return "", nil, err
+	}
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", nil, fmt.Errorf("library root unavailable: %w", err)
+	}
+	if real == abs {
+		return abs, func(p string) string { return p }, nil
+	}
+	return real, func(p string) string {
+		rel, rerr := filepath.Rel(real, p)
+		if rerr != nil {
+			return p
+		}
+		return filepath.Join(abs, rel)
+	}, nil
+}
+
 func All(ctx context.Context, db *store.DB, coversDir string, onProgress ProgressFn) (int, error) {
 	libs, err := db.Libraries()
 	if err != nil {
@@ -95,11 +120,12 @@ func scanAudioLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 	if err != nil {
 		return 0, err
 	}
-	if err := validateScanRoot(abs); err != nil {
+	walkRoot, toAlias, err := scanRoot(abs)
+	if err != nil {
 		return 0, err
 	}
 	var files []bookFile
-	err = filepath.WalkDir(abs, func(path string, d os.DirEntry, err error) error {
+	err = filepath.WalkDir(walkRoot, func(path string, d os.DirEntry, err error) error {
 		if cerr := cancelErr(ctx); cerr != nil {
 			return cerr
 		}
@@ -107,7 +133,7 @@ func scanAudioLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 			return fmt.Errorf("scan %s: %w", path, err)
 		}
 		if d.IsDir() {
-			if strings.HasPrefix(d.Name(), ".") && path != abs {
+			if strings.HasPrefix(d.Name(), ".") && path != walkRoot {
 				return filepath.SkipDir
 			}
 			return nil
@@ -123,28 +149,36 @@ func scanAudioLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 		if !fi.Mode().IsRegular() {
 			return nil
 		}
-		rel, rerr := filepath.Rel(abs, path)
+		p := toAlias(path)
+		rel, rerr := filepath.Rel(abs, p)
 		if rerr != nil {
 			return nil
 		}
 		parts := strings.Split(rel, string(filepath.Separator))
-		top := path
+		top := p
 		if len(parts) > 1 {
 			top = filepath.Join(abs, parts[0])
 		}
 		files = append(files, bookFile{
-			path:    path,
-			dir:     filepath.Dir(path),
+			path:    p,
+			dir:     filepath.Dir(p),
 			top:     top,
 			name:    d.Name(),
 			size:    fi.Size(),
 			mtime:   fi.ModTime().Unix(),
 			mtimeNs: fi.ModTime().UnixNano(),
 		})
-		tr.seen(path)
+		tr.seen(p)
 		return nil
 	})
 	if err != nil {
+		return 0, err
+	}
+	// Verified disappearances are marked before the first upsert so a
+	// renamed file's new path can relink onto its old row in this same
+	// scan; running it after the upserts left the old row unmissed and the
+	// identity lost until a second scan that no longer happened.
+	if _, err := db.MarkMissingLibraryFiles(lib.ID); err != nil {
 		return 0, err
 	}
 
@@ -159,6 +193,7 @@ func scanAudioLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 	sort.Strings(topFolders)
 
 	count := 0
+	var itemErrors []error
 	for _, top := range topFolders {
 		if cerr := cancelErr(ctx); cerr != nil {
 			return count, cerr
@@ -166,12 +201,15 @@ func scanAudioLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 		group := groups[top]
 		sort.Slice(group, func(i, j int) bool { return natLess(relPath(top, group[i].path), relPath(top, group[j].path)) })
 		if err := scanBook(ctx, db, lib, top, group, coversDir, tr); err != nil {
-			fmt.Fprintf(os.Stderr, "libteca: skip %s: %v\n", top, err)
+			if cerr := ctx.Err(); cerr != nil {
+				return count, cerr
+			}
+			itemErrors = append(itemErrors, fmt.Errorf("scan %s: %w", top, err))
 			continue
 		}
 		count++
 	}
-	return count, nil
+	return count, errors.Join(itemErrors...)
 }
 
 func scanBook(ctx context.Context, db *store.DB, lib *store.Library, top string, group []bookFile, coversDir string, tr *tracker) error {

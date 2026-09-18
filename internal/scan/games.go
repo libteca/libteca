@@ -142,11 +142,12 @@ func scanGamesLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 	if err != nil {
 		return 0, err
 	}
-	if err := validateScanRoot(abs); err != nil {
+	walkRoot, toAlias, err := scanRoot(abs)
+	if err != nil {
 		return 0, err
 	}
 	var docs []gameDoc
-	err = filepath.WalkDir(abs, func(p string, d os.DirEntry, err error) error {
+	err = filepath.WalkDir(walkRoot, func(p string, d os.DirEntry, err error) error {
 		if cerr := cancelErr(ctx); cerr != nil {
 			return cerr
 		}
@@ -154,7 +155,7 @@ func scanGamesLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 			return fmt.Errorf("scan %s: %w", p, err)
 		}
 		if d.IsDir() {
-			if strings.HasPrefix(d.Name(), ".") && p != abs {
+			if strings.HasPrefix(d.Name(), ".") && p != walkRoot {
 				return filepath.SkipDir
 			}
 			return nil
@@ -171,14 +172,18 @@ func scanGamesLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 		if !fi.Mode().IsRegular() {
 			return nil
 		}
+		stored := toAlias(p)
 		docs = append(docs, gameDoc{
-			path: p, name: d.Name(), size: fi.Size(), mtime: fi.ModTime().Unix(), mtimeNs: fi.ModTime().UnixNano(),
+			path: stored, name: d.Name(), size: fi.Size(), mtime: fi.ModTime().Unix(), mtimeNs: fi.ModTime().UnixNano(),
 			platform: plat, title: cleanRomTitle(d.Name()),
 		})
-		tr.seen(p)
+		tr.seen(stored)
 		return nil
 	})
 	if err != nil {
+		return 0, err
+	}
+	if _, err := db.MarkMissingLibraryFiles(lib.ID); err != nil {
 		return 0, err
 	}
 

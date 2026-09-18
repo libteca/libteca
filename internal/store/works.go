@@ -40,12 +40,12 @@ func (e *EditionView) Locate(position float64) (fileID int64, offset float64) {
 	return 0, 0
 }
 
-const fileCols = `id, edition_id, path, seq, size_bytes, mtime_secs, hash, codec, video_codec, width, height, container, bitrate, channels, sample_rate, duration_secs, chapters, missing`
+const fileCols = `id, edition_id, path, seq, size_bytes, mtime_secs, mtime_ns, hash, codec, video_codec, width, height, container, bitrate, channels, sample_rate, duration_secs, chapters, missing`
 
 func scanFile(rows *sql.Rows) (FileRec, error) {
 	var f FileRec
 	var missing int
-	err := rows.Scan(&f.ID, &f.EditionID, &f.Path, &f.Seq, &f.SizeBytes, &f.MtimeSecs, &f.Hash, &f.Codec, &f.VideoCodec, &f.Width, &f.Height, &f.Container, &f.Bitrate, &f.Channels, &f.SampleRate, &f.DurationSecs, &f.Chapters, &missing)
+	err := rows.Scan(&f.ID, &f.EditionID, &f.Path, &f.Seq, &f.SizeBytes, &f.MtimeSecs, &f.MtimeNS, &f.Hash, &f.Codec, &f.VideoCodec, &f.Width, &f.Height, &f.Container, &f.Bitrate, &f.Channels, &f.SampleRate, &f.DurationSecs, &f.Chapters, &missing)
 	f.Missing = missing != 0
 	return f, err
 }

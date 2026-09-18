@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -48,12 +49,13 @@ func scanBooksLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 	if err != nil {
 		return 0, err
 	}
-	if err := validateScanRoot(abs); err != nil {
+	walkRoot, toAlias, err := scanRoot(abs)
+	if err != nil {
 		return 0, err
 	}
 	cbrTool := cbrExtractor()
 	var docs []bookDoc
-	err = filepath.WalkDir(abs, func(p string, d os.DirEntry, err error) error {
+	err = filepath.WalkDir(walkRoot, func(p string, d os.DirEntry, err error) error {
 		if cerr := cancelErr(ctx); cerr != nil {
 			return cerr
 		}
@@ -61,7 +63,7 @@ func scanBooksLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 			return fmt.Errorf("scan %s: %w", p, err)
 		}
 		if d.IsDir() {
-			if strings.HasPrefix(d.Name(), ".") && p != abs {
+			if strings.HasPrefix(d.Name(), ".") && p != walkRoot {
 				return filepath.SkipDir
 			}
 			return nil
@@ -81,17 +83,22 @@ func scanBooksLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 		if !fi.Mode().IsRegular() {
 			return nil
 		}
-		docs = append(docs, bookDoc{path: p, name: d.Name(), format: ext[1:], size: fi.Size(), mtime: fi.ModTime().Unix(), mtimeNs: fi.ModTime().UnixNano()})
-		tr.seen(p)
+		stored := toAlias(p)
+		docs = append(docs, bookDoc{path: stored, name: d.Name(), format: ext[1:], size: fi.Size(), mtime: fi.ModTime().Unix(), mtimeNs: fi.ModTime().UnixNano()})
+		tr.seen(stored)
 		return nil
 	})
 	if err != nil {
+		return 0, err
+	}
+	if _, err := db.MarkMissingLibraryFiles(lib.ID); err != nil {
 		return 0, err
 	}
 
 	sort.Slice(docs, func(i, j int) bool { return natLess(docs[i].path, docs[j].path) })
 
 	count := 0
+	var itemErrors []error
 	for i := range docs {
 		if cerr := cancelErr(ctx); cerr != nil {
 			return count, cerr
@@ -101,7 +108,10 @@ func scanBooksLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 			continue
 		}
 		if perr := probeBook(ctx, d, cbrTool); perr != nil {
-			fmt.Fprintf(os.Stderr, "libteca: skip %s: %v\n", d.path, perr)
+			if cerr := ctx.Err(); cerr != nil {
+				return count, cerr
+			}
+			itemErrors = append(itemErrors, fmt.Errorf("probe %s: %w", d.path, perr))
 			continue
 		}
 		tr.probed()
@@ -110,7 +120,7 @@ func scanBooksLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 		}
 		count++
 	}
-	return count, nil
+	return count, errors.Join(itemErrors...)
 }
 
 func probeBook(ctx context.Context, d *bookDoc, cbrTool string) error {

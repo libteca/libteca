@@ -64,12 +64,13 @@ func scanVideoLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 	if err != nil {
 		return 0, err
 	}
-	if err := validateScanRoot(abs); err != nil {
+	walkRoot, toAlias, err := scanRoot(abs)
+	if err != nil {
 		return 0, err
 	}
 	var files []vidFile
 	var series = map[string][]vidFile{}
-	err = filepath.WalkDir(abs, func(path string, d os.DirEntry, err error) error {
+	err = filepath.WalkDir(walkRoot, func(path string, d os.DirEntry, err error) error {
 		if cerr := cancelErr(ctx); cerr != nil {
 			return cerr
 		}
@@ -77,7 +78,7 @@ func scanVideoLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 			return fmt.Errorf("scan %s: %w", path, err)
 		}
 		if d.IsDir() {
-			if strings.HasPrefix(d.Name(), ".") && path != abs {
+			if strings.HasPrefix(d.Name(), ".") && path != walkRoot {
 				return filepath.SkipDir
 			}
 			return nil
@@ -93,22 +94,26 @@ func scanVideoLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 		if !fi.Mode().IsRegular() {
 			return nil
 		}
-		rel, _ := filepath.Rel(abs, path)
+		p := toAlias(path)
+		rel, _ := filepath.Rel(abs, p)
 		parts := strings.Split(rel, string(filepath.Separator))
-		top := path
+		top := p
 		if len(parts) > 1 {
 			top = filepath.Join(abs, parts[0])
 		}
-		v := vidFile{path: path, name: d.Name(), size: fi.Size(), mtime: fi.ModTime().Unix(), mtimeNs: fi.ModTime().UnixNano()}
+		v := vidFile{path: p, name: d.Name(), size: fi.Size(), mtime: fi.ModTime().Unix(), mtimeNs: fi.ModTime().UnixNano()}
 		if tv {
-			parseEpisode(&v, path, rel)
+			parseEpisode(&v, p, rel)
 		}
 		files = append(files, v)
 		series[top] = append(series[top], v)
-		tr.seen(path)
+		tr.seen(p)
 		return nil
 	})
 	if err != nil {
+		return 0, err
+	}
+	if _, err := db.MarkMissingLibraryFiles(lib.ID); err != nil {
 		return 0, err
 	}
 
@@ -119,6 +124,7 @@ func scanVideoLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 	sort.Strings(tops)
 
 	count := 0
+	var itemErrors []error
 	for _, top := range tops {
 		if cerr := cancelErr(ctx); cerr != nil {
 			return count, cerr
@@ -177,7 +183,10 @@ func scanVideoLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 				continue
 			}
 			if err := f.probe(ctx); err != nil {
-				fmt.Fprintf(os.Stderr, "libteca: probe fail %s: %v\n", f.path, err)
+				if cerr := ctx.Err(); cerr != nil {
+					return count, cerr
+				}
+				itemErrors = append(itemErrors, fmt.Errorf("probe %s: %w", f.path, err))
 				continue
 			}
 			tr.probed()
@@ -192,6 +201,11 @@ func scanVideoLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 			rawTitle := edTitle
 			edTitle = episodeTitleFromNFO(f.path, edTitle)
 			probed = append(probed, probedVid{f: f, edTitle: edTitle, rawTitle: rawTitle})
+		}
+		if len(probed) == 0 {
+			// Every changed file in this group failed probing: creating the
+			// work anyway left an empty edition behind a 'done' scan.
+			continue
 		}
 		var workID int64
 		err := db.Update(func(tx *store.Tx) error {
@@ -244,7 +258,7 @@ func scanVideoLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 			return count, err
 		}
 	}
-	return count, nil
+	return count, errors.Join(itemErrors...)
 }
 
 func ensureCoverVideo(ctx context.Context, db *store.DB, workID int64, top, mediaPath, coversDir string) error {
@@ -324,7 +338,8 @@ func scanMusicLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 	if err != nil {
 		return 0, err
 	}
-	if err := validateScanRoot(abs); err != nil {
+	walkRoot, toAlias, err := scanRoot(abs)
+	if err != nil {
 		return 0, err
 	}
 	type track struct {
@@ -336,7 +351,7 @@ func scanMusicLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 		mtimeNs int64
 	}
 	albums := map[string][]track{}
-	err = filepath.WalkDir(abs, func(path string, d os.DirEntry, err error) error {
+	err = filepath.WalkDir(walkRoot, func(path string, d os.DirEntry, err error) error {
 		if cerr := cancelErr(ctx); cerr != nil {
 			return cerr
 		}
@@ -344,7 +359,7 @@ func scanMusicLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 			return fmt.Errorf("scan %s: %w", path, err)
 		}
 		if d.IsDir() {
-			if strings.HasPrefix(d.Name(), ".") && path != abs {
+			if strings.HasPrefix(d.Name(), ".") && path != walkRoot {
 				return filepath.SkipDir
 			}
 			return nil
@@ -360,9 +375,10 @@ func scanMusicLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 		if !fi.Mode().IsRegular() {
 			return nil
 		}
-		rel, _ := filepath.Rel(abs, path)
+		p := toAlias(path)
+		rel, _ := filepath.Rel(abs, p)
 		parts := strings.Split(rel, string(filepath.Separator))
-		top := path
+		top := p
 		if len(parts) > 1 {
 			top = filepath.Join(abs, parts[0])
 		}
@@ -371,11 +387,14 @@ func scanMusicLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 		if n, err := strconv.Atoi(strings.TrimSpace(strings.SplitN(base, " ", 2)[0])); err == nil {
 			num = n
 		}
-		albums[top] = append(albums[top], track{path: path, num: num, name: base, size: fi.Size(), mtime: fi.ModTime().Unix(), mtimeNs: fi.ModTime().UnixNano()})
-		tr.seen(path)
+		albums[top] = append(albums[top], track{path: p, num: num, name: base, size: fi.Size(), mtime: fi.ModTime().Unix(), mtimeNs: fi.ModTime().UnixNano()})
+		tr.seen(p)
 		return nil
 	})
 	if err != nil {
+		return 0, err
+	}
+	if _, err := db.MarkMissingLibraryFiles(lib.ID); err != nil {
 		return 0, err
 	}
 
@@ -386,6 +405,7 @@ func scanMusicLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 	sort.Strings(tops)
 
 	count := 0
+	var itemErrors []error
 	for _, top := range tops {
 		if cerr := cancelErr(ctx); cerr != nil {
 			return count, cerr
@@ -436,6 +456,10 @@ func scanMusicLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 			}
 			info, err := audio.ProbeContext(ctx, t.path)
 			if err != nil {
+				if cerr := ctx.Err(); cerr != nil {
+					return count, cerr
+				}
+				itemErrors = append(itemErrors, fmt.Errorf("probe %s: %w", t.path, err))
 				continue
 			}
 			tr.probed()
@@ -444,6 +468,9 @@ func scanMusicLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 				trackTitle = v
 			}
 			probedTracks = append(probedTracks, probedTrack{t: t, title: trackTitle, info: info, hash: hashFile(t.path, t.size), ordinal: int64(i + 1)})
+		}
+		if len(probedTracks) == 0 {
+			continue
 		}
 		var workID int64
 		err := db.Update(func(tx *store.Tx) error {
@@ -497,5 +524,5 @@ func scanMusicLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 			return count, err
 		}
 	}
-	return count, nil
+	return count, errors.Join(itemErrors...)
 }

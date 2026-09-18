@@ -61,6 +61,55 @@ func (d *DB) AddLibrary(name, typ, path string) (int64, error) {
 	return res.LastInsertId()
 }
 
+var ErrLibraryOverlap = errors.New("library path overlaps an existing library")
+
+// AddLibraryChecked inserts a library with the overlap invariant enforced
+// inside the same immediate-write transaction, so two concurrent creations
+// cannot both pass a read-then-insert check. The conflict callback receives
+// each existing root and reports overlap; filesystem resolution stays with
+// the caller.
+func (d *DB) AddLibraryChecked(name, typ, path string, conflict func(existing string) bool) (int64, error) {
+	var id int64
+	err := d.Update(func(tx *Tx) error {
+		rows, err := tx.Query(`SELECT path FROM libraries`)
+		if err != nil {
+			return err
+		}
+		var roots []string
+		for rows.Next() {
+			var p string
+			if err := rows.Scan(&p); err != nil {
+				rows.Close()
+				return err
+			}
+			roots = append(roots, p)
+		}
+		scanErr := rows.Err()
+		closeErr := rows.Close()
+		if scanErr != nil {
+			return scanErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		if conflict != nil {
+			for _, p := range roots {
+				if conflict(p) {
+					return ErrLibraryOverlap
+				}
+			}
+		}
+		res, err := tx.Exec(`INSERT INTO libraries (name, type, path, created_at) VALUES (?,?,?,?)`,
+			name, typ, path, nowMilli())
+		if err != nil {
+			return err
+		}
+		id, err = res.LastInsertId()
+		return err
+	})
+	return id, err
+}
+
 func (d *DB) DeleteLibrary(id int64) error {
 	tx, err := d.Begin()
 	if err != nil {

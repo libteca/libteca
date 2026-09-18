@@ -59,20 +59,35 @@ func (d *DB) SetReadingProgress(p *ReadingProgress) error {
 }
 
 func (d *DB) SetReadingProgressPatch(p *ReadingProgress, finishedProvided bool) error {
+	return d.SetReadingProgressFields(p, ProgressFields{Finished: finishedProvided})
+}
+
+// ProgressFields selects which progress columns a patch overwrites; omitted
+// columns keep their stored value, so a finished-only or page-only update
+// cannot reset playback position, duration or device.
+type ProgressFields struct {
+	Position bool
+	Duration bool
+	Device   bool
+	Finished bool
+}
+
+func (d *DB) SetReadingProgressFields(p *ReadingProgress, fields ProgressFields) error {
 	_, err := d.Exec(`INSERT INTO progress (user_id, edition_id, file_id, file_offset_secs, edition_position_secs, duration_secs, is_finished, device, updated_at, page, percent, locator)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(user_id, edition_id) DO UPDATE SET
-			file_id = excluded.file_id,
-			file_offset_secs = excluded.file_offset_secs,
-			edition_position_secs = excluded.edition_position_secs,
-			duration_secs = excluded.duration_secs,
+			file_id = CASE WHEN ? THEN excluded.file_id ELSE progress.file_id END,
+			file_offset_secs = CASE WHEN ? THEN excluded.file_offset_secs ELSE progress.file_offset_secs END,
+			edition_position_secs = CASE WHEN ? THEN excluded.edition_position_secs ELSE progress.edition_position_secs END,
+			duration_secs = CASE WHEN ? THEN excluded.duration_secs ELSE progress.duration_secs END,
 			is_finished = CASE WHEN ? THEN excluded.is_finished ELSE progress.is_finished END,
-			device = excluded.device,
+			device = CASE WHEN ? THEN excluded.device ELSE progress.device END,
 			updated_at = excluded.updated_at,
 			page = coalesce(excluded.page, progress.page),
 			percent = coalesce(excluded.percent, progress.percent),
 			locator = coalesce(excluded.locator, progress.locator)`,
-		p.UserID, p.EditionID, p.FileID, p.FileOffsetSecs, p.EditionPositionSecs, p.DurationSecs, p.IsFinished, p.Device, nowMilli(), p.Page, p.Percent, p.Locator, finishedProvided)
+		p.UserID, p.EditionID, p.FileID, p.FileOffsetSecs, p.EditionPositionSecs, p.DurationSecs, p.IsFinished, p.Device, nowMilli(), p.Page, p.Percent, p.Locator,
+		fields.Position, fields.Position, fields.Position, fields.Duration, fields.Finished, fields.Device)
 	return err
 }
 

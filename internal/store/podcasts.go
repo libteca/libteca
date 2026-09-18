@@ -540,6 +540,19 @@ func (d *DB) MarkEpisodePurged(episodeID int64) error {
 	return err
 }
 
+// PurgeEpisode unlinks a purged episode and flags its file row missing in
+// one transaction, so a crash between the two statements cannot leave the
+// episode purged while its file still looks live.
+func (d *DB) PurgeEpisode(episodeID, fileID int64) error {
+	return d.Update(func(tx *Tx) error {
+		if _, err := tx.Exec(`UPDATE files SET missing = 1 WHERE id = ?`, fileID); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`UPDATE podcast_episodes SET file_id = NULL WHERE id = ?`, episodeID)
+		return err
+	})
+}
+
 func (d *DB) MarkFileMissing(fileID int64) error {
 	_, err := d.Exec(`UPDATE files SET missing = 1 WHERE id = ?`, fileID)
 	return err

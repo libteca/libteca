@@ -301,19 +301,14 @@ func (a *API) addLibrary(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "path is not a directory"})
 		return
 	}
-	libs, err := a.DB.Libraries()
+	id, err := a.DB.AddLibraryChecked(body.Name, body.Type, abs, func(existing string) bool {
+		return rootsOverlap(abs, existing)
+	})
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": "internal error"})
-		return
-	}
-	for _, l := range libs {
-		if rootsOverlap(abs, l.Path) {
+		if errors.Is(err, store.ErrLibraryOverlap) {
 			writeJSON(w, 409, map[string]string{"error": "library path overlaps an existing library"})
 			return
 		}
-	}
-	id, err := a.DB.AddLibrary(body.Name, body.Type, abs)
-	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
@@ -482,12 +477,15 @@ func (a *API) runScan(ctx context.Context, run *scanRun, lib *store.Library) {
 		fmt.Println("libteca: scan:", err)
 		return
 	}
-	_, _ = a.DB.PruneProviderCache()
-	if n, rerr := a.DB.MarkMissingLibraryFiles(lib.ID); rerr != nil {
-		slog.Warn("libteca: scan reconciliation failed", "library", lib.ID, "err", rerr)
-	} else if n > 0 {
-		slog.Info("libteca: scan marked missing files", "library", lib.ID, "count", n)
+	// A scanner that swallowed cancellation near its last item would
+	// otherwise publish a healthy 'done' for an incomplete traversal.
+	if cerr := ctx.Err(); cerr != nil {
+		cancelMsg := "cancelled"
+		a.persistScanTerminal(run, "error", &cancelMsg)
+		run.finish("error", cancelMsg)
+		return
 	}
+	_, _ = a.DB.PruneProviderCache()
 	a.persistScanTerminal(run, "done", nil)
 	run.finish("done", "")
 }
@@ -1016,10 +1014,10 @@ func (a *API) setProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Position float64  `json:"position"`
-		Duration float64  `json:"duration"`
+		Position *float64 `json:"position"`
+		Duration *float64 `json:"duration"`
 		Finished *bool    `json:"finished"`
-		Device   string   `json:"device"`
+		Device   *string  `json:"device"`
 		Page     *int64   `json:"page"`
 		Percent  *float64 `json:"percent"`
 		Locator  *string  `json:"locator"`
@@ -1028,47 +1026,56 @@ func (a *API) setProgress(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "bad request"})
 		return
 	}
+	validateNum := func(v float64) bool {
+		return !math.IsNaN(v) && !math.IsInf(v, 0) && v >= 0
+	}
+	if body.Percent != nil && (math.IsNaN(*body.Percent) || math.IsInf(*body.Percent, 0)) {
+		writeJSON(w, 400, map[string]string{"error": "invalid percent"})
+		return
+	}
 	if body.Percent != nil && (*body.Percent < 0 || *body.Percent > 1) {
 		writeJSON(w, 400, map[string]string{"error": "percent must be between 0 and 1"})
 		return
 	}
-	if math.IsNaN(body.Position) || math.IsInf(body.Position, 0) || body.Position < 0 ||
-		math.IsNaN(body.Duration) || math.IsInf(body.Duration, 0) || body.Duration < 0 {
+	if (body.Position != nil && !validateNum(*body.Position)) || (body.Duration != nil && !validateNum(*body.Duration)) {
 		writeJSON(w, 400, map[string]string{"error": "invalid position or duration"})
-		return
-	}
-	if body.Percent != nil && (math.IsNaN(*body.Percent) || math.IsInf(*body.Percent, 0)) {
-		writeJSON(w, 400, map[string]string{"error": "invalid percent"})
 		return
 	}
 	if body.Page != nil && *body.Page < 0 {
 		writeJSON(w, 400, map[string]string{"error": "page must be nonnegative"})
 		return
 	}
-	if len(body.Device) > 256 || (body.Locator != nil && len(*body.Locator) > 8192) {
+	if (body.Device != nil && len(*body.Device) > 256) || (body.Locator != nil && len(*body.Locator) > 8192) {
 		writeJSON(w, 400, map[string]string{"error": "progress metadata too large"})
 		return
 	}
-	fileID, offset := ed.Locate(body.Position)
-	var dur *float64
-	if body.Duration > 0 {
-		dur = &body.Duration
-	}
-	finished := false
-	if body.Finished != nil {
-		finished = *body.Finished
-	}
+	// Presence-aware patch: omitted position/duration/device leave the
+	// stored values alone, so a finished-only or page-only update cannot
+	// reset playback state the client did not send.
+	fields := store.ProgressFields{Finished: body.Finished != nil}
 	p := &store.ReadingProgress{
-		Progress: store.Progress{
-			UserID: auth.UserID(r), EditionID: eid, FileID: &fileID, FileOffsetSecs: offset,
-			EditionPositionSecs: body.Position, DurationSecs: dur, IsFinished: finished,
-		},
-		Page: body.Page, Percent: body.Percent, Locator: body.Locator,
+		Progress: store.Progress{UserID: auth.UserID(r), EditionID: eid},
+		Page:     body.Page, Percent: body.Percent, Locator: body.Locator,
 	}
-	if body.Device != "" {
-		p.Device = &body.Device
+	if body.Position != nil {
+		fileID, offset := ed.Locate(*body.Position)
+		p.FileID = &fileID
+		p.FileOffsetSecs = offset
+		p.EditionPositionSecs = *body.Position
+		fields.Position = true
 	}
-	if err := a.DB.SetReadingProgressPatch(p, body.Finished != nil); err != nil {
+	if body.Duration != nil && *body.Duration > 0 {
+		p.DurationSecs = body.Duration
+		fields.Duration = true
+	}
+	if body.Finished != nil {
+		p.IsFinished = *body.Finished
+	}
+	if body.Device != nil && *body.Device != "" {
+		p.Device = body.Device
+		fields.Device = true
+	}
+	if err := a.DB.SetReadingProgressFields(p, fields); err != nil {
 		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
@@ -1118,7 +1125,7 @@ func (a *API) cover(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 404, map[string]string{"error": "no cover"})
 		return
 	}
-	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Header().Set("Cache-Control", "private, max-age=86400")
 	serveFile(w, r, path)
 }
 
