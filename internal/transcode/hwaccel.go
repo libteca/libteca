@@ -123,7 +123,7 @@ func buildArgs(accel, source, dir string, startSecs float64, bitrate string) []s
 		bitrate = DefaultVideoBitrate
 	}
 	args := []string{"-y", "-v", "quiet"}
-	if startSecs > 1 {
+	if startSecs > 0 {
 		args = append(args, "-ss", fmt.Sprintf("%.2f", startSecs))
 	}
 	switch accel {
@@ -132,7 +132,7 @@ func buildArgs(accel, source, dir string, startSecs float64, bitrate string) []s
 	case AccelQSV:
 		args = append(args, "-hwaccel", "qsv")
 	}
-	args = append(args, "-i", source, "-map", "0:v:0", "-map", "0:a:0?")
+	args = append(args, "-i", source, "-map", "0:v:0?", "-map", "0:a:0?")
 	switch accel {
 	case AccelVideoToolbox:
 		args = append(args, "-c:v", "h264_videotoolbox", "-allow_sw", "1", "-realtime", "1", "-b:v", bitrate)
@@ -159,21 +159,20 @@ func buildArgs(accel, source, dir string, startSecs float64, bitrate string) []s
 	return args
 }
 
-// SetHwAccel pins the accel mode (Accel* constants, or "auto" to restore
-// detection). Takes precedence over LIBTECA_HWACCEL. Applies to new sessions;
-// running sessions are unaffected.
+// SetHwAccel pins the accel mode (Accel* constants, or "auto" to force
+// detection with the environment override ignored). Takes precedence over
+// LIBTECA_HWACCEL. Applies to new sessions; running sessions are unaffected.
 func (m *Manager) SetHwAccel(accel string) error {
 	switch accel {
 	case AccelNone, AccelVideoToolbox, AccelVAAPI, AccelNVENC, AccelQSV:
 	case "auto":
-		accel = ""
 	default:
 		return fmt.Errorf("transcode: unknown hwaccel %q", accel)
 	}
 	m.hwMu.Lock()
 	defer m.hwMu.Unlock()
 	m.hwSet = accel
-	m.hwMode = accel
+	m.hwMode = ""
 	return nil
 }
 
@@ -190,7 +189,7 @@ func (m *Manager) accelMode() string {
 }
 
 func (m *Manager) detectAccel() string {
-	if m.hwSet != "" {
+	if m.hwSet != "" && m.hwSet != "auto" {
 		return m.hwSet
 	}
 	run := m.probeRun
@@ -203,9 +202,13 @@ func (m *Manager) detectAccel() string {
 		slog.Warn("transcode: ffmpeg hwaccel probe failed, using software", "hwaccels", hwErr, "encoders", encErr)
 		return AccelNone
 	}
+	env := ""
+	if m.hwSet != "auto" {
+		env = os.Getenv(envHwAccel)
+	}
 	mode := selectAccel(runtime.GOOS, renderNodeExists(),
 		hwProbe{hwaccels: parseHwaccels(hwOut), encoders: parseEncoders(encOut)},
-		os.Getenv(envHwAccel))
+		env)
 	slog.Info("transcode: hwaccel selected", "mode", mode)
 	return mode
 }

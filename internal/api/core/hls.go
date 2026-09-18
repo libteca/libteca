@@ -45,6 +45,15 @@ func (a *API) trickplayer() *trickplay.Generator {
 	return a.tp
 }
 
+// SetTrickplayGenerator installs a shared generator so two adapters cannot
+// race independent generators over the same e<edition>/<width> cache
+// namespace. Without an injection the lazy fallback stays per-API.
+func (a *API) SetTrickplayGenerator(g *trickplay.Generator) {
+	a.tpMu.Lock()
+	defer a.tpMu.Unlock()
+	a.tp = g
+}
+
 func (a *API) editionThumbSource(id int64) (*store.EditionView, error) {
 	ed, err := a.DB.EditionByID(id)
 	if err != nil || len(ed.Files) == 0 {
@@ -111,14 +120,13 @@ func (a *API) editionThumbTile(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]string{"error": "tile generation failed"})
 		return
 	}
-	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Header().Set("Cache-Control", "private, max-age=86400")
 	serveFile(w, r, path)
 }
 
 func webSessionID(editionID int64) (string, error) {
 	return transcode.NewSessionID("web-", editionID)
 }
-
 
 type webTicket struct {
 	userID    int64
@@ -331,6 +339,14 @@ func (a *API) hlsFile(w http.ResponseWriter, r *http.Request) {
 	}
 	s, err := a.TC.Get(sid, ed.ID, ed.Files[0].Path, start)
 	if err != nil {
+		if errors.Is(err, transcode.ErrSessionParams) {
+			// A ticket reused with a different start no longer matches its
+			// stored session; the client's expired-session retry path
+			// bootstraps a fresh ticket and session.
+			w.Header().Set("Cache-Control", "no-store")
+			writeJSON(w, http.StatusGone, map[string]string{"error": "playback session expired"})
+			return
+		}
 		if errors.Is(err, transcode.ErrCapacity) {
 			w.Header().Set("Retry-After", "5")
 			writeJSON(w, 503, map[string]string{"error": "transcode capacity exhausted"})

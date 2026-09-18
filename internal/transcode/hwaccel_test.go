@@ -48,22 +48,22 @@ func TestBuildArgsGolden(t *testing.T) {
 		expect []string
 	}{
 		{"software", AccelNone, 0, concat(
-			[]string{"-y", "-v", "quiet", "-i", src, "-map", "0:v:0", "-map", "0:a:0?"},
+			[]string{"-y", "-v", "quiet", "-i", src, "-map", "0:v:0?", "-map", "0:a:0?"},
 			[]string{"-c:v", "libx264", "-preset", "veryfast", "-crf", "21"}, tail)},
 		{"software-seek", AccelNone, 12.34, concat(
-			[]string{"-y", "-v", "quiet", "-ss", "12.34", "-i", src, "-map", "0:v:0", "-map", "0:a:0?"},
+			[]string{"-y", "-v", "quiet", "-ss", "12.34", "-i", src, "-map", "0:v:0?", "-map", "0:a:0?"},
 			[]string{"-c:v", "libx264", "-preset", "veryfast", "-crf", "21"}, tail)},
 		{"videotoolbox", AccelVideoToolbox, 0, concat(
-			[]string{"-y", "-v", "quiet", "-i", src, "-map", "0:v:0", "-map", "0:a:0?"},
+			[]string{"-y", "-v", "quiet", "-i", src, "-map", "0:v:0?", "-map", "0:a:0?"},
 			[]string{"-c:v", "h264_videotoolbox", "-allow_sw", "1", "-realtime", "1", "-b:v", "6M"}, tail)},
 		{"vaapi", AccelVAAPI, 0, concat(
-			[]string{"-y", "-v", "quiet", "-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi", "-vaapi_device", "/dev/dri/renderD128", "-i", src, "-map", "0:v:0", "-map", "0:a:0?"},
+			[]string{"-y", "-v", "quiet", "-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi", "-vaapi_device", "/dev/dri/renderD128", "-i", src, "-map", "0:v:0?", "-map", "0:a:0?"},
 			[]string{"-vf", "format=nv12,hwupload", "-c:v", "h264_vaapi"}, tail)},
 		{"nvenc", AccelNVENC, 0, concat(
-			[]string{"-y", "-v", "quiet", "-i", src, "-map", "0:v:0", "-map", "0:a:0?"},
+			[]string{"-y", "-v", "quiet", "-i", src, "-map", "0:v:0?", "-map", "0:a:0?"},
 			[]string{"-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-b:v", "6M"}, tail)},
 		{"qsv", AccelQSV, 0, concat(
-			[]string{"-y", "-v", "quiet", "-hwaccel", "qsv", "-i", src, "-map", "0:v:0", "-map", "0:a:0?"},
+			[]string{"-y", "-v", "quiet", "-hwaccel", "qsv", "-i", src, "-map", "0:v:0?", "-map", "0:a:0?"},
 			[]string{"-c:v", "h264_qsv"}, tail)},
 	}
 	for _, c := range cases {

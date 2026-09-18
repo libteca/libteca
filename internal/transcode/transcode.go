@@ -22,6 +22,11 @@ import (
 var (
 	ErrCapacity = errors.New("transcode capacity exhausted")
 	ErrClosed   = errors.New("transcode manager closed")
+	// ErrSessionParams reports a Get call reusing a live session id with a
+	// different source or start position: the stored session keeps its
+	// timeline, so the caller must mint a fresh session instead of silently
+	// receiving the old one.
+	ErrSessionParams = errors.New("transcode session parameters changed")
 )
 
 const (
@@ -72,6 +77,7 @@ type Session struct {
 	Dir     string
 	Source  string
 
+	StartSecs       float64
 	accel           string
 	spawn           func(argv []string) process
 	proc            process
@@ -82,7 +88,7 @@ type Session struct {
 	killed          bool
 	lastHit         atomic.Int64
 	mu              sync.Mutex
-	lifecycle sync.Mutex
+	lifecycle       sync.Mutex
 }
 
 type Manager struct {
@@ -109,7 +115,14 @@ func New(dataDir string) *Manager {
 		return &realProcess{cmd: exec.Command("ffmpeg", argv...)}
 	}
 	m.probeRun = func(argv []string) (string, error) {
-		out, err := exec.Command("ffmpeg", argv...).Output()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "ffmpeg", argv...)
+		cmd.WaitDelay = time.Second
+		out, err := cmd.Output()
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
 		return string(out), err
 	}
 	os.RemoveAll(filepath.Join(dataDir, "transcode"))
@@ -146,6 +159,9 @@ func (m *Manager) Get(sessionID string, edition int64, source string, startSecs 
 	}
 	if s, ok := m.sessions[sessionID]; ok {
 		if s.Edition == edition {
+			if s.Source != source || s.StartSecs != startSecs {
+				return nil, ErrSessionParams
+			}
 			s.lastHit.Store(time.Now().UnixNano())
 			return s, nil
 		}
@@ -169,8 +185,10 @@ func (m *Manager) Get(sessionID string, edition int64, source string, startSecs 
 		Edition: edition,
 		Dir:     dir,
 		Source:  source,
-		accel:   m.accelMode(),
-		spawn:   m.spawn,
+
+		StartSecs: startSecs,
+		accel:     m.accelMode(),
+		spawn:     m.spawn,
 	}
 	s.lastHit.Store(time.Now().UnixNano())
 	m.sessions[sessionID] = s

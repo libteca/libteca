@@ -52,6 +52,14 @@ func (a *API) trickplayer() *trickplay.Generator {
 	return a.tp
 }
 
+// SetTrickplayGenerator installs a shared generator so two adapters cannot
+// race independent generators over the same e<edition>/<width> cache
+// namespace. Without an injection the lazy fallback stays per-API.
+func (a *API) SetTrickplayGenerator(g *trickplay.Generator) {
+	a.tpOnce.Do(func() {})
+	a.tp = g
+}
+
 func (a *API) Mount(r *neutron.Router) {
 	r.HandleFunc("GET /System/Info/Public", a.systemInfoPublic)
 	r.HandleFunc("GET /System/Ping", a.systemPing)
@@ -110,10 +118,14 @@ func jfAuth(db *store.DB) func(http.Handler) http.Handler {
 				}
 			}
 			if token != "" {
-				if user, ok := auth.UserForToken(db, token); ok {
+				if user, err := auth.LookupTokenUser(db, token); err == nil {
 					r = r.WithContext(withUser(r, user.ID, user.IsAdmin))
 					r = auth.WithToken(r, token)
 					next.ServeHTTP(w, r)
+					return
+				} else if !errors.Is(err, store.ErrNotFound) {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					w.Write([]byte(`{"error":"authentication unavailable"}`))
 					return
 				}
 			}
@@ -1070,7 +1082,19 @@ func (a *API) hlsMaster(w http.ResponseWriter, r *http.Request) {
 	}
 	start := 0.0
 	if t := qget(r, "StartTimeTicks"); t != "" {
-		start = fromTicks(auth.Atoi64(t))
+		ticks, terr := strconv.ParseInt(t, 10, 64)
+		if terr != nil || ticks < 0 {
+			http.Error(w, "bad start time", 400)
+			return
+		}
+		start = fromTicks(ticks)
+	}
+	if dur := ed.TotalDuration(); dur > 0 && start > dur {
+		http.Error(w, "start exceeds duration", 400)
+		return
+	}
+	freshSession := func() (string, error) {
+		return transcode.NewSessionID(fmt.Sprintf("u%d-", uid(r)), ed.ID)
 	}
 	sessionID := qget(r, "PlaySessionId")
 	if sessionID == "" {
@@ -1095,6 +1119,18 @@ func (a *API) hlsMaster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s, err := a.TC.Get(sessionID, ed.ID, ed.Files[0].Path, start)
+	if errors.Is(err, transcode.ErrSessionParams) {
+		// The client reused a play-session id for a seek or a different
+		// source: the stored session keeps its timeline, so a fresh session
+		// id is minted for the new parameters instead of silently serving
+		// the old one.
+		sessionID, err = freshSession()
+		if err != nil {
+			http.Error(w, "session creation failed", 500)
+			return
+		}
+		s, err = a.TC.Get(sessionID, ed.ID, ed.Files[0].Path, start)
+	}
 	if err != nil {
 		if errors.Is(err, transcode.ErrCapacity) {
 			w.Header().Set("Retry-After", "5")
@@ -1168,6 +1204,31 @@ func (a *API) hlsSegment(w http.ResponseWriter, r *http.Request) {
 	}
 	if !reHLSSegmentFile.MatchString(file) {
 		http.Error(w, "bad", 400)
+		return
+	}
+	// Segment URLs are owner-bound at creation (bindPlaySession rewrites
+	// every non-admin id that reaches the manager), so a sid belonging to
+	// another user is rejected before it can touch or refresh that session.
+	// Unprefixed ids can only be admin-created, so they stay admin-only.
+	var segOwner int64
+	if n, err := fmt.Sscanf(sid, "u%d-", &segOwner); err == nil && n == 1 {
+		if segOwner != uid(r) && !adminRequest(r) {
+			http.Error(w, "not found", 404)
+			return
+		}
+	} else if !adminRequest(r) {
+		http.Error(w, "not found", 404)
+		return
+	}
+	ed, err := a.resolvePlayable(r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "not found", 404)
+		return
+	}
+	// The URL's item must match the session's edition: without this check
+	// the segment route was a weaker, unbound copy of the master route.
+	if _, ok := a.TC.Existing(sid, ed.ID); !ok {
+		http.Error(w, "not found", 404)
 		return
 	}
 	if !a.TC.WaitForSegmentFile(r.Context(), sid, file, 10*time.Second) {
