@@ -281,3 +281,151 @@ disk/memory budgets partially follow from F10, H07 (data-dir lock) and H08
 Verification: go vet ./... clean; go test ./... -count=1 green; go test
 -race ./... -timeout 600s green; web npx tsc --noEmit + npm run build clean
 (2026-09-17).
+
+## ChatGPT audit pass 8 (2026-09-17, AUDIT-CHATGPT-8.md) - 25 of 35 fixed, 10 deferred
+
+Fixed (verified against source first; `audit 8-NN` commits):
+
+1. F01 HIGH library confinement bypass - FIXED: core edition download, OPDS
+   download + PSE and Subsonic stream all open through
+   LibraryRootForEdition + mediafs.OpenWithin like the rest of the serving
+   surface.
+2. F02 HIGH embedded subtitle cache in library trees - FIXED: extraction
+   cache lives under DataDir/subtitles, keyed by file id+path+mtime_ns,
+   bounded reads, atomic publication, 2-slot extraction budget (503 +
+   Retry-After on contention). Extraction's ffmpeg input still receives the
+   pathname (F03 family residual below).
+3. F06 MEDIUM public cache-control on authenticated assets - FIXED on core
+   covers/thumb tiles and Subsonic getCoverArt (private, max-age). Jellyfin
+   image/trickplay URLs keep public per the documented pass-7 decision
+   (query-keyed api_key URLs, matching upstream Jellyfin).
+4. F07 MEDIUM auth 401 on DB failure - FIXED: LookupTokenUser separates
+   ErrNotFound (401) from operational errors (503) across core middleware,
+   jfAuth and the websocket; web api() clears stored credentials on 401 only
+   when the failing request used the current token.
+5. F08 MEDIUM overlapping-root race - FIXED: AddLibraryChecked runs the
+   overlap check inside the insert transaction (BEGIN IMMEDIATE); the HTTP
+   path routes through it. Importer placeholder libraries keep the raw
+   insert deliberately (they are not validated roots; admin fixes the path
+   before scanning).
+6. F09 MEDIUM symlink root scans empty - FIXED: scanners resolve the root
+   via EvalSymlinks and walk the real directory while recording alias-based
+   paths, so rooted serving keeps matching. Regression covers alias-path
+   spelling.
+7. F11 MEDIUM one-scan rename loses identity - FIXED: MarkMissingLibraryFiles
+   runs after the completed traversal but before the first upsert (inside
+   every scanner), so the renamed path relinks onto its old row in the same
+   scan. runScan/CLI post-scan reconcile removed as redundant.
+8. F14 MEDIUM scan failures reported as done - FIXED: per-item probe errors
+   are collected into the returned error, all-fail groups no longer create
+   empty works, late cancellation is surfaced even when the scanner returned
+   nil, and reconciliation failure (now inside the scanner) fails the scan.
+9. F15 HIGH second server damages the instance - FIXED: server/scan/init
+   paths hold a lifetime exclusive flock on <data>/.server.lock (kept inode,
+   idempotent release) taken before store.Open; backups keep their own
+   .backup.lock.
+10. F16 MEDIUM audio-only HLS fails - FIXED: `-map 0:v:0?` (audit-reproduced
+    mitigation; hardware paths untested on real GPUs - see open items).
+11. F18 MEDIUM small starts dropped + silent session reuse - FIXED:
+    `startSecs > 0`; Session carries StartSecs, reuse with changed
+    source/start answers ErrSessionParams; Jellyfin mints a fresh
+    cryptographic session id on that path (fallback timestamp ids gone) and
+    strictly parses/bounds StartTimeTicks; core maps the error onto the 410
+    retry path.
+12. F19 MEDIUM unbounded hwaccel probes - FIXED: probes run under a 5s
+    deadline + 1s WaitDelay, so a hung probe can no longer hold hwMu (and
+    through it the manager) indefinitely.
+13. F20 LOW explicit auto loses to env - FIXED: SetHwAccel("auto") keeps the
+    sentinel and detection skips LIBTECA_HWACCEL; the CLI falls back to env
+    only when --hwaccel was not explicitly set (flag.Visit).
+14. F21 MEDIUM dual trickplay generators - FIXED: server.New injects one
+    Generator into core and jellyfin; per-API lazy construction remains only
+    for isolated tests.
+15. F23 MEDIUM jellyfin segment route unowned - FIXED: hlsSegment enforces
+    the u<uid> prefix against the caller (unprefixed ids are admin-only,
+    since only admins create them) and binds the URL item to the session's
+    edition via Existing before touching the session.
+16. F24 MEDIUM download error suppresses retention - FIXED: applyFeed and
+    the 304 branch run downloads and retention independently and join the
+    errors.
+17. F25 MEDIUM purge discards unlink errors - FIXED: unlink errors fail
+    retention (ErrNotExist tolerated), untracked/out-of-root paths are
+    refused with the episode kept linked, and PurgeEpisode commits the
+    missing flag + link removal in one transaction. The audit's persistent
+    deletion outbox stays deferred under the pass-6 F25-outbox rationale
+    (single-node server, bounded retry windows).
+18. F26 MEDIUM URL normalization changes identity - FIXED: no http->https
+    upgrade; fragments still stripped. Trailing-slash trimming is KEPT
+    deliberately: it backs duplicate-feed detection (the repo's own tests
+    pin it) and the client follows redirects anyway - flagged in case a
+    feed ever really distinguishes /feed from /feed/.
+19. F28 HIGH partial progress resets fields - FIXED: core setProgress decodes
+    position/duration/device as pointers and SetReadingProgressFields
+    applies per-column patch semantics; omitted fields keep stored values,
+    explicit zero/false applies. ABS POST/PATCH keep documented full-state
+    semantics per the Audiobookshelf protocol.
+20. F29 HIGH reader queue loses patches - FIXED (web): ProgressQueue is a
+    serial merge-preserving retrying queue (extracted module + vitest
+    suite); page + completion survive together, failures re-insert under
+    newer patches, one delivery in flight, queue replaced on edition swap.
+    localStorage patch persistence and the server-side revision protocol
+    (audit P9) are NOT built - cross-device ordering needs a coordinated
+    API+client change.
+21. F30 MEDIUM cover download - FIXED: egress-guarded shared client,
+    context-bound request, DecodeConfig + dimension/format budget, atomic
+    temp+rename publication, apply summary carries a coverWarning.
+22. F31 MEDIUM watcher stale descendants - FIXED: remove/rename unwatches
+    the whole subtree; staleLibrary treats terminal statuses other than done
+    as retryable (boot/sweep bound the rate).
+23. F33 MEDIUM CI without frontend behavior - FIXED: vitest + committed
+    suite for the progress queue, `npm run test` wired into the web CI job.
+24. F34 MEDIUM ABS masks DB failures - FIXED: userPayload returns an error
+    (no nil deref, no empty-history success), getProgress only answers the
+    zero payload on ErrNotFound, deleteProgress reports failures.
+25. F35 MEDIUM importer discovery - FIXED: audioPathsIn propagates walk
+    errors and requires regular files (vanished dirs stay a per-book skip);
+    applyFiles rejects nonregular planned files and records mtime_ns;
+    applyUsers creates only after ErrNotFound. Confined opens against the
+    target library root are NOT added: import libraries are placeholders by
+    design and serving is already confined (F01), so a stray imported path
+    fails to stream rather than escaping.
+
+Deferred (standing families confirmed against current source, plus new
+architectural items; `docs:` commit):
+
+- **F03 processor inputs unconfined (HIGH):** fd-passing ffmpeg inputs
+  (ExtraFiles + protocol_whitelist fd, capability probe, fail-closed
+  fallback) across transcode/trickplay/subtitles is an architectural
+  refactor of the process factories and session lifecycles; the pass-7
+  residual note stands (scan-time regular-file check bounds it). Revisit as
+  one deliberate change, not per-caller patches.
+- **F04/F05 credential lifecycle (HIGH):** ABS playback-URL token binding +
+  expiry and the Subsonic plaintext-password capture are the pass-6 F04/F09
+  / pass-7 F02/F14 deferrals; no materially new evidence beyond what those
+  records already weigh (deployed-client compat, corpus-pinned t+s
+  behavior, separate-credential design needed).
+- **F10/F12/F13/F17/F22 scanner identity + content versioning:** the
+  title/author identity redesign (pass-7 F17), full-content hashes for
+  relink evidence (pass-7 F24 documented the sampled-hash residual;
+  accidental same-size/same-ends collisions require an admin-controlled
+  library), sidecar dependency fingerprints and versioned derived-cache
+  keys all hang off the same source-generation model - founder-level
+  schema+repair decision. F17's multipart HLS timeline joins this family
+  (single-file HLS - the overwhelmingly common case - is correct, and the
+  first-party player has no per-file video picker to fall back onto).
+- **F27 backup cover generations (HIGH):** pass-6 F15 / pass-7 F05
+  deferral stands (on-disk layout + restore-doc product decision); the
+  in-place durability fixes from those passes remain.
+- **F32 container USER (MEDIUM):** switching the runtime stage to uid 10001
+  breaks every existing bind-mounted /data on upgrade with no migration
+  machinery; needs a release-notes migration path (audit's snippet is the
+  shape). Same class as pass-7 H02.
+
+Also noted: the audit's additional hardening items (transcode byte quotas,
+subsonic Argon2-on-success under legacy auth, VAAPI filter-chain
+validation, cross-adapter service extraction, SBOM/provenance) remain
+unimplemented recommendations, consistent with pass-7 H01-H08 posture.
+
+Verification: go vet ./... clean; go test ./... -count=1 -timeout 600s
+green; go test -race on transcode/podcast/scan/core/watch/auth green; web
+npx tsc --noEmit + npm run test (vitest) + npm run build clean (2026-09-17).
