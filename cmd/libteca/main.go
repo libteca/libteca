@@ -56,9 +56,13 @@ func main() {
 	}
 
 	watchWasSet := false
+	hwaccelWasSet := false
 	flag.Visit(func(f *flag.Flag) {
-		if f.Name == "watch" {
+		switch f.Name {
+		case "watch":
 			watchWasSet = true
+		case "hwaccel":
+			hwaccelWasSet = true
 		}
 	})
 	if !watchWasSet {
@@ -73,7 +77,7 @@ func main() {
 	if *port < 1 || *port > 65535 {
 		fatal(fmt.Errorf("port must be 1..65535"))
 	}
-	if *hwaccel == "" {
+	if !hwaccelWasSet {
 		*hwaccel = os.Getenv("LIBTECA_HWACCEL")
 	}
 	if *hwaccel != "" && !transcode.ValidAccel(*hwaccel) {
@@ -89,6 +93,15 @@ func main() {
 			fatal(err)
 		}
 	}
+	// Every process that opens or mutates the data directory takes a
+	// lifetime exclusive lock: a second server used to run startup recovery
+	// (failing scan jobs) and the transcode directory wipe before its port
+	// bind failed, damaging the running instance from the outside.
+	release, err := lockDataDir(abs)
+	if err != nil {
+		fatal(err)
+	}
+	defer release()
 
 	db, err := store.Open(filepath.Join(abs, "libteca.db"))
 	if err != nil {
@@ -120,15 +133,6 @@ func main() {
 				return
 			}
 			fatal(err)
-		}
-		if libs, lerr := db.Libraries(); lerr == nil {
-			for _, lib := range libs {
-				if marked, merr := db.MarkMissingLibraryFiles(lib.ID); merr != nil {
-					fmt.Fprintf(os.Stderr, "libteca: reconcile library %d: %v\n", lib.ID, merr)
-				} else if marked > 0 {
-					fmt.Printf("\nreconcile: %d missing file(s) marked in %q", marked, lib.Name)
-				}
-			}
 		}
 		fmt.Printf("\nscan complete: %d editions current\n", n)
 		return
@@ -208,6 +212,29 @@ func main() {
 func fatal(err error) {
 	fmt.Fprintln(os.Stderr, "libteca:", err)
 	os.Exit(1)
+}
+
+// lockDataDir holds an exclusive advisory lock on <data>/.server.lock for
+// the process lifetime. The lock file is never unlinked: an unlink window
+// would let a second process create a fresh inode and lock it
+// simultaneously. The server, scan and init paths all take it; backups use
+// their own .backup.lock.
+func lockDataDir(dir string) (func(), error) {
+	f, err := os.OpenFile(filepath.Join(dir, ".server.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("data directory %s is already in use by another libteca process: %w", dir, err)
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+			_ = f.Close()
+		})
+	}, nil
 }
 
 // runBackup implements `libteca backup [-data dir] [-keep n]`: a stop-free

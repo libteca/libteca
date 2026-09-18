@@ -3,6 +3,7 @@ package importer
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -278,7 +279,18 @@ func ABS(dataDir string, db *store.DB, dryRun bool) (*Plan, error) {
 		if _, ok := libType[b.libID]; !ok {
 			continue
 		}
-		paths := audioPathsIn(b.dir)
+		// A vanished directory is ordinary foreign-database drift and stays
+		// a per-book skip; anything else (permissions, unreadable subtree)
+		// fails the import instead of silently planning a partial library.
+		if _, serr := os.Stat(b.dir); serr != nil && errors.Is(serr, os.ErrNotExist) {
+			plan.Libraries[libIndex[b.libID]].Skipped++
+			plan.warnf("book %q: directory %q is gone; skipped", b.title, b.dir)
+			continue
+		}
+		paths, aerr := audioPathsIn(b.dir)
+		if aerr != nil {
+			return nil, fmt.Errorf("book %q: discovery at %q failed: %w", b.title, b.dir, aerr)
+		}
 		if len(paths) == 0 {
 			plan.Libraries[libIndex[b.libID]].Skipped++
 			plan.warnf("book %q: no audio files found at %q; skipped", b.title, b.dir)

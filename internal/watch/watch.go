@@ -145,7 +145,11 @@ func (w *Watcher) handleEvent(e fsnotify.Event) {
 	if isDir {
 		switch {
 		case e.Has(fsnotify.Remove | fsnotify.Rename):
-			w.unwatchDir(name)
+			// A removed or renamed directory takes its whole subtree with
+			// it: unwatching only the exact path left descendant entries
+			// in the map, and their presence then made addDir skip the
+			// replacement directory's children as "already watched".
+			w.unwatchTree(name)
 		case e.Has(fsnotify.Create):
 			w.watchTree(name, libID)
 		}
@@ -250,6 +254,12 @@ func (w *Watcher) staleLibrary(lib *store.Library) bool {
 	if jobs[0].Status == "running" {
 		return false
 	}
+	// A terminal status other than done is retryable immediately: waiting
+	// out the full staleness age after a failed or interrupted scan delayed
+	// recovery by a day. Boot and the periodic sweep bound the retry rate.
+	if jobs[0].Status != "done" {
+		return true
+	}
 	return time.Since(time.UnixMilli(jobs[0].CreatedAt)) >= w.staleAfter
 }
 
@@ -316,11 +326,25 @@ func (w *Watcher) addDir(dir string, libID int64) {
 	w.dirs[dir] = libID
 }
 
-func (w *Watcher) unwatchDir(dir string) {
+// unwatchTree removes the root and every descendant from the watch map.
+// fsnotify may already have dropped the kernel-side watch when the
+// directory vanished; the Remove error is irrelevant — the bookkeeping is
+// what gates future addDir calls.
+func (w *Watcher) unwatchTree(root string) {
 	w.mu.Lock()
-	delete(w.dirs, dir)
-	w.mu.Unlock()
-	w.fw.Remove(dir)
+	defer w.mu.Unlock()
+	for dir := range w.dirs {
+		rel, err := filepath.Rel(root, dir)
+		if err != nil || (rel != "." && !filepath.IsLocal(rel)) {
+			continue
+		}
+		delete(w.dirs, dir)
+		if w.fw != nil {
+			if rerr := w.fw.Remove(dir); rerr != nil {
+				fmt.Fprintf(os.Stderr, "libteca: watch removal %s: %v\n", dir, rerr)
+			}
+		}
+	}
 }
 
 func ignoredName(path string) bool {

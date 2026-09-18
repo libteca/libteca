@@ -23,7 +23,10 @@ func TestAudioPathsInNaturalOrder(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	got := audioPathsIn(dir)
+	got, err := audioPathsIn(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := []string{
 		filepath.Join(dir, "book", "1.mp3"),
 		filepath.Join(dir, "book", "2.mp3"),

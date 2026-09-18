@@ -107,7 +107,12 @@ func (a *API) Login(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
-	write(w, 200, map[string]any{"user": a.userPayload(u.ID), "userToken": token})
+	payload, err := a.userPayload(u.ID)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	write(w, 200, map[string]any{"user": payload, "userToken": token})
 }
 
 func (a *API) Ping(w http.ResponseWriter, r *http.Request) {
@@ -127,12 +132,31 @@ func (a *API) status(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) me(w http.ResponseWriter, r *http.Request) {
-	write(w, 200, a.userPayload(auth.UserID(r)))
+	payload, err := a.userPayload(auth.UserID(r))
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			fail(w, 404, "User not found")
+			return
+		}
+		serverError(w, r, err)
+		return
+	}
+	write(w, 200, payload)
 }
 
-func (a *API) userPayload(userID int64) map[string]any {
-	u, _ := a.DB.User(userID)
-	list, _ := a.DB.UserProgressList(userID)
+func (a *API) userPayload(userID int64) (map[string]any, error) {
+	// Both lookups are checked: an ignored error nil-dereferenced below when
+	// a user was deleted between authentication and payload construction,
+	// and a progress-list failure silently presented an empty history as a
+	// successful response.
+	u, err := a.DB.User(userID)
+	if err != nil {
+		return nil, err
+	}
+	list, err := a.DB.UserProgressList(userID)
+	if err != nil {
+		return nil, err
+	}
 	progress := make([]map[string]any, 0, len(list))
 	for _, p := range list {
 		progress = append(progress, a.progressPayload(&p))
@@ -154,7 +178,7 @@ func (a *API) userPayload(userID int64) map[string]any {
 			"playbackRate": 1, "bookshelfCoverSize": 120, "language": "en",
 		},
 		"librariesAccessible": []int{},
-	}
+	}, nil
 }
 
 func (a *API) progressPayload(p *store.Progress) map[string]any {
@@ -406,6 +430,12 @@ func (a *API) getProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p, err := a.DB.GetProgress(auth.UserID(r), ctx.ed.ID)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		// Only a genuinely missing row answers the default zero payload;
+		// an operational failure used to masquerade as fresh progress.
+		serverError(w, r, err)
+		return
+	}
 	if err != nil {
 		now := time.Now().UnixMilli()
 		write(w, 200, map[string]any{
@@ -478,7 +508,10 @@ func (a *API) deleteProgress(w http.ResponseWriter, r *http.Request) {
 		fail(w, 404, "Item not found")
 		return
 	}
-	a.DB.DeleteProgress(auth.UserID(r), ctx.ed.ID)
+	if err := a.DB.DeleteProgress(auth.UserID(r), ctx.ed.ID); err != nil {
+		serverError(w, r, err)
+		return
+	}
 	write(w, 200, map[string]any{"success": true})
 }
 

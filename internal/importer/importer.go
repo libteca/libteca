@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -98,12 +99,14 @@ var audioExts = map[string]string{
 
 // audioPathsIn lists the audio files under dir (hidden dirs skipped),
 // naturally sorted like the scanner would see them. Durations are the
-// caller's problem — foreign metadata carries them.
-func audioPathsIn(dir string) []string {
+// caller's problem — foreign metadata carries them. Traversal errors fail
+// the discovery instead of silently producing a partial import plan, and
+// only regular files are accepted.
+func audioPathsIn(dir string) ([]string, error) {
 	var names []string
-	filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+	err := filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
-			return nil
+			return err
 		}
 		if d.IsDir() {
 			if p != dir && strings.HasPrefix(d.Name(), ".") {
@@ -111,11 +114,22 @@ func audioPathsIn(dir string) []string {
 			}
 			return nil
 		}
-		if _, ok := audioExts[strings.ToLower(filepath.Ext(d.Name()))]; ok {
-			names = append(names, p)
+		if _, ok := audioExts[strings.ToLower(filepath.Ext(d.Name()))]; !ok {
+			return nil
 		}
+		fi, ierr := d.Info()
+		if ierr != nil {
+			return ierr
+		}
+		if !fi.Mode().IsRegular() {
+			return fmt.Errorf("unsupported import entry: %s", p)
+		}
+		names = append(names, p)
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
 	sort.Slice(names, func(i, j int) bool { return natural.Less(names[i], names[j]) })
 	out := make([]string, 0, len(names))
 	for _, n := range names {
@@ -123,7 +137,7 @@ func audioPathsIn(dir string) []string {
 			out = append(out, n)
 		}
 	}
-	return out
+	return out, nil
 }
 
 func tempPassword() string {
@@ -173,10 +187,14 @@ func applyUsers(db *store.DB, users []foreignUser, plan *Plan, commit bool) (map
 	ids := map[int64]int64{}
 	for _, u := range users {
 		up := UserPlan{Name: u.Name, IsAdmin: u.IsAdmin}
-		if existing, err := db.UserByName(u.Name); err == nil {
+		existing, err := db.UserByName(u.Name)
+		if err == nil {
 			up.Exists = true
 			ids[u.ID] = existing.ID
-		} else if commit {
+		} else if errors.Is(err, store.ErrNotFound) && commit {
+			// Only a confirmed-missing user is created: treating an
+			// arbitrary lookup failure as "not exists" created users from
+			// database faults.
 			pw := tempPassword()
 			id, err := db.CreateUser(u.Name, auth.Hash(pw), u.IsAdmin)
 			if err != nil {
@@ -184,6 +202,8 @@ func applyUsers(db *store.DB, users []foreignUser, plan *Plan, commit bool) (map
 			}
 			up.TempPassword = pw
 			ids[u.ID] = id
+		} else if err != nil && !errors.Is(err, store.ErrNotFound) {
+			return nil, fmt.Errorf("lookup user %s: %w", u.Name, err)
 		}
 		plan.Users = append(plan.Users, up)
 	}
@@ -216,6 +236,8 @@ func ensureLibrary(db *store.DB, name, typ, fallbackPath string, plan *Plan, lib
 }
 
 // applyFiles stats each resolved file and upserts it under the edition.
+// Only regular files are accepted: a symlink or device node with an audio
+// extension must fail the import rather than become a served path.
 func applyFiles(db *store.DB, editionID int64, files []fileSpec) ([]int64, error) {
 	var ids []int64
 	for i, f := range files {
@@ -227,9 +249,12 @@ func applyFiles(db *store.DB, editionID int64, files []fileSpec) ([]int64, error
 			// panicking on the index past the compaction.
 			return nil, fmt.Errorf("planned file vanished during import: %s: %w", f.Path, err)
 		}
+		if !fi.Mode().IsRegular() {
+			return nil, fmt.Errorf("planned file is not a regular media file: %s", f.Path)
+		}
 		fr := &store.FileRec{
 			EditionID: editionID, Path: f.Path, Seq: i + 1,
-			SizeBytes: fi.Size(), MtimeSecs: fi.ModTime().Unix(),
+			SizeBytes: fi.Size(), MtimeSecs: fi.ModTime().Unix(), MtimeNS: fi.ModTime().UnixNano(),
 			DurationSecs: f.Duration, Chapters: "[]",
 		}
 		if err := db.UpsertFile(fr); err != nil {
