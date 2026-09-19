@@ -505,3 +505,42 @@ backup = `libteca backup` (15g); neutron-go published (17).
     Reverse: (a) re-exposes every token to at-rest theft; (b) re-opens the
     racy check-then-reopen boundary the audits flagged for serving and
     processors alike.
+41. **Backup generations (2026-09-18, audit pass-6 F15 / pass-7 F05 /
+    pass-8 F27-raised-HIGH).** Snapshots publish as self-contained
+    generation directories `backups/gen-<date>-<id>/` (snapshot.db +
+    covers/), staged privately and renamed into place atomically; retention
+    counts generations and legacy libteca-*.db files in ONE budget and
+    removes a generation whole. The old layout — every snapshot overwriting
+    one shared `backups/covers/` — meant a restore-then-snapshot (or a
+    same-second chain) silently destroyed the covers of every earlier
+    generation while their db files lived on. Convergence is read-side
+    compatibility: legacy files keep counting toward retention, the shared
+    covers directory survives until the last legacy backup is pruned (then
+    it is removed as owned by nothing), and new snapshots only ever write
+    generations. Restore is documented per-generation in README (one gen =
+    db + its own covers, exclusively). Alternative rejected: rewriting
+    existing backups into generations at snapshot time — migrating another
+    writer's data under the retention lock adds failure modes to the one
+    path that must never destroy data; aging legacy backups out via the
+    budget is bounded and needs no migration.
+42. **Reader-progress revision protocol + persisted queue (2026-09-18,
+    audit pass-8 F29 remainder / audit P9).** Migration 0014 adds
+    progress.revision; EVERY write to a row bumps it (reader upserts, audio
+    SetProgress, session close), so any concurrent writer invalidates held
+    bases across faces. POST /progress/{id} with a `revision` field applies
+    only when the stored revision matches (upsert ... WHERE progress.revision
+    = ? RETURNING revision); a stale base answers 409 carrying the current
+    server state. Absent revision keeps documented last-writer-wins
+    semantics — ABS/Jellyfin/Subsonic and the pagehide beacons (whose
+    responses cannot be read) stay unconditional by design. The web queue
+    persists its pending patch (plus the in-flight batch until ack) in
+    localStorage per edition, so a reload replays undelivered patches;
+    replay is safe BECAUSE of the revision check. Client merge policy on
+    409: reading position is monotonic — the farther-along side of
+    page/percent wins and takes its locator with it, while explicit
+    finished intent survives (a deliberate reopen is never buried by a
+    stale isFinished=true). Reverse: (a) dropping the revision conditional
+    restores silent last-writer-wins across devices; (b) dropping queue
+    persistence restores reload-loss of queued patches; (c) per-device
+    instead of per-row revisions would multiply server state without
+    changing what the client can merge.

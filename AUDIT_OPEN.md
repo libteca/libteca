@@ -159,14 +159,12 @@ Deferred (product/architecture decisions, not contained fixes):
   F04's credential work as originally recorded. Audit 7's F14 (ABS
   playback-URL token binding + fixed expiry) is the same credential-
   lifecycle family; the deferral stands for it.
-- **F15 per-snapshot cover generations (MEDIUM, durability half fixed):**
-  switching backups/ to generation directories changes the on-disk layout,
-  restore procedure and retention docs - a product decision. Durability
-  (fsync, checked closes, non-regular rejection) is fixed in place. Audit
-  7's F05 adds materially to the in-place half - publication now happens
-  only after the covers copy completes, per-cover copies are atomic
-  replaces, and the whole snapshot/retention operation holds a cross-process
-  flock - so the residual is purely the shared-covers layout decision.
+- **F15 per-snapshot cover generations (MEDIUM, durability half fixed):
+  RESOLVED 2026-09-18** (see "Audit deferrals closed 2026-09-18 -
+  generations + revision protocol" below). The layout half landed as
+  generation directories; the durability fixes from this pass and pass 7's
+  F05 (fsync, checked closes, non-regular rejection, publish-after-copy,
+  atomic per-cover replaces, cross-process flock) carry over unchanged.
 - **F25 durable scan-terminal outbox:** bounded retry + startup
   reconciliation (FailRunningScanJobs) already bound the stuck-job window
   to one restart; an outbox is beyond a single-node server's needs.
@@ -230,9 +228,10 @@ Fixed (verified against source first; `audit 7-NN` commits):
 
 Partial (in-place fixes shipped, remainder needs product/schema work):
 
-- **F05 backup generations:** DB snapshots publish only after the covers copy
-  completes and each cover is replaced atomically; generations still SHARE
-  one covers/ directory (pass-6 F15 deferral above).
+- **F05 backup generations: RESOLVED 2026-09-18** (see the second closure
+  section below) - DB snapshots publish only after the covers copy
+  completes and each cover is replaced atomically; generations no longer
+  share one covers/ directory.
 - **F08 cancellable/bounded probes:** ffprobe is context-bound with a 60s
   deadline and a 4 MiB output cap that kills the child; CBR listing and the
   unar extraction are deadline-bound; cover extraction carries a 2-minute
@@ -368,12 +367,11 @@ Fixed (verified against source first; `audit 8-NN` commits):
     explicit zero/false applies. ABS POST/PATCH keep documented full-state
     semantics per the Audiobookshelf protocol.
 20. F29 HIGH reader queue loses patches - FIXED (web): ProgressQueue is a
-    serial merge-preserving retrying queue (extracted module + vitest
-    suite); page + completion survive together, failures re-insert under
-    newer patches, one delivery in flight, queue replaced on edition swap.
-    localStorage patch persistence and the server-side revision protocol
-    (audit P9) are NOT built - cross-device ordering needs a coordinated
-    API+client change.
+     serial merge-preserving retrying queue (extracted module + vitest
+     suite); page + completion survive together, failures re-insert under
+     newer patches, one delivery in flight, queue replaced on edition swap.
+     The localStorage persistence and the server-side revision protocol
+     (audit P9) LANDED 2026-09-18 - see the closure section below.
 21. F30 MEDIUM cover download - FIXED: egress-guarded shared client,
     context-bound request, DecodeConfig + dimension/format budget, atomic
     temp+rename publication, apply summary carries a coverWarning.
@@ -423,9 +421,13 @@ architectural items; `docs:` commit):
   schema+repair decision. F17's multipart HLS timeline joins this family
   (single-file HLS - the overwhelmingly common case - is correct, and the
   first-party player has no per-file video picker to fall back onto).
-- **F27 backup cover generations (HIGH):** pass-6 F15 / pass-7 F05
-  deferral stands (on-disk layout + restore-doc product decision); the
+- **F27 backup cover generations (HIGH): RESOLVED 2026-09-18** - pass-6
+  F15 / pass-7 F05 closed with it (see the closure section below); the
   in-place durability fixes from those passes remain.
+- **F29 reader queue revision protocol: REMAINDER LANDED 2026-09-18** -
+  server-side per-row revision counter (migration 0014) with conditional
+  progress writes (409 + current state on a stale base) and localStorage
+  persistence of the queue's pending patch. See the closure section below.
 
 Also noted: the audit's additional hardening items (transcode byte quotas,
 subsonic Argon2-on-success under legacy auth, VAAPI filter-chain
@@ -460,6 +462,42 @@ green; go test -race on transcode/trickplay/scan/core/mediafs/procfd/auth
 green; live demo-server smoke (startup probe logs, 72-token convergence,
 HEVC transcode + segment fetch, trickplay tile, rescan 202->no-op,
 health 200) (2026-09-18).
+
+## Audit deferrals closed 2026-09-18 - pass-8 F27 generations + F29 revision protocol
+
+Two more deliberate changes (DECISIONS 41-42 record the shapes and the
+rejected alternatives):
+
+- **F27 backup generations (closes pass-6 F15 + pass-7 F05, raised HIGH in
+  pass 8):** snapshots publish as self-contained
+  `backups/gen-<date>-<id>/` directories (snapshot.db + covers/), staged
+  privately and renamed into place; retention counts generations and
+  legacy libteca-*.db files in one budget, removes generations whole, and
+  keeps the legacy shared covers/ until the last legacy backup is pruned.
+  Existing backups keep working unchanged (read-side compatibility; no
+  migration under the lock). Restore procedure documented per-generation in
+  README. Regressions cover generation cover isolation across snapshot
+  chains, legacy-layout survival, shared-covers lifetime, mixed
+  gen+legacy prune ordering, publish-after-covers-fails, same-second
+  isolation and clock-skew protection.
+- **F29 revision protocol (pass-8 F29 remainder + audit P9):** migration
+  0014 adds progress.revision; every progress write bumps it (reader
+  upserts, audio SetProgress, session close) so any concurrent writer
+  invalidates held bases across faces. POST /progress/{id} with `revision`
+  applies conditionally and answers 409 + current server state on a stale
+  base; absent revision keeps last-writer-wins for the non-reader faces
+  and the pagehide beacons. The web ProgressQueue persists its pending
+  patch (plus the in-flight batch until ack) in localStorage per edition -
+  a reload replays undelivered patches, safe under the revision check -
+  and the sender rebases + max-merges on 409 (monotonic page/percent,
+  locator follows the winner, explicit finished intent survives).
+  Regressions: store stale-base reject/apply + legacy-write advancement +
+  post-delete lineage; API 409-shape protocol test; vitest persistence,
+  in-flight survival, throwing-storage and merge-matrix suites.
+
+Verification: go vet ./... clean; go test ./... -count=1 -timeout 600s
+green; go test -race on store + core green; web npx tsc --noEmit +
+npm run test (vitest) + npm run build clean (2026-09-18).
 
 ## Housekeeping (2026-09-17) - pass-8 F32 resolved, gofmt drift cleared
 
