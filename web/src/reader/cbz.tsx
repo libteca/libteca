@@ -137,7 +137,7 @@ export function CbzReader(props: { editionId: number; title: string; progress: R
   const [fit, setFit] = useState<FitMode>(() => loadPref<FitMode>(FIT_KEY, "height", ["width", "height"]));
   const [rtl, setRtl] = useState(() => { try { return localStorage.getItem(RTL_KEY) === "1"; } catch { return false; } });
   const [tick, bump] = useState(0);
-  const saver = useProgressSaver(props.editionId);
+  const saver = useProgressSaver(props.editionId, props.progress?.revision ?? 0);
   const storeRef = useRef<PageStore | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const pageEls = useRef(new Map<number, HTMLElement>());

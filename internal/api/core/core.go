@@ -980,12 +980,12 @@ func (a *API) getProgress(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]string{"error": "progress unavailable"})
 		return
 	}
-	m := map[string]any{"editionId": eid, "position": 0, "isFinished": false}
+	m := map[string]any{"editionId": eid, "position": 0, "isFinished": false, "revision": 0}
 	if err == nil {
 		m = map[string]any{
 			"editionId": p.EditionID, "fileId": p.FileID, "offset": p.FileOffsetSecs,
 			"position": p.EditionPositionSecs, "duration": p.DurationSecs, "isFinished": p.IsFinished,
-			"updatedAt": p.UpdatedAt,
+			"updatedAt": p.UpdatedAt, "revision": p.Revision,
 		}
 		if p.Page != nil {
 			m["page"] = *p.Page
@@ -1019,6 +1019,7 @@ func (a *API) setProgress(w http.ResponseWriter, r *http.Request) {
 		Page     *int64   `json:"page"`
 		Percent  *float64 `json:"percent"`
 		Locator  *string  `json:"locator"`
+		Revision *int64   `json:"revision"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, 400, map[string]string{"error": "bad request"})
@@ -1047,6 +1048,10 @@ func (a *API) setProgress(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "progress metadata too large"})
 		return
 	}
+	if body.Revision != nil && *body.Revision < 0 {
+		writeJSON(w, 400, map[string]string{"error": "revision must be nonnegative"})
+		return
+	}
 	fields := store.ProgressFields{Finished: body.Finished != nil}
 	p := &store.ReadingProgress{
 		Progress: store.Progress{UserID: auth.UserID(r), EditionID: eid},
@@ -1069,6 +1074,36 @@ func (a *API) setProgress(w http.ResponseWriter, r *http.Request) {
 	if body.Device != nil && *body.Device != "" {
 		p.Device = body.Device
 		fields.Device = true
+	}
+	if body.Revision != nil {
+		revision, applied, err := a.DB.SetReadingProgressRevision(p, fields, *body.Revision)
+		if err != nil {
+			writeJSON(w, 500, map[string]string{"error": "internal error"})
+			return
+		}
+		if !applied {
+			cur, err := a.DB.GetReadingProgress(auth.UserID(r), eid)
+			if err != nil {
+				cur = &store.ReadingProgress{Progress: store.Progress{UserID: auth.UserID(r), EditionID: eid}}
+			}
+			current := map[string]any{
+				"editionId": cur.EditionID, "position": cur.EditionPositionSecs,
+				"isFinished": cur.IsFinished, "revision": cur.Revision,
+			}
+			if cur.Page != nil {
+				current["page"] = *cur.Page
+			}
+			if cur.Percent != nil {
+				current["percent"] = *cur.Percent
+			}
+			if cur.Locator != nil {
+				current["locator"] = *cur.Locator
+			}
+			writeJSON(w, 409, map[string]any{"error": "stale progress revision", "current": current})
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true, "revision": revision})
+		return
 	}
 	if err := a.DB.SetReadingProgressFields(p, fields); err != nil {
 		writeJSON(w, 500, map[string]string{"error": "internal error"})

@@ -54,7 +54,7 @@ export function EpubReader(props: { editionId: number; title: string; progress: 
   const [fontSize, setFontSize] = useState(100);
   const [percent, setPercent] = useState<number | null>(null);
   const [sectionHref, setSectionHref] = useState("");
-  const saver = useProgressSaver(props.editionId);
+  const saver = useProgressSaver(props.editionId, props.progress?.revision ?? 0);
   const keyHandler = useRef<(e: KeyboardEvent) => void>(() => {});
 
   useEffect(() => {

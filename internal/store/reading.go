@@ -38,9 +38,9 @@ func (d *DB) ReadingListByUser(userID int64) (map[int64]*ReadingProgress, error)
 func (d *DB) GetReadingProgress(userID, editionID int64) (*ReadingProgress, error) {
 	var p ReadingProgress
 	var fin int
-	err := d.QueryRow(`SELECT user_id, edition_id, file_id, file_offset_secs, edition_position_secs, duration_secs, is_finished, device, updated_at, page, percent, locator
+	err := d.QueryRow(`SELECT user_id, edition_id, file_id, file_offset_secs, edition_position_secs, duration_secs, is_finished, device, updated_at, page, percent, locator, revision
 		FROM progress WHERE user_id = ? AND edition_id = ?`, userID, editionID).
-		Scan(&p.UserID, &p.EditionID, &p.FileID, &p.FileOffsetSecs, &p.EditionPositionSecs, &p.DurationSecs, &fin, &p.Device, &p.UpdatedAt, &p.Page, &p.Percent, &p.Locator)
+		Scan(&p.UserID, &p.EditionID, &p.FileID, &p.FileOffsetSecs, &p.EditionPositionSecs, &p.DurationSecs, &fin, &p.Device, &p.UpdatedAt, &p.Page, &p.Percent, &p.Locator, &p.Revision)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
@@ -70,8 +70,8 @@ type ProgressFields struct {
 }
 
 func (d *DB) SetReadingProgressFields(p *ReadingProgress, fields ProgressFields) error {
-	_, err := d.Exec(`INSERT INTO progress (user_id, edition_id, file_id, file_offset_secs, edition_position_secs, duration_secs, is_finished, device, updated_at, page, percent, locator)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+	_, err := d.Exec(`INSERT INTO progress (user_id, edition_id, file_id, file_offset_secs, edition_position_secs, duration_secs, is_finished, device, updated_at, page, percent, locator, revision)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1)
 		ON CONFLICT(user_id, edition_id) DO UPDATE SET
 			file_id = CASE WHEN ? THEN excluded.file_id ELSE progress.file_id END,
 			file_offset_secs = CASE WHEN ? THEN excluded.file_offset_secs ELSE progress.file_offset_secs END,
@@ -82,10 +82,45 @@ func (d *DB) SetReadingProgressFields(p *ReadingProgress, fields ProgressFields)
 			updated_at = excluded.updated_at,
 			page = coalesce(excluded.page, progress.page),
 			percent = coalesce(excluded.percent, progress.percent),
-			locator = coalesce(excluded.locator, progress.locator)`,
+			locator = coalesce(excluded.locator, progress.locator),
+			revision = progress.revision + 1`,
 		p.UserID, p.EditionID, p.FileID, p.FileOffsetSecs, p.EditionPositionSecs, p.DurationSecs, p.IsFinished, p.Device, nowMilli(), p.Page, p.Percent, p.Locator,
 		fields.Position, fields.Position, fields.Position, fields.Duration, fields.Finished, fields.Device)
 	return err
+}
+
+// SetReadingProgressRevision applies p only when the stored row sits at
+// baseRevision. applied is false when another writer advanced the row in the
+// meantime; the caller re-reads and answers the stale base with the current
+// state.
+func (d *DB) SetReadingProgressRevision(p *ReadingProgress, fields ProgressFields, baseRevision int64) (int64, bool, error) {
+	var revision int64
+	err := d.QueryRow(`INSERT INTO progress (user_id, edition_id, file_id, file_offset_secs, edition_position_secs, duration_secs, is_finished, device, updated_at, page, percent, locator, revision)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1)
+		ON CONFLICT(user_id, edition_id) DO UPDATE SET
+			file_id = CASE WHEN ? THEN excluded.file_id ELSE progress.file_id END,
+			file_offset_secs = CASE WHEN ? THEN excluded.file_offset_secs ELSE progress.file_offset_secs END,
+			edition_position_secs = CASE WHEN ? THEN excluded.edition_position_secs ELSE progress.edition_position_secs END,
+			duration_secs = CASE WHEN ? THEN excluded.duration_secs ELSE progress.duration_secs END,
+			is_finished = CASE WHEN ? THEN excluded.is_finished ELSE progress.is_finished END,
+			device = CASE WHEN ? THEN excluded.device ELSE progress.device END,
+			updated_at = excluded.updated_at,
+			page = coalesce(excluded.page, progress.page),
+			percent = coalesce(excluded.percent, progress.percent),
+			locator = coalesce(excluded.locator, progress.locator),
+			revision = progress.revision + 1
+		WHERE progress.revision = ?
+		RETURNING revision`,
+		p.UserID, p.EditionID, p.FileID, p.FileOffsetSecs, p.EditionPositionSecs, p.DurationSecs, p.IsFinished, p.Device, nowMilli(), p.Page, p.Percent, p.Locator,
+		fields.Position, fields.Position, fields.Position, fields.Duration, fields.Finished, fields.Device, baseRevision).
+		Scan(&revision)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return revision, true, nil
 }
 
 // EditionPages is Edition plus page_count; the scanner upserts book editions

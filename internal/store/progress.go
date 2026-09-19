@@ -63,8 +63,8 @@ func (d *DB) UserProgressList(userID int64) ([]Progress, error) {
 }
 
 func (d *DB) SetProgress(p *Progress) error {
-	_, err := d.Exec(`INSERT INTO progress (user_id, edition_id, file_id, file_offset_secs, edition_position_secs, duration_secs, is_finished, device, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?)
+	_, err := d.Exec(`INSERT INTO progress (user_id, edition_id, file_id, file_offset_secs, edition_position_secs, duration_secs, is_finished, device, updated_at, revision)
+		VALUES (?,?,?,?,?,?,?,?,?,1)
 		ON CONFLICT(user_id, edition_id) DO UPDATE SET
 			file_id = excluded.file_id,
 			file_offset_secs = excluded.file_offset_secs,
@@ -72,7 +72,8 @@ func (d *DB) SetProgress(p *Progress) error {
 			duration_secs = excluded.duration_secs,
 			is_finished = excluded.is_finished,
 			device = excluded.device,
-			updated_at = excluded.updated_at`,
+			updated_at = excluded.updated_at,
+			revision = progress.revision + 1`,
 		p.UserID, p.EditionID, p.FileID, p.FileOffsetSecs, p.EditionPositionSecs, p.DurationSecs, p.IsFinished, p.Device, nowMilli())
 	return err
 }
@@ -157,8 +158,8 @@ func (d *DB) CloseSessionWithProgress(s *Session, p *Progress, listenedDelta flo
 			return ErrNotFound
 		}
 		now := nowMilli()
-		if _, err := tx.Exec(`INSERT INTO progress (user_id, edition_id, file_id, file_offset_secs, edition_position_secs, duration_secs, is_finished, device, updated_at)
-			VALUES (?,?,?,?,?,?,?,?,?)
+		if _, err := tx.Exec(`INSERT INTO progress (user_id, edition_id, file_id, file_offset_secs, edition_position_secs, duration_secs, is_finished, device, updated_at, revision)
+			VALUES (?,?,?,?,?,?,?,?,?,1)
 			ON CONFLICT(user_id, edition_id) DO UPDATE SET
 				file_id = excluded.file_id,
 				file_offset_secs = excluded.file_offset_secs,
@@ -166,7 +167,8 @@ func (d *DB) CloseSessionWithProgress(s *Session, p *Progress, listenedDelta flo
 				duration_secs = excluded.duration_secs,
 				is_finished = excluded.is_finished,
 				device = excluded.device,
-				updated_at = excluded.updated_at`,
+				updated_at = excluded.updated_at,
+				revision = progress.revision + 1`,
 			p.UserID, p.EditionID, p.FileID, p.FileOffsetSecs, p.EditionPositionSecs, p.DurationSecs, p.IsFinished, p.Device, now); err != nil {
 			return err
 		}

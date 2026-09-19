@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import type { ComponentChildren, CSSProperties } from "preact";
-import { api, apiChecked, media } from "../api";
-import { ProgressQueue, type ProgressPatch as QueuePatch } from "../progressQueue";
+import { api, media, APIError } from "../api";
+import { ProgressQueue, mergeServerProgress, type ProgressPatch as QueuePatch, type ServerProgress } from "../progressQueue";
 import { c, font, iconBtn } from "../styles";
 
 export type ReaderMode = "single" | "double" | "webtoon";
@@ -9,7 +9,7 @@ export type FitMode = "width" | "height";
 
 export type ReadingProgress = {
   position?: number; duration?: number; isFinished?: boolean;
-  page?: number; percent?: number; locator?: string;
+  page?: number; percent?: number; locator?: string; revision?: number;
 };
 
 export type ProgressPost = { page?: number; percent?: number; locator?: string; finished?: boolean };
@@ -107,29 +107,80 @@ export function savePref(key: string, value: string): void {
   } catch { /* storage unavailable */ }
 }
 
-export function useProgressSaver(editionId: number) {
+export function useProgressSaver(editionId: number, baseRevision?: number) {
   const [state, setState] = useState<SaveState>("idle");
   const timer = useRef<number | undefined>(undefined);
   const lastSent = useRef(0);
+  const revisionRef = useRef(baseRevision ?? 0);
   // One serial, merge-preserving queue per edition: patches merge instead of
   // replacing (page + completion both survive), a failed delivery is retried
   // with backoff under newer patches, and only one request is ever in flight.
   // A changed editionId replaces the queue so patches never post to a stale
-  // edition when the reader view is reused.
+  // edition when the reader view is reused. The queue persists its pending
+  // patch in localStorage, and every delivery carries the server revision
+  // the patch was based on: a 409 answer rebases the revision, max-merges
+  // the patch onto the returned server state and retries, so a stale device
+  // can no longer wipe newer progress and a reload can no longer lose
+  // queued patches. Beacon sends (pagehide) stay revision-less by design -
+  // their responses cannot be read, so they must write unconditionally.
   const queueRef = useRef<{ edition: number; queue: ProgressQueue } | null>(null);
   if (queueRef.current === null || queueRef.current.edition !== editionId) {
     queueRef.current?.queue.stop();
+    revisionRef.current = baseRevision ?? 0;
+    const storageKey = `libteca-progress-queue-${editionId}`;
+    const queueStorage = {
+      load: (): QueuePatch => {
+        try {
+          const raw = localStorage.getItem(storageKey);
+          if (!raw) return {};
+          const parsed = JSON.parse(raw) as Record<string, unknown>;
+          const out: Record<string, unknown> = {};
+          for (const key of ["page", "percent", "locator", "finished"]) {
+            if (parsed[key] !== undefined) out[key] = parsed[key];
+          }
+          return out as QueuePatch;
+        } catch {
+          return {};
+        }
+      },
+      save: (patch: QueuePatch): void => {
+        try {
+          if (Object.keys(patch).length === 0) localStorage.removeItem(storageKey);
+          else localStorage.setItem(storageKey, JSON.stringify(patch));
+        } catch { /* storage unavailable */ }
+      },
+    };
     queueRef.current = {
       edition: editionId,
       queue: new ProgressQueue({
+        storage: queueStorage,
         send: async (patch: QueuePatch) => {
           setState("saving");
-          await apiChecked(`/progress/${editionId}`, {
-            method: "POST",
-            body: JSON.stringify(patch),
-          });
-          setState("saved");
-          window.setTimeout(() => setState((s) => (s === "saved" ? "idle" : s)), 1600);
+          let current = patch;
+          for (let attempt = 0; ; attempt++) {
+            const res = await api(`/progress/${editionId}`, {
+              method: "POST",
+              body: JSON.stringify({ ...current, revision: revisionRef.current }),
+            });
+            if (typeof res.error === "string") {
+              const cur = (res as Record<string, unknown>).current as Record<string, unknown> | undefined;
+              if (res.status === 409 && cur !== null && typeof cur === "object" && typeof cur.revision === "number" && attempt < 3) {
+                revisionRef.current = cur.revision;
+                current = mergeServerProgress(cur as ServerProgress, current);
+                if (Object.keys(current).length === 0) {
+                  setState("saved");
+                  window.setTimeout(() => setState((s) => (s === "saved" ? "idle" : s)), 1600);
+                  return;
+                }
+                continue;
+              }
+              throw new APIError(res.error, res.status);
+            }
+            if (typeof res.revision === "number") revisionRef.current = res.revision;
+            setState("saved");
+            window.setTimeout(() => setState((s) => (s === "saved" ? "idle" : s)), 1600);
+            return;
+          }
         },
         onError: () => setState("error"),
       }),
@@ -153,7 +204,7 @@ export function useProgressSaver(editionId: number) {
     if (timer.current !== undefined) { clearTimeout(timer.current); timer.current = undefined; }
     lastSent.current = Date.now();
     void queue.flush();
-  }, []);
+  }, [queue]);
 
   const save = useCallback((body: ProgressPost) => {
     const wait = SAVE_INTERVAL_MS - (Date.now() - lastSent.current);
@@ -162,14 +213,18 @@ export function useProgressSaver(editionId: number) {
     if (timer.current === undefined) {
       timer.current = window.setTimeout(() => { timer.current = undefined; deliver(); }, wait);
     }
-  }, [deliver]);
+  }, [deliver, queue]);
 
   const flush = useCallback(() => {
     if (timer.current !== undefined) { clearTimeout(timer.current); timer.current = undefined; }
     const pending = queue.snapshot();
     if (Object.keys(pending).length === 0) return;
     void postBeacon(pending as ProgressPost);
-  }, [postBeacon]);
+  }, [postBeacon, queue]);
+
+  useEffect(() => {
+    if (Object.keys(queue.snapshot()).length > 0) deliver();
+  }, [queue, deliver]);
 
   useEffect(() => {
     const onVis = () => { if (document.visibilityState === "hidden") flush(); };

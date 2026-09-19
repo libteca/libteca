@@ -79,6 +79,7 @@ type Progress struct {
 	IsFinished          bool
 	Device              *string
 	UpdatedAt           int64
+	Revision            int64
 }
 
 type Session struct {

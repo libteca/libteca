@@ -258,3 +258,55 @@ func TestWorkDetailPageCount(t *testing.T) {
 		}
 	}
 }
+
+func TestProgressRevisionProtocol(t *testing.T) {
+	env := newReadingEnv(t)
+	lib, _ := env.db.AddLibrary("Books", "books", t.TempDir())
+	w := seedWork(t, env.db, lib, "W", nil, nil, 1, 1)
+	epub := seedBookEdition(t, env.db, w, "epub", ptr(3))
+	seedFileOnDisk(t, env.db, lib, epub, "b.epub", []byte("PK"))
+
+	_, body := readingReq(t, env, "GET", env.base+fmt.Sprintf("/progress/%d", epub), env.token, "")
+	if !strings.Contains(body, `"revision":0`) {
+		t.Fatalf("empty progress must report revision 0: %s", body)
+	}
+
+	code, body := readingPost(t, env, epub, `{"page":4,"percent":0.8,"revision":0}`)
+	if code != 200 {
+		t.Fatalf("revisioned post = %d %s", code, body)
+	}
+	if !strings.Contains(body, `"revision":1`) {
+		t.Fatalf("applied post must return the new revision: %s", body)
+	}
+
+	code, body = readingPost(t, env, epub, `{"page":2,"revision":0}`)
+	if code != 409 {
+		t.Fatalf("stale post = %d %s, want 409", code, body)
+	}
+	for _, want := range []string{`"revision":1`, `"page":4`, `"percent":0.8`, `"isFinished":false`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("409 body missing current state %s: %s", want, body)
+		}
+	}
+
+	if code, body := readingPost(t, env, epub, `{"page":2,"revision":-1}`); code != 400 {
+		t.Fatalf("negative revision = %d %s, want 400", code, body)
+	}
+
+	if code, body := readingPost(t, env, epub, `{"finished":true}`); code != 200 {
+		t.Fatalf("legacy post = %d %s", code, body)
+	}
+	_, body = readingReq(t, env, "GET", env.base+fmt.Sprintf("/progress/%d", epub), env.token, "")
+	if !strings.Contains(body, `"revision":2`) {
+		t.Fatalf("legacy write must advance the revision: %s", body)
+	}
+
+	code, body = readingPost(t, env, epub, `{"page":5,"revision":1}`)
+	if code != 409 {
+		t.Fatalf("base held across a legacy write = %d %s, want 409", code, body)
+	}
+	code, body = readingPost(t, env, epub, `{"page":5,"revision":2}`)
+	if code != 200 || !strings.Contains(body, `"revision":3`) {
+		t.Fatalf("rebased post = %d %s", code, body)
+	}
+}
