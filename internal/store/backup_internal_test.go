@@ -70,3 +70,54 @@ func TestPruneProtectMiddleBudget(t *testing.T) {
 		}
 	}
 }
+
+func TestPruneCountsGenerationsAndLegacyTogether(t *testing.T) {
+	dir := t.TempDir()
+	writeBackupNames(t, dir, "libteca-20200101-000000.db")
+	if err := os.MkdirAll(filepath.Join(dir, "covers"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "covers", "7.jpg"), []byte("legacy"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"gen-20260101-000000.000000001-a", "gen-20260201-000000.000000001-b"} {
+		if err := os.MkdirAll(filepath.Join(dir, name, "covers"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name, "snapshot.db"), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	protect := filepath.Join(dir, "gen-20260201-000000.000000001-b")
+	if err := pruneBackups(dir, 2, protect); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "libteca-20200101-000000.db")); !os.IsNotExist(err) {
+		t.Fatal("oldest legacy backup not counted against the generation budget")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "covers")); !os.IsNotExist(err) {
+		t.Fatal("shared covers outlived the last legacy backup")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "gen-20260101-000000.000000001-a", "snapshot.db")); err != nil {
+		t.Fatalf("generation inside the keep budget damaged: %v", err)
+	}
+}
+
+func TestPruneRemovesGenerationWhole(t *testing.T) {
+	dir := t.TempDir()
+	writeBackupNames(t, dir, "libteca-20200101-000000.db")
+	gen := "gen-20260101-000000.000000001-a"
+	if err := os.MkdirAll(filepath.Join(dir, gen, "covers"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, gen, "covers", "7.jpg"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	protect := filepath.Join(dir, "libteca-20200101-000000.db")
+	if err := pruneBackups(dir, 1, protect); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, gen)); !os.IsNotExist(err) {
+		t.Fatal("pruned generation directory left behind")
+	}
+}

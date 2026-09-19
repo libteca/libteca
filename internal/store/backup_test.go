@@ -37,8 +37,11 @@ func TestSnapshotOpensAsStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
+	if strings.HasSuffix(path, ".db") || filepath.Base(path)[0] == '.' {
+		t.Fatalf("published generation path = %s, want a gen-* directory", path)
+	}
 
-	cop, err := store.Open(path)
+	cop, err := store.Open(filepath.Join(path, "snapshot.db"))
 	if err != nil {
 		t.Fatalf("open backup: %v", err)
 	}
@@ -50,12 +53,102 @@ func TestSnapshotOpensAsStore(t *testing.T) {
 		t.Fatalf("backup contents: users=%d libs=%d", users, libs)
 	}
 
-	got, err := os.ReadFile(filepath.Join(backups, "covers", "7.jpg"))
+	got, err := os.ReadFile(filepath.Join(path, "covers", "7.jpg"))
 	if err != nil || string(got) != "cover" {
 		t.Fatalf("copied cover = %q, %v", got, err)
 	}
-	if _, err := os.Stat(filepath.Join(backups, "covers", "thumb")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(path, "covers", "thumb")); !os.IsNotExist(err) {
 		t.Fatal("thumb cache must not be copied")
+	}
+}
+
+func TestSnapshotGenerationsIsolateCovers(t *testing.T) {
+	db := backupDB(t)
+	covers := filepath.Join(t.TempDir(), "covers")
+	os.MkdirAll(covers, 0o755)
+	os.WriteFile(filepath.Join(covers, "7.jpg"), []byte("v1"), 0o644)
+	backups := filepath.Join(t.TempDir(), "backups")
+	first, err := db.Snapshot(covers, backups, 10)
+	if err != nil {
+		t.Fatalf("Snapshot 1: %v", err)
+	}
+	os.WriteFile(filepath.Join(covers, "7.jpg"), []byte("v2"), 0o644)
+	os.WriteFile(filepath.Join(covers, "9.jpg"), []byte("new"), 0o644)
+	second, err := db.Snapshot(covers, backups, 10)
+	if err != nil {
+		t.Fatalf("Snapshot 2: %v", err)
+	}
+	if first == second {
+		t.Fatalf("two snapshots share one generation: %s", first)
+	}
+	got, err := os.ReadFile(filepath.Join(first, "covers", "7.jpg"))
+	if err != nil || string(got) != "v1" {
+		t.Fatalf("first generation cover = %q, %v (a later snapshot must never touch it)", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(first, "covers", "9.jpg")); !os.IsNotExist(err) {
+		t.Fatal("first generation sees a cover that did not exist when it was taken")
+	}
+	got, err = os.ReadFile(filepath.Join(second, "covers", "7.jpg"))
+	if err != nil || string(got) != "v2" {
+		t.Fatalf("second generation cover = %q, %v", got, err)
+	}
+	got, err = os.ReadFile(filepath.Join(second, "covers", "9.jpg"))
+	if err != nil || string(got) != "new" {
+		t.Fatalf("second generation new cover = %q, %v", got, err)
+	}
+}
+
+func TestSnapshotLegacyBackupsKeepWorking(t *testing.T) {
+	db := backupDB(t)
+	backups := t.TempDir()
+	legacyCovers := filepath.Join(backups, "covers")
+	os.MkdirAll(legacyCovers, 0o755)
+	os.WriteFile(filepath.Join(legacyCovers, "7.jpg"), []byte("legacy"), 0o644)
+	for _, name := range []string{"libteca-20200101-000000.db", "libteca-20200201-000000.db"} {
+		if err := os.WriteFile(filepath.Join(backups, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Snapshot(filepath.Join(t.TempDir(), "no-covers"), backups, 10); err != nil {
+		t.Fatalf("Snapshot over legacy layout: %v", err)
+	}
+	for _, name := range []string{"libteca-20200101-000000.db", "libteca-20200201-000000.db"} {
+		if _, err := os.Stat(filepath.Join(backups, name)); err != nil {
+			t.Fatalf("legacy backup %s disturbed by a new snapshot: %v", name, err)
+		}
+	}
+	got, err := os.ReadFile(filepath.Join(legacyCovers, "7.jpg"))
+	if err != nil || string(got) != "legacy" {
+		t.Fatalf("legacy shared covers disturbed = %q, %v", got, err)
+	}
+}
+
+func TestSnapshotPruneRemovesSharedCoversAfterLastLegacy(t *testing.T) {
+	db := backupDB(t)
+	backups := t.TempDir()
+	legacyCovers := filepath.Join(backups, "covers")
+	os.MkdirAll(legacyCovers, 0o755)
+	os.WriteFile(filepath.Join(legacyCovers, "7.jpg"), []byte("legacy"), 0o644)
+	if err := os.WriteFile(filepath.Join(backups, "libteca-20200101-000000.db"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Snapshot(filepath.Join(t.TempDir(), "no-covers"), backups, 2); err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(backups, "libteca-20200101-000000.db")); err != nil {
+		t.Fatalf("legacy backup pruned inside the keep budget: %v", err)
+	}
+	if _, err := os.Stat(legacyCovers); err != nil {
+		t.Fatalf("shared covers removed while a legacy backup remains: %v", err)
+	}
+	if _, err := db.Snapshot(filepath.Join(t.TempDir(), "no-covers"), backups, 1); err != nil {
+		t.Fatalf("Snapshot 2: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(backups, "libteca-20200101-000000.db")); !os.IsNotExist(err) {
+		t.Fatal("legacy backup outside the keep budget was kept")
+	}
+	if _, err := os.Stat(legacyCovers); !os.IsNotExist(err) {
+		t.Fatal("shared covers outlived the last legacy backup")
 	}
 }
 
@@ -70,7 +163,8 @@ func TestSnapshotPrunesOldBackups(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := db.Snapshot(filepath.Join(t.TempDir(), "no-covers"), backups, 2); err != nil {
+	path, err := db.Snapshot(filepath.Join(t.TempDir(), "no-covers"), backups, 2)
+	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
 	entries, err := os.ReadDir(backups)
@@ -84,13 +178,11 @@ func TestSnapshotPrunesOldBackups(t *testing.T) {
 			dbs = append(dbs, n)
 		}
 	}
-	if len(dbs) != 2 {
-		t.Fatalf("backups left = %v, want the 2 newest", dbs)
+	if len(dbs) != 1 || dbs[0] != "libteca-20200301-000000.db" {
+		t.Fatalf("legacy backups left = %v, want only the newest alongside the new generation", dbs)
 	}
-	for _, name := range dbs {
-		if name == "libteca-20200101-000000.db" || name == "libteca-20200201-000000.db" {
-			t.Fatalf("old backup %s not pruned", name)
-		}
+	if fi, err := os.Stat(path); err != nil || !fi.IsDir() {
+		t.Fatalf("new generation missing after pruning %s: %v", path, err)
 	}
 	if _, err := os.Stat(filepath.Join(backups, "other.db")); err != nil {
 		t.Fatal("pruning touched a non-libteca file")
@@ -109,7 +201,7 @@ func TestSnapshotKeepBelowOnePrunesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Snapshot keep=0: %v", err)
 	}
-	if _, err := os.Stat(path); err != nil {
+	if _, err := os.Stat(filepath.Join(path, "snapshot.db")); err != nil {
 		t.Fatalf("fresh backup deleted at keep=0: %v", err)
 	}
 	entries, err := os.ReadDir(backups)
@@ -118,7 +210,10 @@ func TestSnapshotKeepBelowOnePrunesNothing(t *testing.T) {
 	}
 	var dbs int
 	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), "libteca-") && strings.HasSuffix(e.Name(), ".db") {
+		if !e.IsDir() && strings.HasPrefix(e.Name(), "libteca-") && strings.HasSuffix(e.Name(), ".db") {
+			dbs++
+		}
+		if e.IsDir() && strings.HasPrefix(e.Name(), "gen-") {
 			dbs++
 		}
 	}
@@ -131,7 +226,7 @@ func TestSnapshotNeverPrunesJustWritten(t *testing.T) {
 	db := backupDB(t)
 	backups := t.TempDir()
 	// clock-skewed name sorts AFTER the fresh snapshot: with keep=1 the
-	// just-written file would land in the prune range without protection
+	// just-written generation would land in the prune range without protection
 	if err := os.WriteFile(filepath.Join(backups, "libteca-29991231-235959.db"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +234,7 @@ func TestSnapshotNeverPrunesJustWritten(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
-	if _, err := os.Stat(path); err != nil {
+	if _, err := os.Stat(filepath.Join(path, "snapshot.db")); err != nil {
 		t.Fatalf("just-written backup pruned: %v", err)
 	}
 }
@@ -157,7 +252,7 @@ func TestSnapshotCapturesWalWrites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Snapshot 2: %v", err)
 	}
-	cop, err := store.Open(path2)
+	cop, err := store.Open(filepath.Join(path2, "snapshot.db"))
 	if err != nil {
 		t.Fatalf("open second backup: %v", err)
 	}
@@ -176,7 +271,7 @@ func TestSnapshotSameSecondNeverOverwrites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Snapshot 1: %v", err)
 	}
-	firstBytes, err := os.ReadFile(first)
+	firstBytes, err := os.ReadFile(filepath.Join(first, "snapshot.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +282,7 @@ func TestSnapshotSameSecondNeverOverwrites(t *testing.T) {
 	if first == second {
 		t.Fatalf("two snapshots in the same second share one name: %s", first)
 	}
-	again, err := os.ReadFile(first)
+	again, err := os.ReadFile(filepath.Join(first, "snapshot.db"))
 	if err != nil || len(again) == 0 || string(again) != string(firstBytes) {
 		t.Fatalf("first snapshot destroyed by the second: read=%v err=%v", len(again), err)
 	}

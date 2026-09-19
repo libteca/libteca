@@ -118,6 +118,26 @@ Release artifacts: `make release` cross-compiles linux/amd64, linux/arm64,
 darwin/amd64, darwin/arm64 into `dist/release/` as tarballs/zips with
 SHA256SUMS. The binary is CGo-free; runtime deps are ffmpeg and ffprobe.
 
+## Backups
+
+`libteca backup [-data dir] [-keep n]` writes one self-contained generation
+per run: `<data>/backups/gen-<date>-<id>/` holds `snapshot.db` (a stop-free
+`VACUUM INTO` copy of the database) and `covers/` exactly as of that moment.
+Each generation owns its covers — later snapshots never touch an earlier
+generation's files — and retention keeps the newest n backups.
+
+Restore is manual, per generation: stop the server, replace `<data>/libteca.db`
+with the generation's `snapshot.db` (delete a stale `libteca.db-wal`/`-shm`
+alongside it), replace `<data>/covers/` with the generation's `covers/`,
+restart. Restoring reads exactly one generation; nothing outside it is needed.
+
+Backups written before the generation layout (loose `libteca-*.db` files that
+share one `backups/covers/` directory) still work: they count toward the same
+retention budget and the shared covers directory is preserved until the last
+legacy backup is pruned. Restore a legacy backup the same way, using the
+shared `backups/covers/` as its covers source; if you keep a legacy backup
+outside retention, copy the shared covers directory with it.
+
 ## Security posture
 
 Local-first, zero telemetry. Listens on `:<port>` (all interfaces); LAN or

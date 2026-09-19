@@ -231,16 +231,17 @@ func lockDataDir(dir string) (func(), error) {
 }
 
 // runBackup implements `libteca backup [-data dir] [-keep n]`: a stop-free
-// database snapshot (VACUUM INTO) into <data>/backups/libteca-<date>.db plus
-// a copy of <data>/covers/, pruning to the newest n database backups.
+// database snapshot (VACUUM INTO) plus a covers copy, published together as
+// one self-contained generation directory under <data>/backups/, pruning to
+// the newest n backups.
 func runBackup(args []string) {
 	fs := flag.NewFlagSet("backup", flag.ExitOnError)
 	data := fs.String("data", "./data", "data directory")
-	keep := fs.Int("keep", 10, "database backups to keep")
+	keep := fs.Int("keep", 10, "backups to keep")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: libteca backup [-data dir] [-keep n]")
-		fmt.Fprintln(os.Stderr, "  snapshots the database (stop-free VACUUM INTO) and covers/ into <data>/backups/,")
-		fmt.Fprintln(os.Stderr, "  keeping the newest n database backups (default 10).")
+		fmt.Fprintln(os.Stderr, "  writes <data>/backups/gen-<date>-<id>/ holding snapshot.db and covers/,")
+		fmt.Fprintln(os.Stderr, "  keeping the newest n backups (default 10) counting legacy libteca-*.db files.")
 		fs.PrintDefaults()
 	}
 	fs.Parse(args)

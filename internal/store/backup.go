@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -56,13 +57,16 @@ func (d *DB) Snapshot(coversDir, backupsDir string, keep int) (string, error) {
 		if err := syncPath(tmp); err != nil {
 			return err
 		}
-		if err := copyTree(coversDir, filepath.Join(backupsDir, "covers")); err != nil {
+		if err := copyTree(coversDir, filepath.Join(stage, "covers")); err != nil {
+			return err
+		}
+		if err := syncPath(stage); err != nil {
 			return err
 		}
 		suffix := strings.TrimPrefix(filepath.Base(stage), ".libteca-stage-")
 		dest := filepath.Join(backupsDir,
-			"libteca-"+time.Now().UTC().Format("20060102-150405.000000000")+"-"+suffix+".db")
-		if err := os.Link(tmp, dest); err != nil {
+			"gen-"+time.Now().UTC().Format("20060102-150405.000000000")+"-"+suffix)
+		if err := os.Rename(stage, dest); err != nil {
 			return err
 		}
 		if err := syncPath(backupsDir); err != nil {
@@ -148,8 +152,13 @@ func copyTree(src, dst string) error {
 	return nil
 }
 
-// pruneBackups deletes the oldest libteca-*.db backups beyond keep. keep < 1
-// prunes nothing — deleting every backup including the just-written one is
+// pruneBackups deletes the oldest backups beyond keep, counting generation
+// directories and legacy libteca-*.db files together. A generation is
+// self-contained (snapshot.db + covers) and removed whole; a legacy file
+// shares backups/covers, which stays until the last legacy backup is gone.
+// keep < 1 prunes nothing — deleting every backup including the just-written
+// one is never wanted. protect names the just-published backup and counts
+// toward the budget.
 func pruneBackups(dir string, keep int, protect string) error {
 	if keep < 1 {
 		return nil
@@ -158,28 +167,55 @@ func pruneBackups(dir string, keep int, protect string) error {
 	if err != nil {
 		return err
 	}
-	var dbs []string
+	type backupEntry struct {
+		path  string
+		key   string
+		isGen bool
+	}
+	var list []backupEntry
+	legacy := 0
 	for _, e := range entries {
-		if !e.IsDir() && strings.HasPrefix(e.Name(), "libteca-") && strings.HasSuffix(e.Name(), ".db") {
-			dbs = append(dbs, e.Name())
+		name := e.Name()
+		if e.IsDir() {
+			if strings.HasPrefix(name, "gen-") {
+				list = append(list, backupEntry{path: filepath.Join(dir, name), key: strings.TrimPrefix(name, "gen-"), isGen: true})
+			}
+			continue
+		}
+		if strings.HasPrefix(name, "libteca-") && strings.HasSuffix(name, ".db") {
+			legacy++
+			list = append(list, backupEntry{path: filepath.Join(dir, name), key: strings.TrimSuffix(strings.TrimPrefix(name, "libteca-"), ".db")})
 		}
 	}
+	sort.Slice(list, func(i, j int) bool { return list[i].key < list[j].key })
 	protectedPresent := false
-	var candidates []string
-	for _, name := range dbs {
-		p := filepath.Join(dir, name)
-		if filepath.Clean(p) == filepath.Clean(protect) {
+	var candidates []backupEntry
+	for _, b := range list {
+		if filepath.Clean(b.path) == filepath.Clean(protect) {
 			protectedPresent = true
 			continue
 		}
-		candidates = append(candidates, p)
+		candidates = append(candidates, b)
 	}
 	slots := keep
 	if protectedPresent {
 		slots--
 	}
+	removedLegacy := 0
 	for i := 0; i < len(candidates)-slots; i++ {
-		if err := os.Remove(candidates[i]); err != nil {
+		var err error
+		if candidates[i].isGen {
+			err = os.RemoveAll(candidates[i].path)
+		} else {
+			err = os.Remove(candidates[i].path)
+			removedLegacy++
+		}
+		if err != nil {
+			return err
+		}
+	}
+	if legacy-removedLegacy == 0 {
+		if err := os.RemoveAll(filepath.Join(dir, "covers")); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 	}

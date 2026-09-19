@@ -50,7 +50,7 @@ func TestSnapshotSerializesAcrossProcesses(t *testing.T) {
 	}
 	var dbs int
 	for _, e := range entries {
-		if !e.IsDir() && filepath.Ext(e.Name()) == ".db" {
+		if e.IsDir() && strings.HasPrefix(e.Name(), "gen-") {
 			dbs++
 		}
 	}
@@ -58,7 +58,7 @@ func TestSnapshotSerializesAcrossProcesses(t *testing.T) {
 		t.Skip("both runs reported busy; lock serialization environment did not exercise retention")
 	}
 	if dbs < 1 {
-		t.Fatalf("concurrent keep=1 retention left %d backups", dbs)
+		t.Fatalf("concurrent keep=1 retention left %d generations", dbs)
 	}
 }
 
@@ -68,7 +68,7 @@ func TestSnapshotPublishesAfterCovers(t *testing.T) {
 	os.MkdirAll(covers, 0o755)
 	backups := filepath.Join(t.TempDir(), "backups")
 	// A covers directory whose copy must fail (a subdirectory sits where a
-	// file is expected to be written) leaves NO visible db snapshot.
+	// file is expected to be written) leaves NO published generation.
 	os.MkdirAll(filepath.Join(covers, "8.jpg"), 0o755)
 	os.WriteFile(filepath.Join(covers, "8.jpg", "nested"), []byte("x"), 0o644)
 	if _, err := db.Snapshot(covers, backups, 10); err == nil {
@@ -79,8 +79,8 @@ func TestSnapshotPublishesAfterCovers(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, e := range entries {
-		if !e.IsDir() && filepath.Ext(e.Name()) == ".db" {
-			t.Fatalf("database snapshot %s published although the covers copy failed", e.Name())
+		if e.IsDir() && strings.HasPrefix(e.Name(), "gen-") {
+			t.Fatalf("generation %s published although the covers copy failed", e.Name())
 		}
 	}
 }
