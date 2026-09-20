@@ -31,7 +31,7 @@ func TestBuildArgsGolden(t *testing.T) {
 		"-hls_time", "4",
 		"-hls_init_time", "2",
 		"-hls_list_size", "0",
-		"-hls_flags", "independent_segments",
+		"-hls_flags", "independent_segments+temp_file",
 		"-hls_segment_filename", "/data/transcode/s1/seg%05d.ts",
 		"/data/transcode/s1/index.m3u8",
 	}
@@ -486,6 +486,7 @@ func TestPrebufferHeldThroughFallback(t *testing.T) {
 	}
 	writeFile(t, filepath.Join(s.Dir, "seg00000.ts"), "x")
 	writeFile(t, filepath.Join(s.Dir, "seg00001.ts"), "x")
+	writeFile(t, s.Playlist(), "#EXTM3U\n#EXTINF:4.0,\nseg00000.ts\n#EXTINF:4.0,\nseg00001.ts\n")
 	select {
 	case n := <-res:
 		if n != 2 {

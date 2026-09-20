@@ -89,6 +89,7 @@ type Session struct {
 	fallbackPending bool
 	downgraded      bool
 	killed          bool
+	closing         bool
 	lastHit         atomic.Int64
 	mu              sync.Mutex
 	lifecycle       sync.Mutex
@@ -151,6 +152,12 @@ func NewSessionID(prefix string, editionID int64) (string, error) {
 	return fmt.Sprintf("%s%d-%s", prefix, editionID, hex.EncodeToString(b[:])), nil
 }
 
+// Get resolves or creates a session. The manager lock is only held for map
+// admission: process spawn, file open and directory setup happen outside
+// it, so a slow start or cleanup cannot stall unrelated viewers (a session
+// is reserved in the map first so concurrent starts cannot exceed
+// MaxSessions, and closing sessions keep their slot and directory name
+// until cleanup has actually finished).
 func (m *Manager) Get(sessionID string, edition int64, source string, startSecs float64, open func() (*os.File, error)) (*Session, error) {
 	// Session ids become directory names under DataDir/transcode via
 	// filepath.Join, which cleans ".." — an unvalidated id resolves outside
@@ -159,59 +166,113 @@ func (m *Manager) Get(sessionID string, edition int64, source string, startSecs 
 	if sessionID == "" || sessionID == "." || sessionID == ".." || strings.ContainsAny(sessionID, `/\`) {
 		return nil, fmt.Errorf("invalid transcode session id")
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.closed {
-		return nil, ErrClosed
-	}
-	if s, ok := m.sessions[sessionID]; ok {
-		if s.Edition == edition {
-			if s.Source != source || s.StartSecs != startSecs {
-				return nil, ErrSessionParams
+	for {
+		m.mu.Lock()
+		if m.closed {
+			m.mu.Unlock()
+			return nil, ErrClosed
+		}
+		if s, ok := m.sessions[sessionID]; ok {
+			if s.closing {
+				m.mu.Unlock()
+				return nil, ErrCapacity
 			}
-			s.lastHit.Store(time.Now().UnixNano())
-			return s, nil
+			if s.Edition == edition {
+				if s.Source != source || s.StartSecs != startSecs {
+					m.mu.Unlock()
+					return nil, ErrSessionParams
+				}
+				s.lastHit.Store(time.Now().UnixNano())
+				m.mu.Unlock()
+				return s, nil
+			}
+			s.closing = true
+			m.mu.Unlock()
+			m.finalize(s)
+			continue
 		}
-		s.kill()
-		delete(m.sessions, sessionID)
-	}
-	now := time.Now()
-	for id, s := range m.sessions {
-		if now.Sub(time.Unix(0, s.lastHit.Load())) > idleSessionTTL {
-			s.kill()
-			delete(m.sessions, id)
+		now := time.Now()
+		var expired []*Session
+		for id, s := range m.sessions {
+			if !s.closing && now.Sub(time.Unix(0, s.lastHit.Load())) > idleSessionTTL {
+				s.closing = true
+				expired = append(expired, s)
+				delete(m.sessions, id)
+			}
 		}
-	}
-	if len(m.sessions) >= MaxSessions {
-		return nil, ErrCapacity
-	}
-	input, err := open()
-	if err != nil {
-		return nil, err
-	}
-	dir := filepath.Join(m.DataDir, "transcode", sessionID)
-	os.MkdirAll(dir, 0o700)
-	s := &Session{
-		ID:      sessionID,
-		Edition: edition,
-		Dir:     dir,
-		Source:  source,
+		if len(m.sessions) >= MaxSessions {
+			m.mu.Unlock()
+			for _, s := range expired {
+				m.finalize(s)
+			}
+			return nil, ErrCapacity
+		}
+		s := &Session{
+			ID:      sessionID,
+			Edition: edition,
+			Dir:     filepath.Join(m.DataDir, "transcode", sessionID),
+			Source:  source,
 
-		StartSecs: startSecs,
-		accel:     m.accelMode(),
-		spawn:     m.spawn,
-		fdArgs:    m.fdArgs,
-		input:     input,
+			StartSecs: startSecs,
+			accel:     m.accelMode(),
+			spawn:     m.spawn,
+			fdArgs:    m.fdArgs,
+		}
+		s.lastHit.Store(time.Now().UnixNano())
+		m.sessions[sessionID] = s
+		m.mu.Unlock()
+		for _, e := range expired {
+			m.finalize(e)
+		}
+		input, err := open()
+		if err != nil {
+			m.mu.Lock()
+			if m.sessions[sessionID] == s {
+				delete(m.sessions, sessionID)
+			}
+			m.mu.Unlock()
+			return nil, err
+		}
+		s.mu.Lock()
+		s.input = input
+		s.mu.Unlock()
+		if err := os.MkdirAll(s.Dir, 0o700); err != nil {
+			m.mu.Lock()
+			if m.sessions[sessionID] == s {
+				delete(m.sessions, sessionID)
+			}
+			m.mu.Unlock()
+			s.releaseInput()
+			return nil, err
+		}
+		if err := s.start(startSecs); err != nil {
+			m.mu.Lock()
+			if m.sessions[sessionID] == s {
+				delete(m.sessions, sessionID)
+			}
+			m.mu.Unlock()
+			s.releaseInput()
+			os.RemoveAll(s.Dir)
+			return nil, err
+		}
+		return s, nil
 	}
-	s.lastHit.Store(time.Now().UnixNano())
-	m.sessions[sessionID] = s
-	if err := s.start(startSecs); err != nil {
-		delete(m.sessions, sessionID)
-		s.releaseInput()
-		os.RemoveAll(dir)
-		return nil, err
+}
+
+// finalize terminates a reserved (closing) session and removes its map
+// entry only after the process is confirmed gone and the directory is
+// removed. A kill that times out keeps the reservation so the reaper can
+// retry; the directory name is never handed to a new session while the old
+// cleanup may still delete it.
+func (m *Manager) finalize(s *Session) {
+	if !s.kill() {
+		return
 	}
-	return s, nil
+	m.mu.Lock()
+	if cur, ok := m.sessions[s.ID]; ok && cur == s {
+		delete(m.sessions, s.ID)
+	}
+	m.mu.Unlock()
 }
 
 func (s *Session) start(startSecs float64) error {
@@ -311,7 +372,11 @@ func (s *Session) watchFallback(startSecs float64) {
 	}
 }
 
-func (s *Session) kill() {
+// kill terminates the session's process and removes its output directory.
+// It reports whether cleanup fully completed: a process that ignores the
+// kill for two seconds or a failing RemoveAll leaves the reservation in
+// place for a later retry (the directory must not be reused meanwhile).
+func (s *Session) kill() bool {
 	s.lifecycle.Lock()
 	defer s.lifecycle.Unlock()
 	s.mu.Lock()
@@ -329,13 +394,15 @@ func (s *Session) kill() {
 		case <-time.After(2 * time.Second):
 			slog.Warn("transcode exit pending; preserving output directory", "session", s.ID)
 			s.releaseInput()
-			return
+			return false
 		}
 	}
 	s.releaseInput()
 	if err := os.RemoveAll(s.Dir); err != nil {
 		slog.Warn("transcode cleanup failed", "session", s.ID, "err", err)
+		return false
 	}
+	return true
 }
 
 func (s *Session) releaseInput() {
@@ -355,20 +422,26 @@ func (m *Manager) Existing(sessionID string, edition int64) (*Session, bool) {
 		return nil, false
 	}
 	s, ok := m.sessions[sessionID]
-	if !ok || s.Edition != edition {
+	if !ok || s.closing || s.Edition != edition {
 		return nil, false
 	}
 	s.Touch()
 	return s, true
 }
 
+// Close reserves the session for teardown under the lock and performs the
+// slow kill + directory removal outside it, so unrelated session lookups
+// never wait on process termination or filesystem cleanup.
 func (m *Manager) Close(sessionID string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	if s, ok := m.sessions[sessionID]; ok {
-		s.kill()
-		delete(m.sessions, sessionID)
+	s, ok := m.sessions[sessionID]
+	if !ok || s.closing {
+		m.mu.Unlock()
+		return
 	}
+	s.closing = true
+	m.mu.Unlock()
+	m.finalize(s)
 }
 
 func (m *Manager) reaper() {
@@ -380,13 +453,23 @@ func (m *Manager) reaper() {
 			return
 		case <-t.C:
 			m.mu.Lock()
+			var collected []*Session
 			for id, s := range m.sessions {
-				if time.Since(time.Unix(0, s.lastHit.Load())) > idleSessionTTL {
-					s.kill()
+				expired := time.Since(time.Unix(0, s.lastHit.Load())) > idleSessionTTL
+				if s.closing {
+					collected = append(collected, s)
+					continue
+				}
+				if expired {
+					s.closing = true
+					collected = append(collected, s)
 					delete(m.sessions, id)
 				}
 			}
 			m.mu.Unlock()
+			for _, s := range collected {
+				m.finalize(s)
+			}
 		}
 	}
 }
@@ -395,10 +478,19 @@ func (m *Manager) CloseAll() {
 	m.stopOnce.Do(func() { close(m.stop) })
 	m.mu.Lock()
 	m.closed = true
-	defer m.mu.Unlock()
+	var collected []*Session
 	for id, s := range m.sessions {
-		s.kill()
+		if s.closing {
+			collected = append(collected, s)
+			continue
+		}
+		s.closing = true
+		collected = append(collected, s)
 		delete(m.sessions, id)
+	}
+	m.mu.Unlock()
+	for _, s := range collected {
+		m.finalize(s)
 	}
 }
 
@@ -452,12 +544,22 @@ func (s *Session) playlistLists(name string) bool {
 	if err != nil {
 		return false
 	}
-	return strings.Contains(string(data), name)
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.TrimSpace(line) == name {
+			return true
+		}
+	}
+	return false
 }
 
-// Prebuffer blocks until the first k segment files exist and are non-empty,
-// ffmpeg exits for good, ctx is done, or timeout passes. Returns how many of
-// the first k segments are on disk; never hangs.
+func (s *Session) segmentReady(index int) bool {
+	return fileReady(s.segmentPath(index)) && s.playlistLists(fmt.Sprintf("seg%05d.ts", index))
+}
+
+// Prebuffer blocks until the first k segments are finalized (published at
+// their final name AND listed by the playlist), ffmpeg exits for good, ctx
+// is done, or timeout passes. Returns how many of the first k segments are
+// servable; never hangs.
 func (s *Session) Prebuffer(ctx context.Context, k int, timeout time.Duration) int {
 	if k <= 0 {
 		k = DefaultPrebufferSegments
@@ -470,7 +572,7 @@ func (s *Session) Prebuffer(ctx context.Context, k int, timeout time.Duration) i
 	for {
 		ready := 0
 		for i := 0; i < k; i++ {
-			if fileReady(s.segmentPath(i)) {
+			if s.segmentReady(i) {
 				ready++
 			}
 		}
@@ -490,22 +592,23 @@ func (s *Session) Prebuffer(ctx context.Context, k int, timeout time.Duration) i
 	}
 }
 
-// WaitForSegment blocks until segment index is safe to serve: the file is
-// non-empty AND either the playlist references it (ffmpeg closed it) or
-// ffmpeg has exited. Returns false on ctx cancel or timeout.
+// WaitForSegment blocks until segment index is safe to serve: the segment
+// is published at its final name (ffmpeg writes to a temp file and renames
+// on completion) AND the playlist references it. A dead encoder never
+// makes an unfinished segment servable — a failed exit with nonempty bytes
+// on disk is a playback error, not a 200. Returns false on ctx cancel or
+// timeout.
 func (s *Session) WaitForSegment(ctx context.Context, index int, timeout time.Duration) bool {
 	if timeout <= 0 {
 		timeout = DefaultSegmentTimeout
 	}
-	name := fmt.Sprintf("seg%05d.ts", index)
-	path := s.segmentPath(index)
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	for {
-		if fileReady(path) && (s.playlistLists(name) || s.isDead()) {
+		if s.segmentReady(index) {
 			return true
 		}
-		if !fileReady(path) && s.isDead() {
+		if s.isDead() {
 			return false
 		}
 		select {

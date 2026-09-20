@@ -216,10 +216,11 @@ func LookupTokenUser(db *store.DB, value string) (*store.User, error) {
 	}
 	digest := store.TokenDigest(value)
 	var u store.User
-	err := db.QueryRow(`SELECT u.id, u.name, u.password_hash, u.is_admin, u.created_at, u.updated_at
+	var lastSeen sql.NullInt64
+	err := db.QueryRow(`SELECT u.id, u.name, u.password_hash, u.is_admin, u.created_at, u.updated_at, t.last_seen_at
 		FROM tokens t JOIN users u ON u.id = t.user_id
 		WHERE t.value = ? AND t.revoked_at IS NULL`, digest).
-		Scan(&u.ID, &u.Name, &u.PasswordHash, &u.IsAdmin, &u.CreatedAt, &u.UpdatedAt)
+		Scan(&u.ID, &u.Name, &u.PasswordHash, &u.IsAdmin, &u.CreatedAt, &u.UpdatedAt, &lastSeen)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, store.ErrNotFound
@@ -227,10 +228,13 @@ func LookupTokenUser(db *store.DB, value string) (*store.User, error) {
 		return nil, err
 	}
 	now := time.Now().UnixMilli()
-	if _, err := db.Exec(`UPDATE tokens SET last_seen_at = ?
-		WHERE value = ? AND revoked_at IS NULL AND (last_seen_at IS NULL OR last_seen_at < ?)`,
-		now, digest, now-60_000); err != nil {
-		slog.Warn("libteca: token activity update failed", "err", err)
+	if !lastSeen.Valid || lastSeen.Int64 < now-60_000 {
+		if _, err := db.Exec(`UPDATE tokens SET last_seen_at = ?
+			WHERE value = ? AND revoked_at IS NULL
+			AND (last_seen_at IS NULL OR last_seen_at < ?)`,
+			now, digest, now-60_000); err != nil {
+			slog.Warn("libteca: token activity update failed", "err", err)
+		}
 	}
 	return &u, nil
 }

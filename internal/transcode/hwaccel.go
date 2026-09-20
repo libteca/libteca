@@ -155,7 +155,7 @@ func buildArgs(accel string, inArgs []string, dir string, startSecs float64, bit
 		"-hls_time", "4",
 		"-hls_init_time", "2",
 		"-hls_list_size", "0",
-		"-hls_flags", "independent_segments",
+		"-hls_flags", "independent_segments+temp_file",
 		"-hls_segment_filename", filepath.Join(dir, "seg%05d.ts"),
 		filepath.Join(dir, "index.m3u8"),
 	)

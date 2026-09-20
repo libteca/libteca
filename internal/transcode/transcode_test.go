@@ -45,6 +45,7 @@ func TestPrebufferSatisfiedImmediately(t *testing.T) {
 	s := &Session{ID: "x", Dir: t.TempDir()}
 	writeFile(t, filepath.Join(s.Dir, "seg00000.ts"), "x")
 	writeFile(t, filepath.Join(s.Dir, "seg00001.ts"), "x")
+	writeFile(t, s.Playlist(), "#EXTM3U\n#EXTINF:4.0,\nseg00000.ts\n#EXTINF:4.0,\nseg00001.ts\n")
 	done := make(chan int, 1)
 	go func() { done <- s.Prebuffer(context.Background(), 2, 5*time.Second) }()
 	select {
@@ -60,8 +61,19 @@ func TestPrebufferSatisfiedImmediately(t *testing.T) {
 func TestPrebufferTimeoutReturnsPartial(t *testing.T) {
 	s := &Session{ID: "x", Dir: t.TempDir()}
 	writeFile(t, filepath.Join(s.Dir, "seg00000.ts"), "x")
+	writeFile(t, s.Playlist(), "#EXTM3U\n#EXTINF:4.0,\nseg00000.ts\n")
 	if n := s.Prebuffer(context.Background(), 2, 400*time.Millisecond); n != 1 {
 		t.Fatalf("want 1 ready segment on timeout, got %d", n)
+	}
+}
+
+func TestPrebufferUnlistedSegmentsDoNotCount(t *testing.T) {
+	s := &Session{ID: "x", Dir: t.TempDir()}
+	writeFile(t, filepath.Join(s.Dir, "seg00000.ts"), "x")
+	writeFile(t, filepath.Join(s.Dir, "seg00001.ts"), "x")
+	writeFile(t, s.Playlist(), "#EXTM3U\n#EXTINF:4.0,\nseg00000.ts\n")
+	if n := s.Prebuffer(context.Background(), 2, 300*time.Millisecond); n != 1 {
+		t.Fatalf("want only the playlist-listed segment, got %d", n)
 	}
 }
 
@@ -108,11 +120,24 @@ func TestWaitForSegmentDeadFallback(t *testing.T) {
 	writeFile(t, filepath.Join(s.Dir, "seg00000.ts"), "x")
 	s.done = make(chan struct{})
 	close(s.done)
-	if !s.WaitForSegment(context.Background(), 0, 2*time.Second) {
-		t.Fatal("unlisted non-empty segment should be servable once ffmpeg exited")
+	if s.WaitForSegment(context.Background(), 0, 200*time.Millisecond) {
+		t.Fatal("an unlisted segment from a dead encoder must never be servable")
 	}
 	if s.WaitForSegment(context.Background(), 5, 200*time.Millisecond) {
 		t.Fatal("missing segment must stay not-ready")
+	}
+}
+
+func TestWaitForSegmentPlaylistURIExact(t *testing.T) {
+	s := &Session{ID: "x", Dir: t.TempDir()}
+	writeFile(t, filepath.Join(s.Dir, "seg00001.ts"), "x")
+	writeFile(t, s.Playlist(), "#EXTM3U\n#EXTINF:4.0,\nseg000011.ts\n")
+	if s.playlistLists("seg00001.ts") {
+		t.Fatal("playlist matching must compare URI lines, not substrings")
+	}
+	writeFile(t, s.Playlist(), "#EXTM3U\n#EXTINF:4.0,\nseg00001.ts\n")
+	if !s.playlistLists("seg00001.ts") {
+		t.Fatal("exact URI line must match")
 	}
 }
 
@@ -380,4 +405,77 @@ func TestPrebufferIntegrationFFmpeg(t *testing.T) {
 	if !live {
 		t.Fatal("session should survive prebuffer")
 	}
+}
+
+type hungProcess struct{}
+
+func (hungProcess) start() error { return nil }
+func (hungProcess) wait() error  { select {} }
+func (hungProcess) kill()        {}
+
+func TestCloseStalledCleanupDoesNotBlockManager(t *testing.T) {
+	m := New(t.TempDir())
+	stubFDArgs(m)
+	open := tempOpener(t)
+	m.probeRun = func([]string) (string, error) { return "", errStartFail }
+	spawnHung := true
+	m.spawn = func([]string, []*os.File) process {
+		if spawnHung {
+			return hungProcess{}
+		}
+		return newSleepProcess()
+	}
+	if _, err := m.Get("hung", 1, "src", 0, open); err != nil {
+		t.Fatal(err)
+	}
+	spawnHung = false
+	if _, err := m.Get("live", 2, "src", 0, open); err != nil {
+		t.Fatal(err)
+	}
+	closed := make(chan struct{})
+	go func() { m.Close("hung"); close(closed) }()
+	time.Sleep(200 * time.Millisecond)
+	select {
+	case <-closed:
+		t.Fatal("close returned while the process was still hung")
+	default:
+	}
+	start := time.Now()
+	m.TouchSession("live")
+	if _, ok := m.Existing("live", 2); !ok {
+		t.Fatal("live session lookup failed during stalled cleanup")
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Fatalf("unrelated session operations blocked for %v by a stalled cleanup", elapsed)
+	}
+	<-closed
+	m.mu.Lock()
+	_, hungLive := m.sessions["hung"]
+	m.mu.Unlock()
+	if !hungLive {
+		t.Fatal("a session whose kill timed out must keep its reservation for the reaper")
+	}
+	if _, err := m.Get("hung", 1, "src", 0, open); err != ErrCapacity {
+		t.Fatalf("Get on a closing session = %v, want ErrCapacity (no id reuse before cleanup completes)", err)
+	}
+	m.CloseAll()
+}
+
+func TestCapacityCountsClosingSessions(t *testing.T) {
+	m := New(t.TempDir())
+	stubFDArgs(m)
+	open := tempOpener(t)
+	m.probeRun = func([]string) (string, error) { return "", errStartFail }
+	m.spawn = func([]string, []*os.File) process { return hungProcess{} }
+	for i := 0; i < MaxSessions; i++ {
+		if _, err := m.Get(fmt.Sprintf("s%d", i), int64(i+1), "src", 0, open); err != nil {
+			t.Fatalf("Get(s%d): %v", i, err)
+		}
+	}
+	go m.Close("s0")
+	time.Sleep(200 * time.Millisecond)
+	if _, err := m.Get("extra", 99, "src", 0, open); err != ErrCapacity {
+		t.Fatalf("Get at capacity with a closing session = %v, want ErrCapacity", err)
+	}
+	m.CloseAll()
 }
