@@ -519,3 +519,172 @@ npm run test (vitest) + npm run build clean (2026-09-18).
 Verification: go vet ./... clean; go test ./... -count=1 -timeout 600s
 green; go test -race on transcode/podcast/scan/core/watch/auth green; web
 npx tsc --noEmit + npm run test (vitest) + npm run build clean (2026-09-17).
+
+## ChatGPT audit pass 9 (2026-09-19, AUDIT-CHATGPT-9.md) - 34 of 37 fixed, 3 deferred
+
+Fixed (verified against source first; `audit 9-NN` commits):
+
+1. F01 HIGH cross-account persisted progress - FIXED (web): queue storage
+   scoped to the /me user id (never the token, never unscoped); identity
+   cleared on sign-out/rotation; sends pause when identity changes;
+   legacy unscoped entries retired, not imported.
+2. F02 HIGH persisted patch loses its base - FIXED (web): the durable
+   record is {baseRevision, patch} and the queue owns the base per
+   (user, edition); replays carry their ORIGINAL base and the base moves
+   only on ack/409. Receipt-table idempotency intentionally omitted:
+   uncertain retries already re-present the same base, so the server's
+   conditional write turns any replay into 409 + idempotent max-merge
+   (bounded double-apply of explicit finished intent is the documented
+   merge policy, DECISIONS 42).
+3. F03 MEDIUM conflict winner forgotten - FIXED (web): remote high-water
+   mark (seeded from loaded progress, fed by every 409) folds into every
+   automatic save until the reader genuinely passes it.
+4. F04 MEDIUM locator-only conflicts - FIXED (web): an unordered
+   locator-only patch never defeats a positioned server state; only
+   explicit finished intent survives; EPUB saves locator+percent together
+   once the location index exists.
+5. F05 HIGH ABA across delete/recreate - FIXED (store, migration 0015):
+   progress rows tombstone (deleted flag + revision bump) instead of being
+   removed; conditional creation (base 0) is INSERT ... DO NOTHING (never
+   applies onto any existing row) and positive bases are pure conditional
+   UPDATEs (never insert onto an absent row - base 99 on absence used to
+   insert at revision 1); every writer clears the tombstone; lists skip
+   tombstones; the single-row reader still exposes the tombstone revision
+   so a fresh client restarts from a real base.
+6. F06 MEDIUM unconditional beacons - FIXED (web): pagehide/visibility
+   beacons carry patch + base revision (conditional); a rejected beacon is
+   not a loss - the patch stays durably stored and replays on next open.
+   Supersedes the "unconditional beacons by design" half of DECISIONS 42
+   (recorded there; the last-writer-wins semantics for ABSENT revision on
+   the compatibility faces are unchanged).
+7. F07 MEDIUM queue teardown/edition-shared revision state - FIXED (web):
+   the base revision lives inside the per-(user,edition) queue instance,
+   the queue stops on unmount, and requests carry a deadline so a late
+   response cannot wedge or cross-contaminate a replacement edition.
+8. F08 MEDIUM two tabs erase each other's pending work - FIXED (web):
+   per-instance storage records; a mount absorbs foreign pending records
+   (max-merge, oldest base) and acknowledgements remove only the
+   instance's own record.
+9. F09 MEDIUM malformed/permanent failures retried forever - FIXED (web):
+   strict per-record validation with quarantine of malformed entries;
+   shouldRetry policy - 400/401/403/404/410 drop their patch (terminal)
+   instead of blocking every later save; observer exceptions cannot break
+   queue housekeeping.
+10. F10 MEDIUM stalled request wedges the queue - FIXED (web): progress
+    requests run under a 15s deadline (headers + body) honoring the
+    reader teardown signal.
+11. F11 MEDIUM PDF bypasses the saver - FIXED (web): page/completion
+    changes route through useProgressSaver (persistence, retries,
+    revisions, unload handling); page input clamps to the known count.
+12. F12 MEDIUM explicit zero/empty cannot clear - FIXED (core):
+    duration:0 and device:"" apply as presence-decoded values.
+13. F13 MEDIUM SetReadingProgress not full-state - FIXED (store):
+    Position/Duration/Device/Finished mask.
+14. F14 MEDIUM core position policy gap - FIXED (core): positions run
+    through store.ValidPosition against the EDITION's duration (the
+    client-supplied duration is no longer the bound); pages bounded to
+    2^53-1. Aligns core with the ABS/Jellyfin faces (pass-7 F41).
+15. F15 MEDIUM DB failures as 404/fabricated 409 - FIXED (core/hls):
+    work/setProgress/getProgress/scanJob/playback/thumbs lookups answer
+    404 only for ErrNotFound and 500/503 otherwise; a failed post-CAS
+    reread is 503 instead of a synthetic revision-zero 409 baseline.
+16. F16 LOW revision zero in list readers - FIXED (store): GetProgress,
+    UserProgressList, ReadingListByUser select revision (and skip
+    tombstones).
+17. F17 MEDIUM browser archive budgets - FIXED (web): CBZ/EPUB downloads
+    bounded (512 MiB declared and streamed), 10k entry cap, per-page
+    extraction byte cap, CBZ abort controller.
+18. F18 LOW failed CBZ page stuck loading - FIXED (web): failed pages
+    render a retryable error; retry clears only the failed slot.
+19. F19 MEDIUM EPUB location cache keyed by edition id - FIXED (web):
+    cache key is the content SHA-256 + chunk size; skipped entirely when
+    Web Crypto is unavailable; legacy id-keyed cache retired.
+20. F20 MEDIUM SSE send-on-closed/lost terminal - FIXED (core): metaRun
+    subscribe registers AND sends under the closure lock, publish refuses
+    after close, finish never drops the terminal event (drops an obsolete
+    running one instead).
+21. F21 MEDIUM optional metadata failures silent - FIXED (core):
+    chapters/genres/episodes failures surface as summary warnings;
+    applyChapters/distributeChapters propagate errors; rows.Err checked
+    before writes.
+22. F22 MEDIUM chapter check-then-write race - FIXED (store/core):
+    ReplaceChaptersIfUnchanged compares-and-swaps (null-safe chapters IS
+    ?); a concurrent authoritative write is preserved, not clobbered.
+23. F23 MEDIUM chapters lose file-spanning continuation - FIXED (core):
+    distributeChapterMath intersects every chapter interval with every
+    file interval (identity + title preserved across the continuation);
+    unknown durations and invalid intervals are errors, not guesses.
+24. F24 MEDIUM covers stored as mislabeled/possibly-truncated bytes -
+    FIXED (core): full decode + white-matte JPEG normalization at the
+    .jpg path (DecodeConfig alone accepted header-valid truncations);
+    existing cache entries are not rewritten (see residual note).
+25. F25 MEDIUM snapshot/cover-writer consistency - FIXED (store/scan/
+    podcast/core, new internal/assets): Snapshot holds the exclusive
+    cross-process covers lock across VACUUM INTO + copy + publication;
+    every cover mutation (scan book/game/video/NFO + ffmpeg extraction,
+    provider publication, podcast fetch/delete) holds it shared over the
+    file+DB-reference pair; lock order .backup.lock -> .covers.lock
+    everywhere, writers never take .backup.lock.
+26. F26 MEDIUM missing cover root backs up as success - FIXED (store):
+    requireCoverRoot fail-closed at snapshot AND copy; only an initialized
+    empty directory is a valid zero-asset source (tests updated).
+27. F27 LOW copyTree TOCTOU open race - FIXED (store): os.Root-pinned
+    nonblocking opens with stat-after-open regular-file checks; swapped
+    symlinks/FIFOs are rejected or contained.
+28. F28 LOW abandoned stages + unsynced retention - FIXED (store):
+    crashed .libteca-stage-* dirs removed under the backup lock before a
+    new stage; retention directory-syncs after deletions.
+29. F30 LOW last-seen UPDATE on every request - FIXED (auth): the SELECT
+    carries last_seen_at and the UPDATE is submitted only when stale
+    (SQL-side condition retained for concurrent requests).
+30. F31 MEDIUM dead encoder serves incomplete segment - FIXED
+    (transcode): independent_segments+temp_file so final names only
+    appear complete; readiness = published at final name AND listed by
+    the playlist (exact URI-line compare); isDead() no longer makes
+    unlisted bytes servable.
+31. F32 MEDIUM cleanup holds the manager lock - FIXED (transcode):
+    closing reservation under the lock, kill+RemoveAll outside it via a
+    shared finalize; timed-out kills keep their reservation for the
+    reaper; closing sessions count against capacity and refuse id reuse;
+    session spawn/open/mkdir happen outside the manager lock with a
+    reserved placeholder; MkdirAll errors checked.
+32. F35 LOW VP8 excluded from its own WebM branch - FIXED (hls):
+    browserPlayable admits VP8 inside WebM (container-restricted) with
+    accepted audio.
+33. F36 LOW CI supply-chain - FIXED: actions pinned to review-resolved
+    commit SHAs (annotated), dependabot for actions/go/npm, gofmt gate
+    (already caught drift in this pass), npm audit --omit=dev at high.
+34. F37 LOW cover publication not crash-durable - FIXED (core):
+    publishJPEG fsyncs the file, renames, and fsyncs the directory before
+    the caller commits the DB reference.
+
+Deferred (standing families, confirmed against current source):
+
+- **F29 MEDIUM media URLs expose the general bearer credential:** same
+  credential-lifecycle family as pass-6 F04/F09 and pass-7 F02/F14 -
+  query-token authentication is what media elements/EventSource can send,
+  and scoped short-lived media tickets bound to a live parent token are a
+  protocol migration needing its own compatibility decision. The standing
+  deferral covers it.
+- **F33 MEDIUM transcode disk budgets:** joins pass-7 H05 (disk/memory
+  budgets) as an open hardening item. A wrong byte cap breaks legitimate
+  long-title playback (segments are deliberately retained for seeking -
+  deleting advertised segments changes the player contract), so the
+  per-session/aggregate budget needs real playback measurements, not a
+  guess. Session count + idle TTL + startup wipe bound steady state.
+- **F34 MEDIUM edition-level playback limited to the first file:** the
+  multipart timeline family already deferred with pass-8 F10/F12/F17
+  (single-file HLS is correct; the first-party player has no per-file
+  picker to fall back onto). A selected-file + edition-offset ticket is
+  the same architectural work.
+
+Also noted: existing cover cache entries written before the F24
+normalization keep their original bytes (a re-download short-circuits on
+the existing file); they age out as works are re-identified. Token
+expiry policy (pass-6 F09 remainder) and the subsonic plaintext secret
+(F04 family) remain product decisions, unchanged.
+
+Verification: go vet ./... clean; gofmt -l cmd internal clean; go test
+./... -count=1 -timeout 600s green (22 pkgs); go test -race on
+store/core/scan/podcast/transcode/auth green; web npm run test (vitest,
+22 tests) + npx tsc --noEmit + npm run build clean (2026-09-19).

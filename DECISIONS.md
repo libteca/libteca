@@ -544,3 +544,40 @@ backup = `libteca backup` (15g); neutron-go published (17).
     persistence restores reload-loss of queued patches; (c) per-device
     instead of per-row revisions would multiply server state without
     changing what the client can merge.
+43. **Progress tombstones + account-scoped stored bases (2026-09-19,
+    audit pass 9 F01/F02/F05/F06).** Migration 0015 makes DeleteProgress a
+    logical reset (deleted flag + revision bump) so a base captured before
+    a delete can never match a recreated row; conditional creation (base 0)
+    is INSERT ... DO NOTHING and positive bases are pure conditional
+    UPDATEs, so an absent row never accepts a positive base (it used to
+    insert at revision 1) and an existing row - live or tombstoned - never
+    accepts base 0. The web queue's durable record is scoped to the /me
+    user id and stores {baseRevision, patch}: a reloaded offline patch
+    replays against its ORIGINAL base (relabling it with a fresh GET
+    revision let the server accept stale content without the conflict the
+    merge depends on), each tab owns its own storage record (mount absorbs
+    foreign pending records, acks remove only your own), and every
+    automatic save folds through a remote high-water mark so a discarded
+    conflict cannot be overwritten by the next save. Unload beacons now
+    carry the base revision too - rejected beacons fall back to the
+    persisted replay, which is strictly safer than the old unconditional
+    write (this supersedes the "beacons stay unconditional" half of
+    decision 42; last-writer-wins for ABSENT revision on the compatibility
+    faces is unchanged). An operation-receipt table was considered and
+    rejected: an uncertain retry re-presents the same base, so the
+    conditional write already converts replays into 409 + idempotent
+    max-merge, and the only surviving ambiguity (explicit finished intent
+    re-asserting after another device's reopen) is exactly what the
+    documented merge policy chooses to keep.
+44. **Covers lock: one snapshot boundary across database and bytes
+    (2026-09-19, audit pass 9 F25).** store.Snapshot takes an exclusive
+    cross-process flock on <dataDir>/.covers.lock across VACUUM INTO +
+    cover copy + publication, and every cover mutation (scanner writes and
+    ffmpeg extraction, provider downloads, podcast fetch and deletes)
+    takes it shared over the file+DB-reference pair. The lock order is
+    always .backup.lock -> .covers.lock; cover writers never take
+    .backup.lock, so there is no cycle. Rejected alternatives: freezing
+    the database (single-node server, progress writes may continue) and
+    content-addressed assets with snapshot pinning (the right long-term
+    shape, but a layout migration of every existing install for a window
+    measured in seconds).
