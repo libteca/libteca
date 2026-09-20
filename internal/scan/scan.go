@@ -12,10 +12,10 @@ import (
 
 	"github.com/cespare/xxhash/v2"
 
+	"github.com/libteca/libteca/internal/assets"
 	"github.com/libteca/libteca/internal/audio"
 	"github.com/libteca/libteca/internal/mediafs"
 	"github.com/libteca/libteca/internal/natural"
-	"github.com/libteca/libteca/internal/assets"
 	"github.com/libteca/libteca/internal/store"
 )
 

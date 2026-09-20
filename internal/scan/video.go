@@ -12,9 +12,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/libteca/libteca/internal/assets"
 	"github.com/libteca/libteca/internal/audio"
 	"github.com/libteca/libteca/internal/mediafs"
-	"github.com/libteca/libteca/internal/assets"
 	"github.com/libteca/libteca/internal/store"
 )
 
