@@ -53,7 +53,10 @@ func (a *API) SetTrickplayGenerator(g *trickplay.Generator) {
 
 func (a *API) editionThumbSource(id int64) (*store.EditionView, error) {
 	ed, err := a.DB.EditionByID(id)
-	if err != nil || len(ed.Files) == 0 {
+	if err != nil {
+		return nil, err
+	}
+	if len(ed.Files) == 0 {
 		return nil, store.ErrNotFound
 	}
 	if ed.Files[0].VideoCodec == nil || *ed.Files[0].VideoCodec == "" {
@@ -62,10 +65,18 @@ func (a *API) editionThumbSource(id int64) (*store.EditionView, error) {
 	return ed, nil
 }
 
+func writeEditionLookupError(w http.ResponseWriter, err error) {
+	if errors.Is(err, store.ErrNotFound) {
+		writeJSON(w, 404, map[string]string{"error": "not found"})
+		return
+	}
+	writeJSON(w, 500, map[string]string{"error": "internal error"})
+}
+
 func (a *API) editionThumbs(w http.ResponseWriter, r *http.Request) {
 	ed, err := a.editionThumbSource(auth.Atoi64(r.PathValue("id")))
 	if err != nil {
-		writeJSON(w, 404, map[string]string{"error": "not found"})
+		writeEditionLookupError(w, err)
 		return
 	}
 	itemID := "e" + strconv.FormatInt(ed.ID, 10)
@@ -90,7 +101,7 @@ func (a *API) editionThumbs(w http.ResponseWriter, r *http.Request) {
 func (a *API) editionThumbTile(w http.ResponseWriter, r *http.Request) {
 	ed, err := a.editionThumbSource(auth.Atoi64(r.PathValue("id")))
 	if err != nil {
-		writeJSON(w, 404, map[string]string{"error": "not found"})
+		writeEditionLookupError(w, err)
 		return
 	}
 	index, ok := trickplay.ParseTileName(r.PathValue("file"))
@@ -213,6 +224,9 @@ func browserPlayable(ed *store.EditionView) bool {
 	if vcodec == "" {
 		return acodec != "" && audioOK
 	}
+	if vcodec == "vp8" {
+		return strings.Contains(container, "webm") && audioOK
+	}
 	return (vcodec == "h264" || vcodec == "vp9" || vcodec == "av1") && audioOK && containerOK
 }
 
@@ -229,7 +243,11 @@ func streamable(ed *store.EditionView) bool {
 func (a *API) editionPlayback(w http.ResponseWriter, r *http.Request) {
 	id := auth.Atoi64(r.PathValue("id"))
 	ed, err := a.DB.EditionByID(id)
-	if err != nil || len(ed.Files) == 0 {
+	if err != nil {
+		writeEditionLookupError(w, err)
+		return
+	}
+	if len(ed.Files) == 0 {
 		writeJSON(w, 404, map[string]string{"error": "not found"})
 		return
 	}
@@ -314,7 +332,11 @@ func (a *API) hlsFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ed, err := a.DB.EditionByID(eid)
-	if err != nil || len(ed.Files) == 0 || !streamable(ed) {
+	if err != nil {
+		writeEditionLookupError(w, err)
+		return
+	}
+	if len(ed.Files) == 0 || !streamable(ed) {
 		writeJSON(w, 404, map[string]string{"error": "edition not found"})
 		return
 	}

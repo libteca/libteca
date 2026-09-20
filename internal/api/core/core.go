@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -626,7 +627,11 @@ func (a *API) scanJob(w http.ResponseWriter, r *http.Request) {
 	id := auth.Atoi64(r.PathValue("id"))
 	j, err := a.DB.GetScanJob(id)
 	if err != nil {
-		writeJSON(w, 404, map[string]string{"error": "job not found"})
+		if errors.Is(err, store.ErrNotFound) {
+			writeJSON(w, 404, map[string]string{"error": "job not found"})
+		} else {
+			writeJSON(w, 500, map[string]string{"error": "internal error"})
+		}
 		return
 	}
 	writeJSON(w, 200, jobJSON(j, a.isAdminRequest(r)))
@@ -865,7 +870,11 @@ func (a *API) work(w http.ResponseWriter, r *http.Request) {
 	id := auth.Atoi64(r.PathValue("id"))
 	full, err := a.DB.WorkViewByID(id)
 	if err != nil {
-		writeJSON(w, 404, map[string]string{"error": "not found"})
+		if errors.Is(err, store.ErrNotFound) {
+			writeJSON(w, 404, map[string]string{"error": "not found"})
+		} else {
+			writeJSON(w, 500, map[string]string{"error": "internal error"})
+		}
 		return
 	}
 	lib, err := a.DB.Library(full.LibraryID)
@@ -972,7 +981,11 @@ func (a *API) getProgress(w http.ResponseWriter, r *http.Request) {
 	eid := auth.Atoi64(r.PathValue("editionId"))
 	var exists int
 	if err := a.DB.QueryRow(`SELECT 1 FROM editions WHERE id = ?`, eid).Scan(&exists); err != nil {
-		writeJSON(w, 404, map[string]string{"error": "edition not found"})
+		if errors.Is(err, sql.ErrNoRows) {
+			writeJSON(w, 404, map[string]string{"error": "edition not found"})
+		} else {
+			writeJSON(w, 500, map[string]string{"error": "internal error"})
+		}
 		return
 	}
 	p, err := a.DB.GetReadingProgress(auth.UserID(r), eid)
@@ -982,19 +995,23 @@ func (a *API) getProgress(w http.ResponseWriter, r *http.Request) {
 	}
 	m := map[string]any{"editionId": eid, "position": 0, "isFinished": false, "revision": 0}
 	if err == nil {
-		m = map[string]any{
-			"editionId": p.EditionID, "fileId": p.FileID, "offset": p.FileOffsetSecs,
-			"position": p.EditionPositionSecs, "duration": p.DurationSecs, "isFinished": p.IsFinished,
-			"updatedAt": p.UpdatedAt, "revision": p.Revision,
-		}
-		if p.Page != nil {
-			m["page"] = *p.Page
-		}
-		if p.Percent != nil {
-			m["percent"] = *p.Percent
-		}
-		if p.Locator != nil {
-			m["locator"] = *p.Locator
+		if p.Deleted {
+			m["revision"] = p.Revision
+		} else {
+			m = map[string]any{
+				"editionId": p.EditionID, "fileId": p.FileID, "offset": p.FileOffsetSecs,
+				"position": p.EditionPositionSecs, "duration": p.DurationSecs, "isFinished": p.IsFinished,
+				"updatedAt": p.UpdatedAt, "revision": p.Revision,
+			}
+			if p.Page != nil {
+				m["page"] = *p.Page
+			}
+			if p.Percent != nil {
+				m["percent"] = *p.Percent
+			}
+			if p.Locator != nil {
+				m["locator"] = *p.Locator
+			}
 		}
 	}
 	var pc *int64
@@ -1008,7 +1025,11 @@ func (a *API) setProgress(w http.ResponseWriter, r *http.Request) {
 	eid := auth.Atoi64(r.PathValue("editionId"))
 	ed, err := a.DB.EditionByID(eid)
 	if err != nil {
-		writeJSON(w, 404, map[string]string{"error": "edition not found"})
+		if errors.Is(err, store.ErrNotFound) {
+			writeJSON(w, 404, map[string]string{"error": "edition not found"})
+		} else {
+			writeJSON(w, 500, map[string]string{"error": "internal error"})
+		}
 		return
 	}
 	var body struct {
@@ -1040,8 +1061,14 @@ func (a *API) setProgress(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "invalid position or duration"})
 		return
 	}
-	if body.Page != nil && *body.Page < 0 {
-		writeJSON(w, 400, map[string]string{"error": "page must be nonnegative"})
+	if body.Position != nil {
+		if err := store.ValidPosition(*body.Position, ed.TotalDuration()); err != nil {
+			writeJSON(w, 400, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+	if body.Page != nil && (*body.Page < 0 || *body.Page > 1<<53-1) {
+		writeJSON(w, 400, map[string]string{"error": "page out of supported range"})
 		return
 	}
 	if (body.Device != nil && len(*body.Device) > 256) || (body.Locator != nil && len(*body.Locator) > 8192) {
@@ -1064,14 +1091,14 @@ func (a *API) setProgress(w http.ResponseWriter, r *http.Request) {
 		p.EditionPositionSecs = *body.Position
 		fields.Position = true
 	}
-	if body.Duration != nil && *body.Duration > 0 {
+	if body.Duration != nil {
 		p.DurationSecs = body.Duration
 		fields.Duration = true
 	}
 	if body.Finished != nil {
 		p.IsFinished = *body.Finished
 	}
-	if body.Device != nil && *body.Device != "" {
+	if body.Device != nil {
 		p.Device = body.Device
 		fields.Device = true
 	}
@@ -1083,6 +1110,10 @@ func (a *API) setProgress(w http.ResponseWriter, r *http.Request) {
 		}
 		if !applied {
 			cur, err := a.DB.GetReadingProgress(auth.UserID(r), eid)
+			if err != nil && !errors.Is(err, store.ErrNotFound) {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "progress temporarily unavailable"})
+				return
+			}
 			if err != nil {
 				cur = &store.ReadingProgress{Progress: store.Progress{UserID: auth.UserID(r), EditionID: eid}}
 			}

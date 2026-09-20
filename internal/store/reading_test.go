@@ -226,13 +226,116 @@ func TestDeleteProgressResetsRevisionLineage(t *testing.T) {
 	}, store.ProgressFields{Position: false}, 0); err != nil {
 		t.Fatal(err)
 	}
+	_, applied, err := db.SetReadingProgressRevision(&store.ReadingProgress{
+		Progress: store.Progress{UserID: 1, EditionID: eid}, Page: &page,
+	}, store.ProgressFields{Position: false}, 99)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if applied {
+		t.Fatal("absent-row conditional write with a positive base must not apply")
+	}
+	next := int64(11)
+	if _, _, err := db.SetReadingProgressRevision(&store.ReadingProgress{
+		Progress: store.Progress{UserID: 1, EditionID: eid}, Page: &next,
+	}, store.ProgressFields{Position: false}, 1); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.DeleteProgress(1, eid); err != nil {
 		t.Fatal(err)
 	}
+	p, err := db.GetReadingProgress(1, eid)
+	if err != nil || !p.Deleted || p.Revision != 3 || p.Page != nil || p.Percent != nil || p.Locator != nil || p.IsFinished {
+		t.Fatalf("tombstone = %+v err %v, want deleted revision 3 with cleared fields", p, err)
+	}
+	if _, applied, err := db.SetReadingProgressRevision(&store.ReadingProgress{
+		Progress: store.Progress{UserID: 1, EditionID: eid}, Page: &page,
+	}, store.ProgressFields{Position: false}, 1); err != nil || applied {
+		t.Fatalf("stale pre-delete base accepted: applied %v err %v", applied, err)
+	}
+	if _, applied, err := db.SetReadingProgressRevision(&store.ReadingProgress{
+		Progress: store.Progress{UserID: 1, EditionID: eid}, Page: &page,
+	}, store.ProgressFields{Position: false}, 0); err != nil || applied {
+		t.Fatalf("base-0 insert onto a tombstone must conflict: applied %v err %v", applied, err)
+	}
+	if _, err := db.GetProgress(1, eid); err != store.ErrNotFound {
+		t.Fatalf("compatibility reader must skip the tombstone: %v", err)
+	}
 	rev, applied, err := db.SetReadingProgressRevision(&store.ReadingProgress{
 		Progress: store.Progress{UserID: 1, EditionID: eid}, Page: &page,
-	}, store.ProgressFields{Position: false}, 5)
-	if err != nil || !applied || rev != 1 {
-		t.Fatalf("post-delete write = rev %d applied %v err %v, want fresh lineage at 1", rev, applied, err)
+	}, store.ProgressFields{Position: false}, 3)
+	if err != nil || !applied || rev != 4 {
+		t.Fatalf("conditional restart on the tombstone revision = rev %d applied %v err %v, want rev 4", rev, applied, err)
+	}
+	p, err = db.GetReadingProgress(1, eid)
+	if err != nil || p.Deleted || p.Revision != 4 || p.Page == nil || *p.Page != 10 {
+		t.Fatalf("restarted progress = %+v err %v", p, err)
+	}
+}
+
+func TestSetReadingProgressAppliesFullState(t *testing.T) {
+	db := openTestDB(t)
+	user := addUser(t, db)
+	eid := revisionTestEdition(t, db)
+	dur := 100.0
+	dev := "tab-a"
+	if err := db.SetReadingProgress(&store.ReadingProgress{
+		Progress: store.Progress{UserID: user, EditionID: eid, FileOffsetSecs: 5, EditionPositionSecs: 5, DurationSecs: &dur, Device: &dev, IsFinished: false},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	dev2 := "tab-b"
+	if err := db.SetReadingProgress(&store.ReadingProgress{
+		Progress: store.Progress{UserID: user, EditionID: eid, FileOffsetSecs: 42, EditionPositionSecs: 42, DurationSecs: &dur, Device: &dev2, IsFinished: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p, err := db.GetReadingProgress(user, eid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.FileOffsetSecs != 42 || p.EditionPositionSecs != 42 ||
+		p.Device == nil || *p.Device != "tab-b" || !p.IsFinished {
+		t.Fatalf("full-state update did not apply: %+v", p)
+	}
+}
+
+func TestProgressReadersReportRevision(t *testing.T) {
+	db := openTestDB(t)
+	if _, err := db.Exec(`INSERT INTO users (id, name, password_hash, is_admin, created_at, updated_at) VALUES (1,'u','x',0,0,0)`); err != nil {
+		t.Fatal(err)
+	}
+	eid := revisionTestEdition(t, db)
+	page := int64(3)
+	for i := 0; i < 3; i++ {
+		if _, _, err := db.SetReadingProgressRevision(&store.ReadingProgress{
+			Progress: store.Progress{UserID: 1, EditionID: eid}, Page: &page,
+		}, store.ProgressFields{}, int64(i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	single, err := db.GetProgress(1, eid)
+	if err != nil || single.Revision != 3 {
+		t.Fatalf("GetProgress revision = %d err %v, want 3", single.Revision, err)
+	}
+	list, err := db.UserProgressList(1)
+	if err != nil || len(list) != 1 || list[0].Revision != 3 {
+		t.Fatalf("UserProgressList revision = %+v err %v", list, err)
+	}
+	reading, err := db.ReadingListByUser(1)
+	if err != nil || len(reading) != 1 || reading[eid].Revision != 3 {
+		t.Fatalf("ReadingListByUser revision = %+v err %v", reading, err)
+	}
+	if err := db.DeleteProgress(1, eid); err != nil {
+		t.Fatal(err)
+	}
+	if list, err := db.UserProgressList(1); err != nil || len(list) != 0 {
+		t.Fatalf("tombstone leaked into UserProgressList: %+v err %v", list, err)
+	}
+	if reading, err := db.ReadingListByUser(1); err != nil || len(reading) != 0 {
+		t.Fatalf("tombstone leaked into ReadingListByUser: %+v err %v", reading, err)
+	}
+	if eds, err := db.EditionsInProgress(1); err != nil || len(eds) != 0 {
+		t.Fatalf("tombstone leaked into EditionsInProgress: %v err %v", eds, err)
 	}
 }

@@ -16,8 +16,8 @@ type ReadingProgress struct {
 }
 
 func (d *DB) ReadingListByUser(userID int64) (map[int64]*ReadingProgress, error) {
-	rows, err := d.Query(`SELECT user_id, edition_id, file_id, file_offset_secs, edition_position_secs, duration_secs, is_finished, device, updated_at, page, percent, locator
-		FROM progress WHERE user_id = ?`, userID)
+	rows, err := d.Query(`SELECT user_id, edition_id, file_id, file_offset_secs, edition_position_secs, duration_secs, is_finished, device, updated_at, page, percent, locator, revision
+		FROM progress WHERE user_id = ? AND deleted = 0`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -26,7 +26,7 @@ func (d *DB) ReadingListByUser(userID int64) (map[int64]*ReadingProgress, error)
 	for rows.Next() {
 		var p ReadingProgress
 		var fin int
-		if err := rows.Scan(&p.UserID, &p.EditionID, &p.FileID, &p.FileOffsetSecs, &p.EditionPositionSecs, &p.DurationSecs, &fin, &p.Device, &p.UpdatedAt, &p.Page, &p.Percent, &p.Locator); err != nil {
+		if err := rows.Scan(&p.UserID, &p.EditionID, &p.FileID, &p.FileOffsetSecs, &p.EditionPositionSecs, &p.DurationSecs, &fin, &p.Device, &p.UpdatedAt, &p.Page, &p.Percent, &p.Locator, &p.Revision); err != nil {
 			return nil, err
 		}
 		p.IsFinished = fin != 0
@@ -37,10 +37,10 @@ func (d *DB) ReadingListByUser(userID int64) (map[int64]*ReadingProgress, error)
 
 func (d *DB) GetReadingProgress(userID, editionID int64) (*ReadingProgress, error) {
 	var p ReadingProgress
-	var fin int
-	err := d.QueryRow(`SELECT user_id, edition_id, file_id, file_offset_secs, edition_position_secs, duration_secs, is_finished, device, updated_at, page, percent, locator, revision
+	var fin, deleted int
+	err := d.QueryRow(`SELECT user_id, edition_id, file_id, file_offset_secs, edition_position_secs, duration_secs, is_finished, device, updated_at, page, percent, locator, revision, deleted
 		FROM progress WHERE user_id = ? AND edition_id = ?`, userID, editionID).
-		Scan(&p.UserID, &p.EditionID, &p.FileID, &p.FileOffsetSecs, &p.EditionPositionSecs, &p.DurationSecs, &fin, &p.Device, &p.UpdatedAt, &p.Page, &p.Percent, &p.Locator, &p.Revision)
+		Scan(&p.UserID, &p.EditionID, &p.FileID, &p.FileOffsetSecs, &p.EditionPositionSecs, &p.DurationSecs, &fin, &p.Device, &p.UpdatedAt, &p.Page, &p.Percent, &p.Locator, &p.Revision, &deleted)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
@@ -48,14 +48,20 @@ func (d *DB) GetReadingProgress(userID, editionID int64) (*ReadingProgress, erro
 		return nil, err
 	}
 	p.IsFinished = fin != 0
+	p.Deleted = deleted != 0
 	return &p, nil
 }
 
-// SetReadingProgress is SetProgress plus the reading columns. The reading
-// columns only overwrite when provided, so an audio-style post to the same
-// edition never wipes page state.
+// SetReadingProgress is the full-state writer: every column it carries is
+// applied, unlike SetReadingProgressPatch which preserves omitted audio
+// fields.
 func (d *DB) SetReadingProgress(p *ReadingProgress) error {
-	return d.SetReadingProgressPatch(p, true)
+	return d.SetReadingProgressFields(p, ProgressFields{
+		Position: true,
+		Duration: true,
+		Device:   true,
+		Finished: true,
+	})
 }
 
 func (d *DB) SetReadingProgressPatch(p *ReadingProgress, finishedProvided bool) error {
@@ -83,37 +89,54 @@ func (d *DB) SetReadingProgressFields(p *ReadingProgress, fields ProgressFields)
 			page = coalesce(excluded.page, progress.page),
 			percent = coalesce(excluded.percent, progress.percent),
 			locator = coalesce(excluded.locator, progress.locator),
+			deleted = 0,
 			revision = progress.revision + 1`,
 		p.UserID, p.EditionID, p.FileID, p.FileOffsetSecs, p.EditionPositionSecs, p.DurationSecs, p.IsFinished, p.Device, nowMilli(), p.Page, p.Percent, p.Locator,
 		fields.Position, fields.Position, fields.Position, fields.Duration, fields.Finished, fields.Device)
 	return err
 }
 
-// SetReadingProgressRevision applies p only when the stored row sits at
-// baseRevision. applied is false when another writer advanced the row in the
-// meantime; the caller re-reads and answers the stale base with the current
-// state.
+// SetReadingProgressRevision applies p only when the stored row matches the
+// caller's view of it. baseRevision 0 means "no row exists" and only ever
+// inserts; a positive base is a conditional UPDATE and never resurrects a
+// row (an absent row stays absent), so a deleted-then-recreated lineage can
+// never collide with a base captured before the delete. applied is false
+// when the row moved underneath the caller; the caller re-reads and answers
+// the stale base with the current state.
 func (d *DB) SetReadingProgressRevision(p *ReadingProgress, fields ProgressFields, baseRevision int64) (int64, bool, error) {
 	var revision int64
-	err := d.QueryRow(`INSERT INTO progress (user_id, edition_id, file_id, file_offset_secs, edition_position_secs, duration_secs, is_finished, device, updated_at, page, percent, locator, revision)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1)
-		ON CONFLICT(user_id, edition_id) DO UPDATE SET
-			file_id = CASE WHEN ? THEN excluded.file_id ELSE progress.file_id END,
-			file_offset_secs = CASE WHEN ? THEN excluded.file_offset_secs ELSE progress.file_offset_secs END,
-			edition_position_secs = CASE WHEN ? THEN excluded.edition_position_secs ELSE progress.edition_position_secs END,
-			duration_secs = CASE WHEN ? THEN excluded.duration_secs ELSE progress.duration_secs END,
-			is_finished = CASE WHEN ? THEN excluded.is_finished ELSE progress.is_finished END,
-			device = CASE WHEN ? THEN excluded.device ELSE progress.device END,
-			updated_at = excluded.updated_at,
-			page = coalesce(excluded.page, progress.page),
-			percent = coalesce(excluded.percent, progress.percent),
-			locator = coalesce(excluded.locator, progress.locator),
+	var err error
+	if baseRevision == 0 {
+		err = d.QueryRow(`INSERT INTO progress (user_id, edition_id, file_id, file_offset_secs, edition_position_secs, duration_secs, is_finished, device, updated_at, page, percent, locator, revision)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1)
+			ON CONFLICT(user_id, edition_id) DO NOTHING
+			RETURNING revision`,
+			p.UserID, p.EditionID, p.FileID, p.FileOffsetSecs, p.EditionPositionSecs, p.DurationSecs, p.IsFinished, p.Device, nowMilli(), p.Page, p.Percent, p.Locator).Scan(&revision)
+	} else {
+		err = d.QueryRow(`UPDATE progress SET
+			file_id = CASE WHEN ? THEN ? ELSE progress.file_id END,
+			file_offset_secs = CASE WHEN ? THEN ? ELSE progress.file_offset_secs END,
+			edition_position_secs = CASE WHEN ? THEN ? ELSE progress.edition_position_secs END,
+			duration_secs = CASE WHEN ? THEN ? ELSE progress.duration_secs END,
+			is_finished = CASE WHEN ? THEN ? ELSE progress.is_finished END,
+			device = CASE WHEN ? THEN ? ELSE progress.device END,
+			updated_at = ?,
+			page = coalesce(?, progress.page),
+			percent = coalesce(?, progress.percent),
+			locator = coalesce(?, progress.locator),
+			deleted = 0,
 			revision = progress.revision + 1
-		WHERE progress.revision = ?
+		WHERE user_id = ? AND edition_id = ? AND revision = ?
 		RETURNING revision`,
-		p.UserID, p.EditionID, p.FileID, p.FileOffsetSecs, p.EditionPositionSecs, p.DurationSecs, p.IsFinished, p.Device, nowMilli(), p.Page, p.Percent, p.Locator,
-		fields.Position, fields.Position, fields.Position, fields.Duration, fields.Finished, fields.Device, baseRevision).
-		Scan(&revision)
+			fields.Position, p.FileID,
+			fields.Position, p.FileOffsetSecs,
+			fields.Position, p.EditionPositionSecs,
+			fields.Duration, p.DurationSecs,
+			fields.Finished, p.IsFinished,
+			fields.Device, p.Device,
+			nowMilli(), p.Page, p.Percent, p.Locator,
+			p.UserID, p.EditionID, baseRevision).Scan(&revision)
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, false, nil
 	}

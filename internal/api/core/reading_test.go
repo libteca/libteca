@@ -310,3 +310,104 @@ func TestProgressRevisionProtocol(t *testing.T) {
 		t.Fatalf("rebased post = %d %s", code, body)
 	}
 }
+
+func TestProgressExplicitZeroClearsFields(t *testing.T) {
+	env := newReadingEnv(t)
+	lib, _ := env.db.AddLibrary("Books", "books", t.TempDir())
+	w := seedWork(t, env.db, lib, "W", nil, nil, 1, 1)
+	epub := seedBookEdition(t, env.db, w, "epub", ptr(3))
+	seedFileOnDisk(t, env.db, lib, epub, "b.epub", []byte("PK"))
+
+	if code, body := readingPost(t, env, epub, `{"page":4,"duration":120,"device":"tab"}`); code != 200 {
+		t.Fatalf("seed post = %d %s", code, body)
+	}
+	p, err := env.db.GetReadingProgress(1, epub)
+	if err != nil || p.Device == nil || *p.Device != "tab" || p.DurationSecs == nil || *p.DurationSecs != 120 {
+		t.Fatalf("seeded fields = %+v err %v", p, err)
+	}
+	if code, body := readingPost(t, env, epub, `{"duration":0,"device":""}`); code != 200 {
+		t.Fatalf("explicit-zero post = %d %s", code, body)
+	}
+	p, err = env.db.GetReadingProgress(1, epub)
+	if err != nil || p.Device == nil || *p.Device != "" || p.DurationSecs == nil || *p.DurationSecs != 0 {
+		t.Fatalf("explicit zero did not clear: %+v err %v", p, err)
+	}
+	if p.Page == nil || *p.Page != 4 {
+		t.Fatalf("explicit zero must not touch the page: %+v", p)
+	}
+	_, body := readingReq(t, env, "GET", env.base+fmt.Sprintf("/progress/%d", epub), env.token, "")
+	if !strings.Contains(body, `"page":4`) {
+		t.Fatalf("page must survive: %s", body)
+	}
+	if code, body := readingPost(t, env, epub, `{}`); code != 200 {
+		t.Fatalf("empty post = %d %s", code, body)
+	}
+	p, err = env.db.GetReadingProgress(1, epub)
+	if err != nil || p.DurationSecs == nil || *p.DurationSecs != 0 {
+		t.Fatalf("omitted fields must be preserved: %+v err %v", p, err)
+	}
+}
+
+func TestProgressPositionBounds(t *testing.T) {
+	env := newReadingEnv(t)
+	lib, _ := env.db.AddLibrary("Books", "books", t.TempDir())
+	w := seedWork(t, env.db, lib, "W", nil, nil, 1, 1)
+	epub := seedBookEdition(t, env.db, w, "epub", ptr(3))
+	seedFileOnDisk(t, env.db, lib, epub, "b.epub", []byte("PK"))
+
+	if code, body := readingPost(t, env, epub, `{"position":9007199254740992}`); code != 400 {
+		t.Fatalf("huge finite position = %d %s, want 400", code, body)
+	}
+	if code, body := readingPost(t, env, epub, `{"position":-1}`); code != 400 {
+		t.Fatalf("negative position = %d %s, want 400", code, body)
+	}
+	if code, body := readingPost(t, env, epub, `{"page":9007199254740993}`); code != 400 {
+		t.Fatalf("page beyond browser range = %d %s, want 400", code, body)
+	}
+	if code, body := readingPost(t, env, epub, `{"page":2}`); code != 200 {
+		t.Fatalf("valid page = %d %s", code, body)
+	}
+}
+
+func TestProgressTombstoneConflictAnswersCurrentRevision(t *testing.T) {
+	env := newReadingEnv(t)
+	lib, _ := env.db.AddLibrary("Books", "books", t.TempDir())
+	w := seedWork(t, env.db, lib, "W", nil, nil, 1, 1)
+	epub := seedBookEdition(t, env.db, w, "epub", ptr(3))
+	seedFileOnDisk(t, env.db, lib, epub, "b.epub", []byte("PK"))
+
+	if code, body := readingPost(t, env, epub, `{"page":4,"revision":0}`); code != 200 {
+		t.Fatalf("seed post = %d %s", code, body)
+	}
+	if err := env.db.DeleteProgress(1, epub); err != nil {
+		t.Fatal(err)
+	}
+	_, body := readingReq(t, env, "GET", env.base+fmt.Sprintf("/progress/%d", epub), env.token, "")
+	for _, want := range []string{`"revision":2`, `"isFinished":false`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("tombstone read missing %s: %s", want, body)
+		}
+	}
+	if strings.Contains(body, `"page"`) {
+		t.Fatalf("tombstone read must not expose a page: %s", body)
+	}
+	code, body := readingPost(t, env, epub, `{"page":9,"revision":0}`)
+	if code != 409 {
+		t.Fatalf("base-0 insert onto tombstone = %d %s, want 409", code, body)
+	}
+	if !strings.Contains(body, `"revision":2`) {
+		t.Fatalf("409 must carry the tombstone revision: %s", body)
+	}
+	code, body = readingPost(t, env, epub, `{"page":9,"revision":1}`)
+	if code != 409 {
+		t.Fatalf("stale pre-delete base = %d %s, want 409", code, body)
+	}
+	code, body = readingPost(t, env, epub, `{"page":9,"revision":2}`)
+	if code != 200 || !strings.Contains(body, `"revision":3`) {
+		t.Fatalf("restart on tombstone revision = %d %s", code, body)
+	}
+	_, body = readingReq(t, env, "GET", env.base+fmt.Sprintf("/progress/%d", epub), env.token, "")
+	if !strings.Contains(body, `"page":9`) {
+		t.Fatalf("restarted progress missing page: %s", body)
+	}
+}

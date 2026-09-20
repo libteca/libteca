@@ -80,6 +80,7 @@ type Progress struct {
 	Device              *string
 	UpdatedAt           int64
 	Revision            int64
+	Deleted             bool
 }
 
 type Session struct {

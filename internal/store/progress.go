@@ -29,9 +29,9 @@ func ValidPosition(position, total float64) error {
 func (d *DB) GetProgress(userID, editionID int64) (*Progress, error) {
 	var p Progress
 	var fin int
-	err := d.QueryRow(`SELECT user_id, edition_id, file_id, file_offset_secs, edition_position_secs, duration_secs, is_finished, device, updated_at
-		FROM progress WHERE user_id = ? AND edition_id = ?`, userID, editionID).
-		Scan(&p.UserID, &p.EditionID, &p.FileID, &p.FileOffsetSecs, &p.EditionPositionSecs, &p.DurationSecs, &fin, &p.Device, &p.UpdatedAt)
+	err := d.QueryRow(`SELECT user_id, edition_id, file_id, file_offset_secs, edition_position_secs, duration_secs, is_finished, device, updated_at, revision
+		FROM progress WHERE user_id = ? AND edition_id = ? AND deleted = 0`, userID, editionID).
+		Scan(&p.UserID, &p.EditionID, &p.FileID, &p.FileOffsetSecs, &p.EditionPositionSecs, &p.DurationSecs, &fin, &p.Device, &p.UpdatedAt, &p.Revision)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
@@ -43,8 +43,8 @@ func (d *DB) GetProgress(userID, editionID int64) (*Progress, error) {
 }
 
 func (d *DB) UserProgressList(userID int64) ([]Progress, error) {
-	rows, err := d.Query(`SELECT user_id, edition_id, file_id, file_offset_secs, edition_position_secs, duration_secs, is_finished, device, updated_at
-		FROM progress WHERE user_id = ? ORDER BY updated_at DESC`, userID)
+	rows, err := d.Query(`SELECT user_id, edition_id, file_id, file_offset_secs, edition_position_secs, duration_secs, is_finished, device, updated_at, revision
+		FROM progress WHERE user_id = ? AND deleted = 0 ORDER BY updated_at DESC`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -53,7 +53,7 @@ func (d *DB) UserProgressList(userID int64) ([]Progress, error) {
 	for rows.Next() {
 		var p Progress
 		var fin int
-		if err := rows.Scan(&p.UserID, &p.EditionID, &p.FileID, &p.FileOffsetSecs, &p.EditionPositionSecs, &p.DurationSecs, &fin, &p.Device, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.UserID, &p.EditionID, &p.FileID, &p.FileOffsetSecs, &p.EditionPositionSecs, &p.DurationSecs, &fin, &p.Device, &p.UpdatedAt, &p.Revision); err != nil {
 			return nil, err
 		}
 		p.IsFinished = fin != 0
@@ -73,18 +73,30 @@ func (d *DB) SetProgress(p *Progress) error {
 			is_finished = excluded.is_finished,
 			device = excluded.device,
 			updated_at = excluded.updated_at,
+			deleted = 0,
 			revision = progress.revision + 1`,
 		p.UserID, p.EditionID, p.FileID, p.FileOffsetSecs, p.EditionPositionSecs, p.DurationSecs, p.IsFinished, p.Device, nowMilli())
 	return err
 }
 
+// DeleteProgress logically resets the row instead of removing it: the
+// revision keeps advancing so a base captured before the delete can never
+// match a later recreated row (ABA), and readers skip tombstones while the
+// single-row reader still exposes the revision for a fresh conditional
+// start.
 func (d *DB) DeleteProgress(userID, editionID int64) error {
-	_, err := d.Exec(`DELETE FROM progress WHERE user_id = ? AND edition_id = ?`, userID, editionID)
+	_, err := d.Exec(`UPDATE progress SET
+		file_id = NULL, file_offset_secs = 0, edition_position_secs = 0,
+		duration_secs = NULL, is_finished = 0, device = NULL,
+		page = NULL, percent = NULL, locator = NULL,
+		deleted = 1, revision = revision + 1, updated_at = ?
+		WHERE user_id = ? AND edition_id = ?`,
+		nowMilli(), userID, editionID)
 	return err
 }
 
 func (d *DB) EditionsInProgress(userID int64) ([]int64, error) {
-	rows, err := d.Query(`SELECT edition_id FROM progress WHERE user_id = ? AND is_finished = 0 ORDER BY updated_at DESC LIMIT 20`, userID)
+	rows, err := d.Query(`SELECT edition_id FROM progress WHERE user_id = ? AND deleted = 0 AND is_finished = 0 ORDER BY updated_at DESC LIMIT 20`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -168,6 +180,7 @@ func (d *DB) CloseSessionWithProgress(s *Session, p *Progress, listenedDelta flo
 				is_finished = excluded.is_finished,
 				device = excluded.device,
 				updated_at = excluded.updated_at,
+				deleted = 0,
 				revision = progress.revision + 1`,
 			p.UserID, p.EditionID, p.FileID, p.FileOffsetSecs, p.EditionPositionSecs, p.DurationSecs, p.IsFinished, p.Device, now); err != nil {
 			return err
