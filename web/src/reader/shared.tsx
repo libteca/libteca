@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import type { ComponentChildren, CSSProperties } from "preact";
-import { api, media, APIError } from "../api";
-import { ProgressQueue, mergeServerProgress, type ProgressPatch as QueuePatch, type ServerProgress } from "../progressQueue";
+import { APIError, fetchWithDeadline, getToken, media, normalizeAPIResponse, RequestTimeoutError } from "../api";
+import {
+  mergeServerProgress, parseStoredProgress, ProgressQueue,
+  type ProgressPatch as QueuePatch, type ServerProgress,
+} from "../progressQueue";
+import { currentUser } from "../user";
 import { c, font, iconBtn } from "../styles";
 
 export type ReaderMode = "single" | "double" | "webtoon";
@@ -107,88 +111,160 @@ export function savePref(key: string, value: string): void {
   } catch { /* storage unavailable */ }
 }
 
-export function useProgressSaver(editionId: number, baseRevision?: number) {
+class AccountPausedError extends Error {
+  constructor() { super("reader account changed; delivery stopped"); }
+}
+
+function progressRetryable(error: unknown): boolean {
+  if (error instanceof AccountPausedError) return false;
+  if (error instanceof RequestTimeoutError) return true;
+  if (error instanceof APIError) {
+    return error.status === 408 || error.status === 409 || error.status === 429 || error.status >= 500;
+  }
+  return true;
+}
+
+// One serial, merge-preserving progress queue per (user, edition). The
+// durable record carries the base revision the patch was based on, so an
+// offline patch replayed after another device advanced the server still
+// presents its ORIGINAL base - the conditional write rejects it and the
+// rebase/merge machinery runs instead of the server silently accepting a
+// relabeled stale patch. Storage is scoped to the authenticated user id
+// from /me (never a bearer token, never unscoped): an undelivered patch
+// left by account A cannot replay into account B on a shared browser. Each
+// queue instance owns a private storage record (per-tab key), absorbing
+// and re-publishing any foreign pending records on mount, so two tabs
+// acknowledge only their own operations and cannot erase each other's
+// undelivered work. The sender folds every automatic save through a
+// remote high-water mark (seeded from the loaded server progress and fed
+// by every 409) so the conflict winner's position survives until the
+// reader genuinely passes it. Lifecycle beacons (pagehide/visibility) send
+// the SAME conditional operation (patch + base revision); a rejected
+// beacon is not a loss - the patch stays durably stored and replays on
+// the next open.
+export function useProgressSaver(editionId: number, baseRevision?: number, initialRemote?: ServerProgress) {
   const [state, setState] = useState<SaveState>("idle");
   const timer = useRef<number | undefined>(undefined);
   const lastSent = useRef(0);
-  const revisionRef = useRef(baseRevision ?? 0);
-  // One serial, merge-preserving queue per edition: patches merge instead of
-  // replacing (page + completion both survive), a failed delivery is retried
-  // with backoff under newer patches, and only one request is ever in flight.
-  // A changed editionId replaces the queue so patches never post to a stale
-  // edition when the reader view is reused. The queue persists its pending
-  // patch in localStorage, and every delivery carries the server revision
-  // the patch was based on: a 409 answer rebases the revision, max-merges
-  // the patch onto the returned server state and retries, so a stale device
-  // can no longer wipe newer progress and a reload can no longer lose
-  // queued patches. Beacon sends (pagehide) stay revision-less by design -
-  // their responses cannot be read, so they must write unconditionally.
-  const queueRef = useRef<{ edition: number; queue: ProgressQueue } | null>(null);
-  if (queueRef.current === null || queueRef.current.edition !== editionId) {
+  const userId = currentUser();
+  const queueRef = useRef<{ edition: number; user: number; queue: ProgressQueue } | null>(null);
+  if (userId == null) {
     queueRef.current?.queue.stop();
-    revisionRef.current = baseRevision ?? 0;
-    const storageKey = `libteca-progress-queue-${editionId}`;
+    queueRef.current = null;
+  } else if (queueRef.current === null || queueRef.current.edition !== editionId || queueRef.current.user !== userId) {
+    queueRef.current?.queue.stop();
+    const scopeUser = userId;
+    const prefix = `libteca-progress-v2-u${scopeUser}-e${editionId}-`;
+    const ownKey = `${prefix}${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
     const queueStorage = {
-      load: (): QueuePatch => {
+      load: (): { baseRevision: number; patch: QueuePatch } | null => {
+        try { localStorage.removeItem(`libteca-progress-queue-${editionId}`); } catch { /* storage unavailable */ }
+        const foreignKeys: string[] = [];
+        const records: { baseRevision: number; patch: QueuePatch }[] = [];
         try {
-          const raw = localStorage.getItem(storageKey);
-          if (!raw) return {};
-          const parsed = JSON.parse(raw) as Record<string, unknown>;
-          const out: Record<string, unknown> = {};
-          for (const key of ["page", "percent", "locator", "finished"]) {
-            if (parsed[key] !== undefined) out[key] = parsed[key];
+          for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (!key || !key.startsWith(prefix) || key === ownKey) continue;
+            const raw = localStorage.getItem(key);
+            if (raw === null) continue;
+            try {
+              records.push(parseStoredProgress(JSON.parse(raw)));
+              foreignKeys.push(key);
+            } catch {
+              try { localStorage.removeItem(key); } catch { /* storage unavailable */ }
+            }
           }
-          return out as QueuePatch;
-        } catch {
-          return {};
+        } catch { return null; }
+        if (foreignKeys.length === 0) return null;
+        let merged: QueuePatch = {};
+        let base = Number.MAX_SAFE_INTEGER;
+        let finished: boolean | undefined;
+        for (const record of records) {
+          merged = mergeServerProgress(merged as ServerProgress, record.patch);
+          if (record.patch.finished !== undefined) finished = record.patch.finished;
+          base = Math.min(base, record.baseRevision);
         }
-      },
-      save: (patch: QueuePatch): void => {
+        if (finished !== undefined && merged.finished === undefined) merged.finished = finished;
         try {
-          if (Object.keys(patch).length === 0) localStorage.removeItem(storageKey);
-          else localStorage.setItem(storageKey, JSON.stringify(patch));
+          if (Object.keys(merged).length > 0) {
+            localStorage.setItem(ownKey, JSON.stringify({ baseRevision: base, patch: merged }));
+          }
+          for (const key of foreignKeys) localStorage.removeItem(key);
+        } catch { /* storage unavailable */ }
+        return Object.keys(merged).length > 0 ? { baseRevision: base, patch: merged } : null;
+      },
+      save: (patch: QueuePatch, base: number): void => {
+        try {
+          if (Object.keys(patch).length === 0) localStorage.removeItem(ownKey);
+          else localStorage.setItem(ownKey, JSON.stringify({ baseRevision: base, patch }));
         } catch { /* storage unavailable */ }
       },
     };
+    const remote: ServerProgress = { ...(initialRemote ?? {}) };
+    const send = async (patch: QueuePatch, base: number): Promise<number | void> => {
+      if (currentUser() !== scopeUser) throw new AccountPausedError();
+      setState("saving");
+      let current = mergeServerProgress(remote, patch);
+      let revision = base;
+      if (Object.keys(current).length === 0) {
+        setState("saved");
+        window.setTimeout(() => setState((s) => (s === "saved" ? "idle" : s)), 1600);
+        return;
+      }
+      for (let attempt = 0; ; attempt++) {
+        const headers = new Headers({ "Content-Type": "application/json" });
+        const usedToken = getToken();
+        if (usedToken) headers.set("Authorization", `Bearer ${usedToken}`);
+        const { response, text } = await fetchWithDeadline(
+          `/api/core/progress/${editionId}`,
+          { method: "POST", headers, body: JSON.stringify({ ...current, revision }) },
+          15000,
+        );
+        const res = normalizeAPIResponse(response, text);
+        if (typeof res.error === "string") {
+          const cur = (res as Record<string, unknown>).current as Record<string, unknown> | undefined;
+          if (response.status === 409 && cur !== null && typeof cur === "object" &&
+              typeof cur.revision === "number" && attempt < 3) {
+            revision = cur.revision;
+            for (const key of ["page", "percent", "locator", "isFinished"] as const) {
+              if (cur[key] !== undefined) (remote as Record<string, unknown>)[key] = cur[key];
+            }
+            remote.revision = cur.revision;
+            current = mergeServerProgress(cur as ServerProgress, current);
+            if (Object.keys(current).length === 0) {
+              setState("saved");
+              window.setTimeout(() => setState((s) => (s === "saved" ? "idle" : s)), 1600);
+              return;
+            }
+            continue;
+          }
+          throw new APIError(res.error, response.status);
+        }
+        if (typeof res.revision === "number") revision = res.revision;
+        setState("saved");
+        window.setTimeout(() => setState((s) => (s === "saved" ? "idle" : s)), 1600);
+        return revision;
+      }
+    };
     queueRef.current = {
       edition: editionId,
+      user: scopeUser,
       queue: new ProgressQueue({
         storage: queueStorage,
-        send: async (patch: QueuePatch) => {
-          setState("saving");
-          let current = patch;
-          for (let attempt = 0; ; attempt++) {
-            const res = await api(`/progress/${editionId}`, {
-              method: "POST",
-              body: JSON.stringify({ ...current, revision: revisionRef.current }),
-            });
-            if (typeof res.error === "string") {
-              const cur = (res as Record<string, unknown>).current as Record<string, unknown> | undefined;
-              if (res.status === 409 && cur !== null && typeof cur === "object" && typeof cur.revision === "number" && attempt < 3) {
-                revisionRef.current = cur.revision;
-                current = mergeServerProgress(cur as ServerProgress, current);
-                if (Object.keys(current).length === 0) {
-                  setState("saved");
-                  window.setTimeout(() => setState((s) => (s === "saved" ? "idle" : s)), 1600);
-                  return;
-                }
-                continue;
-              }
-              throw new APIError(res.error, res.status);
-            }
-            if (typeof res.revision === "number") revisionRef.current = res.revision;
-            setState("saved");
-            window.setTimeout(() => setState((s) => (s === "saved" ? "idle" : s)), 1600);
-            return;
-          }
-        },
+        initialBaseRevision: baseRevision ?? 0,
+        send,
         onError: () => setState("error"),
+        shouldRetry: progressRetryable,
       }),
     };
   }
-  const queue = queueRef.current.queue;
+  const queue = queueRef.current?.queue;
+  if (!queue) {
+    const noop = () => {};
+    return { save: noop, flush: noop, state: "idle" as SaveState };
+  }
 
-  const postBeacon = useCallback(async (body: ProgressPost) => {
+  const postBeacon = useCallback(async (body: ProgressPost & { revision?: number }) => {
     const url = media(`/progress/${editionId}`);
     const payload = JSON.stringify(body);
     let sent = false;
@@ -219,7 +295,7 @@ export function useProgressSaver(editionId: number, baseRevision?: number) {
     if (timer.current !== undefined) { clearTimeout(timer.current); timer.current = undefined; }
     const pending = queue.snapshot();
     if (Object.keys(pending).length === 0) return;
-    void postBeacon(pending as ProgressPost);
+    void postBeacon({ ...pending as ProgressPost, revision: queue.base() });
   }, [postBeacon, queue]);
 
   useEffect(() => {
@@ -237,8 +313,9 @@ export function useProgressSaver(editionId: number, baseRevision?: number) {
       removeEventListener("pagehide", onLeave);
       removeEventListener("beforeunload", onLeave);
       flush();
+      queue.stop();
     };
-  }, [flush]);
+  }, [flush, queue]);
 
   return { save, flush, state };
 }

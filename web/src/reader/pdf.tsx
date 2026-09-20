@@ -1,32 +1,26 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { apiChecked, media } from "../api";
 import { c, ghostBtn } from "../styles";
-import { toast } from "../toast";
-import { IconCheckSmall, IconDownload, isTypingTarget, pagePercent, readerOverlay, TopBar, type ProgressPost, type ReadingProgress } from "./shared";
+import { IconCheckSmall, IconDownload, isTypingTarget, pagePercent, readerOverlay, TopBar, useProgressSaver, type ReadingProgress } from "./shared";
 
-export function PdfReader(props: { editionId: number; title: string; isFinished: boolean; onBack: () => void }) {
-  const [finished, setFinished] = useState(props.isFinished);
-  const [busy, setBusy] = useState(false);
+export function PdfReader(props: { editionId: number; title: string; progress: ReadingProgress | null; onBack: () => void }) {
+  const [finished, setFinished] = useState(!!props.progress?.isFinished);
   const [draft, setDraft] = useState("1");
   const [pageCount, setPageCount] = useState<number | undefined>();
   const [openPage, setOpenPage] = useState<number | null>(null);
   const [ready, setReady] = useState(false);
   const pageRef = useRef(1);
   const countRef = useRef<number | undefined>();
-  const dirty = useRef(false);
+  const saver = useProgressSaver(props.editionId, props.progress?.revision ?? 0, {
+    page: props.progress?.page, percent: props.progress?.percent,
+  });
   const download = media(`/editions/${props.editionId}/download`);
 
-  const bodyFor = (n: number): ProgressPost => {
-    const out: ProgressPost = { page: n };
+  const bodyFor = (n: number) => {
+    const out: { page: number; percent?: number } = { page: n };
     const count = countRef.current;
     if (count && count > 0) out.percent = pagePercent(n, count);
     return out;
-  };
-
-  const postPage = (n: number) => {
-    // No `finished` field: the server treats an omitted flag as "preserve",
-    // so closing the reader after Mark finished cannot reopen the item.
-    void apiChecked(`/progress/${props.editionId}`, { method: "POST", body: JSON.stringify(bodyFor(n)) }).catch(() => {});
   };
 
   const commit = (raw: string) => {
@@ -36,13 +30,14 @@ export function PdfReader(props: { editionId: number; title: string; isFinished:
       setDraft(String(pageRef.current));
       return;
     }
-    const next = Math.max(1, n);
+    let next = Math.max(1, n);
+    const upper = countRef.current;
+    if (upper && upper > 0) next = Math.min(next, upper);
     setDraft(String(next));
     setOpenPage(next);
     const changed = next !== pageRef.current;
     pageRef.current = next;
-    dirty.current = true;
-    if (changed) postPage(next);
+    if (changed) saver.save(bodyFor(next));
   };
 
   useEffect(() => {
@@ -54,15 +49,12 @@ export function PdfReader(props: { editionId: number; title: string; isFinished:
         setDraft(String(n));
         if (!p.isFinished) setOpenPage(n);
         pageRef.current = n;
-        // Restoring a page from the server is not a user edit: posting it
-        // back on close used to clobber progress state untouched by hand.
       }
       const pc = p?.pageCount;
       if (typeof pc === "number" && pc > 0) {
         setPageCount(pc);
         countRef.current = pc;
       }
-      if (p?.isFinished) setFinished(true);
       setReady(true);
     }).catch(() => {
       if (alive) setReady(true);
@@ -79,23 +71,9 @@ export function PdfReader(props: { editionId: number; title: string; isFinished:
     return () => removeEventListener("keydown", onKey);
   }, [props.onBack]);
 
-  useEffect(() => {
-    return () => {
-      const n = pageRef.current;
-      if (n >= 1 && dirty.current) postPage(n);
-    };
-  }, [props.editionId]);
-
-  const markFinished = async () => {
-    setBusy(true);
-    try {
-      await apiChecked(`/progress/${props.editionId}`, { method: "POST", body: JSON.stringify({ finished: true }) });
-      setFinished(true);
-    } catch (err) {
-      toast(err instanceof Error && err.message ? err.message : "Couldn't reach the server.", "error");
-    } finally {
-      setBusy(false);
-    }
+  const markFinished = () => {
+    setFinished(true);
+    saver.save({ finished: true });
   };
 
   const src = openPage != null && openPage >= 1
@@ -104,7 +82,7 @@ export function PdfReader(props: { editionId: number; title: string; isFinished:
 
   return (
     <div className="rd-in" style={readerOverlay}>
-      <TopBar title={props.title} meta={finished ? "Finished" : "PDF · native viewer"} saveState={null} onBack={props.onBack}>
+      <TopBar title={props.title} meta={finished ? "Finished" : "PDF · native viewer"} saveState={saver.state} onBack={props.onBack}>
         <span style={{ display: "inline-flex", alignItems: "center", gap: "0.25rem", color: c.muted, fontSize: "0.78rem", fontVariantNumeric: "tabular-nums" }}>
           <input
             type="number"
@@ -146,7 +124,7 @@ export function PdfReader(props: { editionId: number; title: string; isFinished:
             <IconCheckSmall size={14} /> Finished
           </span>
         ) : (
-          <button style={{ ...ghostBtn, opacity: busy ? 0.6 : 1 }} disabled={busy} onClick={markFinished}>Mark finished</button>
+          <button style={ghostBtn} onClick={markFinished}>Mark finished</button>
         )}
         <a style={{ ...ghostBtn, display: "inline-flex", alignItems: "center", gap: "0.4rem", textDecoration: "none" }} href={download} download>
           <IconDownload size={14} /> Download

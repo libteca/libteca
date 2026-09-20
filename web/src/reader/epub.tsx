@@ -12,6 +12,25 @@ const FONT_MIN = 70;
 const FONT_MAX = 220;
 const FONT_STEP = 10;
 const LOC_CHUNK = 1000;
+const EPUB_MAX_BYTES = 512 << 20;
+
+// The generated-location cache is keyed by the CONTENT of this exact file
+// (SHA-256 over the downloaded bytes plus the chunk size), never the bare
+// edition id: a replaced/reimported EPUB under the same edition id must not
+// resume against a CFI index built from different bytes. When Web Crypto is
+// unavailable (insecure context) the cache is skipped entirely - locations
+// are regenerated - rather than falling back to an unsafe id-only key.
+async function epubLocationKey(editionId: number, data: ArrayBuffer, chunkSize: number): Promise<string | null> {
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle) return null;
+  try {
+    const digest = await subtle.digest("SHA-256", data);
+    const hex = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+    return `libteca:epub-loc:v2:${editionId}:${chunkSize}:${hex}`;
+  } catch {
+    return null;
+  }
+}
 
 type TocEntry = { label: string; href: string; depth: number };
 
@@ -54,7 +73,9 @@ export function EpubReader(props: { editionId: number; title: string; progress: 
   const [fontSize, setFontSize] = useState(100);
   const [percent, setPercent] = useState<number | null>(null);
   const [sectionHref, setSectionHref] = useState("");
-  const saver = useProgressSaver(props.editionId, props.progress?.revision ?? 0);
+  const saver = useProgressSaver(props.editionId, props.progress?.revision ?? 0, {
+    page: props.progress?.page, percent: props.progress?.percent,
+  });
   const keyHandler = useRef<(e: KeyboardEvent) => void>(() => {});
 
   useEffect(() => {
@@ -71,19 +92,26 @@ export function EpubReader(props: { editionId: number; title: string; progress: 
     locsReadyRef.current = false;
 
     const persistLocations = (book: Book) => {
-      try { localStorage.setItem(`libteca-epub-loc-${props.editionId}`, book.locations.save()); } catch { /* storage unavailable */ }
+      if (!locKey) return;
+      try { localStorage.setItem(locKey, book.locations.save()); } catch { /* storage unavailable */ }
     };
 
     let book: Book | null = null;
     let rendition: Rendition | null = null;
     let keyDoc: Document | null = null;
+    let locKey: string | null = null;
     const onDocKey = (e: Event) => keyHandler.current(e as KeyboardEvent);
     (async () => {
       try {
         const res = await fetch(media(`/editions/${props.editionId}/download`), { signal: controller.signal });
         if (!res.ok) throw new Error(`Download failed (${res.status})`);
+        const length = Number(res.headers.get("Content-Length"));
+        if (Number.isFinite(length) && length > EPUB_MAX_BYTES) throw new Error("Book too large");
         const data = await res.arrayBuffer();
+        if (data.byteLength > EPUB_MAX_BYTES) throw new Error("Book too large");
         if (destroyed) return;
+        locKey = await epubLocationKey(props.editionId, data, LOC_CHUNK);
+        try { localStorage.removeItem(`libteca-epub-loc-${props.editionId}`); } catch { /* storage unavailable */ }
         const epubjs = await import("epubjs");
         book = new epubjs.Book();
         await book.open(data);
@@ -135,15 +163,16 @@ export function EpubReader(props: { editionId: number; title: string; progress: 
         if (nav?.toc) walk(nav.toc, 0);
         setToc(flat);
 
-        const locKey = `libteca-epub-loc-${props.editionId}`;
         let haveLocations = false;
-        try {
-          const saved = localStorage.getItem(locKey);
-          if (saved) {
-            book.locations.load(JSON.parse(saved) as unknown as string);
-            haveLocations = book.locations.length() > 0;
-          }
-        } catch { haveLocations = false; }
+        if (locKey) {
+          try {
+            const saved = localStorage.getItem(locKey);
+            if (saved) {
+              book.locations.load(JSON.parse(saved) as unknown as string);
+              haveLocations = book.locations.length() > 0;
+            }
+          } catch { haveLocations = false; }
+        }
         locsReadyRef.current = haveLocations;
 
         // Only location GENERATION depends on the cache being absent: with

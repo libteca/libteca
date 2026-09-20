@@ -15,6 +15,9 @@ const FIT_KEY = "libteca-cbz-fit";
 const RTL_KEY = "libteca-cbz-rtl";
 const PREFETCH = 3;
 const EVICT_RADIUS = 10;
+const ARCHIVE_MAX_BYTES = 512 << 20;
+const PAGE_MAX_BYTES = 256 << 20;
+const MAX_ENTRIES = 10000;
 
 type ZipEntryLike = { name: string; async(type: "blob"): Promise<Blob> };
 
@@ -30,6 +33,50 @@ function typedBlob(entry: ZipEntryLike, blob: Blob): Blob {
   return mime ? new Blob([blob], { type: mime }) : blob;
 }
 
+// Bounded reading of one archive entry: the decompressed byte total is
+// capped while streaming, so a tiny compressed page cannot expand into an
+// unbounded allocation.
+function extractCapped(entry: ZipEntryLike, limit: number): Promise<Blob> {
+  return entry.async("blob").then((blob) => {
+    if (blob.size > limit) throw new Error("Page too large");
+    return blob;
+  });
+}
+
+// Streams the archive body with a hard ceiling on both the declared and
+// the delivered size.
+async function readBoundedBody(response: Response, limit: number, signal?: AbortSignal): Promise<ArrayBuffer> {
+  if (!response.ok) throw new Error(`Download failed (${response.status})`);
+  const length = Number(response.headers.get("Content-Length"));
+  if (Number.isFinite(length) && length > limit) throw new Error("Book too large");
+  if (!response.body) return response.arrayBuffer();
+  const reader = response.body.getReader();
+  const parts: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      if (signal?.aborted) throw new DOMException("Reader closed", "AbortError");
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value.byteLength > limit - size) throw new Error("Book too large");
+      size += value.byteLength;
+      parts.push(value);
+    }
+  } catch (error) {
+    await reader.cancel().catch(() => {});
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+  const out = new Uint8Array(size);
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.byteLength;
+  }
+  return out.buffer;
+}
+
 class PageStore {
   private urls: (string | null)[] = [];
   private queue: number[] = [];
@@ -41,6 +88,18 @@ class PageStore {
   get count(): number { return this.entries.length; }
 
   ready(i: number): boolean { return this.urls[i] !== undefined; }
+
+  status(i: number): "loading" | "error" | "ready" {
+    return this.urls[i] === null ? "error" : typeof this.urls[i] === "string" ? "ready" : "loading";
+  }
+
+  retry(i: number): void {
+    if (this.revoked || i < 0 || i >= this.count) return;
+    if (this.urls[i] !== null) return;
+    delete this.urls[i];
+    this.ensure(i, true);
+    this.notify();
+  }
 
   url(i: number): string | null {
     const u = this.urls[i];
@@ -104,7 +163,7 @@ class PageStore {
         if (this.revoked) return;
         if (this.urls[i] !== undefined) continue;
         try {
-          const blob = typedBlob(this.entries[i], await this.entries[i].async("blob"));
+          const blob = typedBlob(this.entries[i], await extractCapped(this.entries[i], PAGE_MAX_BYTES));
           if (this.revoked) return;
           this.urls[i] = URL.createObjectURL(blob);
           this.notify();
@@ -119,7 +178,15 @@ class PageStore {
   }
 }
 
-function PageImg(props: { i: number; url: string | null; style?: CSSProperties }) {
+function PageImg(props: { i: number; url: string | null; status: "loading" | "error" | "ready"; onRetry?: () => void; style?: CSSProperties }) {
+  if (props.status === "error") {
+    return (
+      <div role="alert" style={{ ...props.style, display: "flex", flexDirection: "column", gap: "0.6rem", alignItems: "center", justifyContent: "center", color: c.muted, fontSize: "0.82rem", background: c.bgRaised, minHeight: "45vh" }}>
+        <span>This page could not be decoded.</span>
+        {props.onRetry && <button style={{ ...toolBtn, border: `1px solid ${c.line}`, width: "auto", padding: "0.3rem 0.9rem", fontSize: "0.78rem", color: c.textDim }} onClick={props.onRetry}>Retry page</button>}
+      </div>
+    );
+  }
   if (props.url) return <img src={props.url} alt={`Page ${props.i + 1}`} style={props.style} draggable={false} />;
   return (
     <div style={{ ...props.style, display: "flex", alignItems: "center", justifyContent: "center", color: c.muted, fontSize: "0.82rem", background: c.bgRaised, minHeight: "45vh" }}>
@@ -137,7 +204,9 @@ export function CbzReader(props: { editionId: number; title: string; progress: R
   const [fit, setFit] = useState<FitMode>(() => loadPref<FitMode>(FIT_KEY, "height", ["width", "height"]));
   const [rtl, setRtl] = useState(() => { try { return localStorage.getItem(RTL_KEY) === "1"; } catch { return false; } });
   const [tick, bump] = useState(0);
-  const saver = useProgressSaver(props.editionId, props.progress?.revision ?? 0);
+  const saver = useProgressSaver(props.editionId, props.progress?.revision ?? 0, {
+    page: props.progress?.page, percent: props.progress?.percent,
+  });
   const storeRef = useRef<PageStore | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const pageEls = useRef(new Map<number, HTMLElement>());
@@ -146,15 +215,16 @@ export function CbzReader(props: { editionId: number; title: string; progress: R
 
   useEffect(() => {
     let alive = true;
+    const controller = new AbortController();
     (async () => {
       try {
-        const res = await fetch(media(`/editions/${props.editionId}/download`));
-        if (!res.ok) throw new Error(`Download failed (${res.status})`);
-        const buf = await res.arrayBuffer();
+        const res = await fetch(media(`/editions/${props.editionId}/download`), { signal: controller.signal });
+        const buf = await readBoundedBody(res, ARCHIVE_MAX_BYTES, controller.signal);
         const JSZip = (await import("jszip")).default;
         const zip = await JSZip.loadAsync(buf);
         if (!alive) return;
         const names = pageImageNames(Object.keys(zip.files));
+        if (names.length > MAX_ENTRIES) throw new Error("Archive has too many pages");
         const store = new PageStore(names.map((n) => zip.files[n] as unknown as ZipEntryLike), () => bump((n) => n + 1));
         storeRef.current = store;
         setCount(store.count);
@@ -169,13 +239,13 @@ export function CbzReader(props: { editionId: number; title: string; progress: R
         store.ensureAround(start, PREFETCH);
         setPhase("ready");
       } catch (err) {
-        if (alive) {
+        if (alive && !(err instanceof DOMException && err.name === "AbortError")) {
           setError(String((err as Error)?.message || err));
           setPhase("error");
         }
       }
     })();
-    return () => { alive = false; storeRef.current?.revoke(); storeRef.current = null; };
+    return () => { alive = false; controller.abort(); storeRef.current?.revoke(); storeRef.current = null; };
   }, [props.editionId]);
 
   useEffect(() => {
@@ -296,6 +366,8 @@ export function CbzReader(props: { editionId: number; title: string; progress: R
       : { height: "100%", maxWidth: "100%", objectFit: "contain", display: "block" });
 
   const pageUrl = (i: number): string | null => storeRef.current?.url(i) ?? null;
+  const pageStatus = (i: number): "loading" | "error" | "ready" => storeRef.current?.status(i) ?? "loading";
+  const retryPage = (i: number) => storeRef.current?.retry(i);
 
   const percent = count > 0 ? clamp01((page + 1) / count) : 0;
   const pillText = phase === "ready" && count > 0 ? `Page ${page + 1} / ${count} · ${Math.round(percent * 100)}%` : "";
@@ -331,7 +403,7 @@ export function CbzReader(props: { editionId: number; title: string; progress: R
           >
             {Array.from({ length: count }, (_, i) => (
               <div key={i} data-page={i} ref={(el) => { if (el) pageEls.current.set(i, el); else pageEls.current.delete(i); }} style={{ width: "100%", maxWidth: "56rem", minHeight: "40vh", display: "flex", justifyContent: "center" }}>
-                <PageImg i={i} url={pageUrl(i)} style={{ width: "100%", height: "auto", objectFit: "contain", display: "block" }} />
+                <PageImg i={i} url={pageUrl(i)} status={pageStatus(i)} onRetry={() => retryPage(i)} style={{ width: "100%", height: "auto", objectFit: "contain", display: "block" }} />
               </div>
             ))}
           </div>
@@ -346,8 +418,8 @@ export function CbzReader(props: { editionId: number; title: string; progress: R
               }}
             >
               {mode === "double"
-                ? (pairStart(page) + 1 < count ? [pairStart(page), pairStart(page) + 1] : [pairStart(page)]).map((i) => <PageImg key={i} i={i} url={pageUrl(i)} style={pageStyle} />)
-                : <PageImg i={page} url={pageUrl(page)} style={pageStyle} />}
+                ? (pairStart(page) + 1 < count ? [pairStart(page), pairStart(page) + 1] : [pairStart(page)]).map((i) => <PageImg key={i} i={i} url={pageUrl(i)} status={pageStatus(i)} onRetry={() => retryPage(i)} style={pageStyle} />)
+                : <PageImg i={page} url={pageUrl(page)} status={pageStatus(page)} onRetry={() => retryPage(page)} style={pageStyle} />}
             </div>
             <TapZones onLeft={() => (rtl ? go(1) : go(-1))} onRight={() => (rtl ? go(-1) : go(1))} leftLabel={rtl ? "Next page" : "Previous page"} rightLabel={rtl ? "Previous page" : "Next page"} />
             <button aria-label={rtl ? "Next page" : "Previous page"} className="lt-edge" style={{ position: "absolute", left: "0.55rem", top: "50%", transform: "translateY(-50%)", zIndex: 6, ...toolBtn, background: "rgba(12,13,15,0.72)" }} onClick={() => (rtl ? go(1) : go(-1))}><IconChevLeft size={18} /></button>

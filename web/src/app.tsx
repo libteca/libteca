@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { api, apiChecked, clearStoredToken, getToken, readStoredToken, setToken } from "./api";
+import { setCurrentUser } from "./user";
 import { globalCss, brand, c, center, content, headerBar, headerInner, input, linkBtn, muted, nav, navLink, page, primaryBtn } from "./styles";
 import { Login } from "./views/login";
 import { Home } from "./views/home";
@@ -76,7 +77,7 @@ export function App() {
   const loadMe = () => {
     api("/libraries").then((l) => { if (Array.isArray(l)) setNavLibs(l); }).catch(() => {});
     api("/me").then((u) => {
-      if (u && typeof u.id === "number") { setMe(u); setBootErr(false); setReady(true); }
+      if (u && typeof u.id === "number") { setCurrentUser(u.id); setMe(u); setBootErr(false); setReady(true); }
       else { setBootErr(true); setReady(true); }
     }).catch(() => {
       if (getToken()) setBootErr(true);
@@ -185,7 +186,7 @@ export function App() {
                   onClick={() => {
                     apiChecked("/logout", { method: "POST" })
                       .catch(() => toast("Could not reach the server; the token stays valid until revoked", "error"))
-                      .finally(() => { clearStoredToken(); location.hash = "#/"; location.reload(); });
+                      .finally(() => { setCurrentUser(null); clearStoredToken(); location.hash = "#/"; location.reload(); });
                   }}
                 >
                   Sign out
@@ -266,7 +267,7 @@ function ChangePassModal(props: { userId: number; isAdmin: boolean; onClose: () 
       });
       if (res.error) { setErr(res.error); return; }
       toast("Password updated — signing you in again", "success");
-      setTimeout(() => { clearStoredToken(); location.hash = "#/"; location.reload(); }, 900);
+      setTimeout(() => { setCurrentUser(null); clearStoredToken(); location.hash = "#/"; location.reload(); }, 900);
     } catch {
       setErr("Failed to update password.");
     } finally {

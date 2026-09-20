@@ -7,45 +7,108 @@ export type ServerProgress = {
   locator?: string; isFinished?: boolean;
 };
 
+export type StoredProgress = { baseRevision: number; patch: ProgressPatch };
+
 type QueueStorage = {
-  load: () => ProgressPatch;
-  save: (patch: ProgressPatch) => void;
+  load: () => StoredProgress | null;
+  save: (patch: ProgressPatch, baseRevision: number) => void;
 };
 
 type QueueOptions = {
-  send: (patch: ProgressPatch) => Promise<void>;
-  onError?: (error: unknown) => void;
+  send: (patch: ProgressPatch, baseRevision: number) => Promise<number | void>;
+  onError?: (error: unknown, terminal: boolean) => void;
+  shouldRetry?: (error: unknown) => boolean;
   retryBaseMs?: number;
   maxRetryMs?: number;
   storage?: QueueStorage;
+  initialBaseRevision?: number;
 };
 
-// Serial, merge-preserving delivery queue for reader progress patches.
-// Enqueued patches merge field-by-field (a completion update never wipes the
-// page state queued before it), exactly one delivery runs at a time (an
-// older request can never overtake a newer one), and a failed delivery is
-// reinserted UNDER newer patches and retried with backoff instead of being
-// dropped. When a storage adapter is supplied the union of the in-flight
-// batch and the pending patch survives reloads: the entry is written on
-// every state change and only cleared after a delivery succeeds, so a
-// crash between take and ack replays the batch on the next open (replay is
-// safe under the server's revision protocol).
+// Strict validation for patches restored from storage: property names AND
+// types/ranges are checked so a malformed record is quarantined instead of
+// replayed forever as a doomed request.
+export function parseProgressPatch(value: unknown): ProgressPatch {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("invalid saved progress");
+  }
+  const v = value as Record<string, unknown>;
+  const out: ProgressPatch = {};
+  if (v.page !== undefined) {
+    if (!Number.isSafeInteger(v.page) || (v.page as number) < 0) throw new Error("invalid saved page");
+    out.page = v.page as number;
+  }
+  if (v.percent !== undefined) {
+    if (typeof v.percent !== "number" || !Number.isFinite(v.percent) ||
+      v.percent < 0 || v.percent > 1) throw new Error("invalid saved percent");
+    out.percent = v.percent;
+  }
+  if (v.locator !== undefined) {
+    if (typeof v.locator !== "string" || new TextEncoder().encode(v.locator).length > 8192) {
+      throw new Error("invalid saved locator");
+    }
+    out.locator = v.locator;
+  }
+  if (v.finished !== undefined) {
+    if (typeof v.finished !== "boolean") throw new Error("invalid saved completion");
+    out.finished = v.finished;
+  }
+  return out;
+}
+
+export function parseStoredProgress(value: unknown): StoredProgress {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("invalid saved progress record");
+  }
+  const v = value as Record<string, unknown>;
+  if (typeof v.baseRevision !== "number" || !Number.isSafeInteger(v.baseRevision) || v.baseRevision < 0) {
+    throw new Error("invalid saved progress revision");
+  }
+  return { baseRevision: v.baseRevision, patch: parseProgressPatch(v.patch) };
+}
+
+// Serial, merge-preserving delivery queue for reader progress patches. The
+// queue owns the base revision for its (user, edition) scope: a persisted
+// record replays with the revision it was BASED on (never one minted later
+// by a fresh page load - that would relabel a stale patch as current and
+// the server would accept it without the conflict the merge logic depends
+// on), and the base only advances when the server acknowledges a write or
+// answers a conflict with its current state. Enqueued patches merge
+// field-by-field (a completion update never wipes the page state queued
+// before it), exactly one delivery runs at a time, and a retryable failure
+// is reinserted UNDER newer patches and retried with backoff. A failure the
+// shouldRetry policy declares permanent drops its patch (a malformed or
+// 404-gone operation must not wedge every later save behind it) and is
+// reported as terminal. When a storage adapter is supplied the union of the
+// in-flight batch and the pending patch survives reloads with its base
+// revision; the entry is only cleared after a delivery succeeds, so a
+// crash between take and ack replays the batch on the next open against
+// the SAME base - safe under the server's conditional write.
 export class ProgressQueue {
   private pending: ProgressPatch = {};
   private inFlight: ProgressPatch | undefined;
+  private baseRevision: number;
   private sending = false;
   private stopped = false;
   private failures = 0;
   private timer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(private readonly options: QueueOptions) {
+    this.baseRevision = Math.max(0, Math.trunc(options.initialBaseRevision ?? 0));
     if (options.storage) {
       try {
-        this.pending = this.clean(options.storage.load());
+        const stored = options.storage.load();
+        if (stored) {
+          this.pending = parseProgressPatch(stored.patch);
+          this.baseRevision = stored.baseRevision;
+        }
       } catch {
         this.pending = {};
       }
     }
+  }
+
+  base(): number {
+    return this.baseRevision;
   }
 
   snapshot(): ProgressPatch {
@@ -62,7 +125,7 @@ export class ProgressQueue {
 
   private persist(): void {
     try {
-      this.options.storage?.save({ ...this.inFlight, ...this.pending });
+      this.options.storage?.save(this.clean({ ...this.inFlight, ...this.pending }), this.baseRevision);
     } catch { /* storage unavailable */ }
   }
 
@@ -86,15 +149,24 @@ export class ProgressQueue {
         this.inFlight = batch;
         this.persist();
         try {
-          await this.options.send(batch);
+          const nextBase = await this.options.send(batch, this.baseRevision);
           this.failures = 0;
           this.inFlight = undefined;
+          if (typeof nextBase === "number" && Number.isSafeInteger(nextBase) && nextBase >= 0) {
+            this.baseRevision = nextBase;
+          }
           this.persist();
         } catch (error) {
           this.inFlight = undefined;
+          const retryable = this.options.shouldRetry ? this.options.shouldRetry(error) : true;
+          if (!retryable) {
+            this.persist();
+            this.notifyError(error, true);
+            continue;
+          }
           this.pending = { ...batch, ...this.pending };
           this.persist();
-          this.options.onError?.(error);
+          this.notifyError(error, false);
           this.failures += 1;
           if (!this.stopped) this.scheduleRetry();
           return;
@@ -103,6 +175,12 @@ export class ProgressQueue {
     } finally {
       this.sending = false;
     }
+  }
+
+  private notifyError(error: unknown, terminal: boolean): void {
+    try {
+      this.options.onError?.(error, terminal);
+    } catch { /* observer must not break queue housekeeping */ }
   }
 
   private scheduleRetry(): void {
@@ -130,8 +208,20 @@ export class ProgressQueue {
 // wins and takes its percent/locator with it (the losing side's values
 // describe a position the server already passed). Explicit finished intent
 // survives either way so a deliberate reopen is never buried by a stale
-// isFinished=true.
+// isFinished=true. A locator-only patch has no comparable numeric position:
+// against a server state that already holds any position it never wins on
+// its own (an unordered locator cannot be ranked against a page/percent,
+// and letting it through produced rows reading "90%" while pointing at an
+// early CFI) - only the explicit completion intent survives. The next
+// coherent save (locator plus its computed percent, once the EPUB location
+// index exists) carries the position forward.
 export function mergeServerProgress(server: ServerProgress, patch: ProgressPatch): ProgressPatch {
+  if (patch.locator !== undefined && patch.page === undefined && patch.percent === undefined) {
+    const serverHasPosition = server.page !== undefined || server.percent !== undefined || server.locator !== undefined;
+    if (serverHasPosition) {
+      return patch.finished === undefined ? {} : { finished: patch.finished };
+    }
+  }
   const merged: ProgressPatch = {};
   let localWins = true;
   if (patch.page !== undefined) {

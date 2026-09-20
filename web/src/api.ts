@@ -76,6 +76,44 @@ export const api = async (path: string, opts: RequestInit = {}) => {
     throw new Error("unauthorized");
   }
   const text = await res.text();
+  return normalizeAPIResponse(res, text);
+};
+
+export class RequestTimeoutError extends Error {}
+
+// fetch with a hard deadline covering headers and body consumption. A
+// request that never resolves must not wedge the single-flight progress
+// queue forever; parent signals (reader teardown) are honored alongside the
+// timeout.
+export async function fetchWithDeadline(
+  input: string,
+  init: RequestInit = {},
+  timeoutMs = 15000,
+): Promise<{ response: Response; text: string }> {
+  const controller = new AbortController();
+  const parent = init.signal;
+  let timedOut = false;
+  const relay = () => controller.abort(parent?.reason);
+  if (parent?.aborted) relay();
+  else parent?.addEventListener("abort", relay, { once: true });
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  try {
+    const response = await fetch(input, { ...init, signal: controller.signal });
+    const text = await response.text();
+    return { response, text };
+  } catch (error) {
+    if (timedOut) throw new RequestTimeoutError("request timed out");
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    parent?.removeEventListener("abort", relay);
+  }
+}
+
+export function normalizeAPIResponse(res: Response, text: string): any {
   let payload: any = {};
   if (text) {
     try {

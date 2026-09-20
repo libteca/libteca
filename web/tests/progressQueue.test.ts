@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { ProgressQueue, mergeServerProgress, type ProgressPatch } from "../src/progressQueue";
+import {
+  mergeServerProgress, parseProgressPatch, parseStoredProgress, ProgressQueue,
+  type ProgressPatch, type StoredProgress,
+} from "../src/progressQueue";
 
 function deferred() {
   let resolve!: () => void;
@@ -111,31 +114,43 @@ describe("ProgressQueue", () => {
     expect(send.mock.calls.length).toBe(calls);
   });
 
-  it("persists the pending patch and reloads it into a new queue", async () => {
-    const sent: ProgressPatch[] = [];
-    let store: ProgressPatch = {};
+  it("persists the pending patch with its base revision and replays against the stored base", async () => {
+    const sent: { patch: ProgressPatch; base: number }[] = [];
+    let store: StoredProgress | null = null;
     const storage = {
       load: () => store,
-      save: (patch: ProgressPatch) => { store = patch; },
+      save: (patch: ProgressPatch, baseRevision: number) => { store = patch && Object.keys(patch).length ? { baseRevision, patch } : null; },
     };
-    const q = new ProgressQueue({ send: async (patch) => { sent.push(patch); }, storage });
+    const q = new ProgressQueue({
+      send: async (patch, base) => { sent.push({ patch, base }); },
+      storage,
+      initialBaseRevision: 3,
+    });
     q.enqueue({ page: 40, percent: 0.4 });
-    expect(store).toEqual({ page: 40, percent: 0.4 });
-    const reloaded = new ProgressQueue({ send: async (patch) => { sent.push(patch); }, storage });
+    expect(store).toEqual({ baseRevision: 3, patch: { page: 40, percent: 0.4 } });
+    const reloaded = new ProgressQueue({
+      send: async (patch, base) => { sent.push({ patch, base }); return 7; },
+      storage,
+      initialBaseRevision: 9,
+    });
+    expect(reloaded.base()).toBe(3);
     expect(reloaded.snapshot()).toEqual({ page: 40, percent: 0.4 });
     await reloaded.flush();
-    expect(sent).toEqual([{ page: 40, percent: 0.4 }]);
-    expect(store).toEqual({});
+    expect(sent).toEqual([{ patch: { page: 40, percent: 0.4 }, base: 3 }]);
+    expect(reloaded.base()).toBe(7);
+    expect(store).toBeNull();
     q.stop();
     reloaded.stop();
   });
 
   it("keeps the in-flight batch in storage until delivery succeeds", async () => {
     const gate = deferred();
-    let store: ProgressPatch = {};
+    let store: StoredProgress | null = null;
     const storage = {
       load: () => store,
-      save: (patch: ProgressPatch) => { store = patch; },
+      save: (patch: ProgressPatch, baseRevision: number) => {
+        store = Object.keys(patch).length ? { baseRevision, patch } : null;
+      },
     };
     const sent: ProgressPatch[] = [];
     const q = new ProgressQueue({
@@ -152,13 +167,13 @@ describe("ProgressQueue", () => {
     q.enqueue({ page: 3 });
     const first = q.flush();
     q.enqueue({ locator: "cfi(/6)" });
-    expect(store).toEqual({ page: 3, locator: "cfi(/6)" });
+    expect(store?.patch).toEqual({ page: 3, locator: "cfi(/6)" });
     gate.resolve();
     await first;
     await flushMicrotasks();
-    expect(store).toEqual({ page: 3, locator: "cfi(/6)" });
+    expect(store?.patch).toEqual({ page: 3, locator: "cfi(/6)" });
     await new Promise((resolve) => setTimeout(resolve, 250));
-    expect(store).toEqual({});
+    expect(store).toBeNull();
     expect(sent).toEqual([{ page: 3 }, { page: 3, locator: "cfi(/6)" }]);
     q.stop();
   });
@@ -168,7 +183,7 @@ describe("ProgressQueue", () => {
     const q = new ProgressQueue({
       send: async (patch) => { sent.push(patch); },
       storage: {
-        load: (): ProgressPatch => { throw new Error("unavailable"); },
+        load: () => { throw new Error("unavailable"); },
         save: () => { throw new Error("unavailable"); },
       },
     });
@@ -201,11 +216,83 @@ describe("mergeServerProgress", () => {
     expect(mergeServerProgress({ page: 10, revision: 1 }, { finished: true })).toEqual({ finished: true });
   });
 
-  it("keeps a locator-only patch", () => {
-    expect(mergeServerProgress({ locator: "old", revision: 3 }, { locator: "new" })).toEqual({ locator: "new" });
+  it("keeps a locator-only patch against an empty server state", () => {
+    expect(mergeServerProgress({}, { locator: "new" })).toEqual({ locator: "new" });
+  });
+
+  it("never lets an unordered locator defeat a positioned server state", () => {
+    expect(mergeServerProgress({ percent: 0.9, locator: "far", revision: 7 }, { locator: "early" })).toEqual({});
+    expect(mergeServerProgress({ page: 12, revision: 3 }, { locator: "early" })).toEqual({});
+    expect(mergeServerProgress({ locator: "old", revision: 3 }, { locator: "new" })).toEqual({});
+    expect(mergeServerProgress({ page: 12, revision: 3 }, { locator: "early", finished: true })).toEqual({ finished: true });
   });
 
   it("drops the stale locator when the server page wins", () => {
     expect(mergeServerProgress({ page: 50, revision: 5 }, { page: 20, locator: "20" })).toEqual({});
+  });
+});
+
+describe("terminal error policy", () => {
+  class GoneError extends Error {}
+
+  it("drops a patch the policy declares permanent and keeps delivering later work", async () => {
+    const sent: ProgressPatch[] = [];
+    const q = new ProgressQueue({
+      send: async (patch) => {
+        if (patch.page === 3) throw new GoneError();
+        sent.push(patch);
+      },
+      shouldRetry: (error) => !(error instanceof GoneError),
+      retryBaseMs: 1,
+    });
+    q.enqueue({ page: 3 });
+    q.enqueue({ page: 4 });
+    await q.flush();
+    await flushMicrotasks();
+    expect(sent).toEqual([{ page: 4 }]);
+    q.stop();
+  });
+
+  it("retries when the policy allows", async () => {
+    const sent: ProgressPatch[] = [];
+    let fail = true;
+    const q = new ProgressQueue({
+      send: async (patch) => {
+        if (fail) throw new Error("offline");
+        sent.push(patch);
+      },
+      shouldRetry: () => true,
+      retryBaseMs: 1,
+    });
+    q.enqueue({ page: 5 });
+    await q.flush();
+    fail = false;
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(sent).toEqual([{ page: 5 }]);
+    q.stop();
+  });
+});
+
+describe("parseProgressPatch", () => {
+  it("accepts a well-formed record", () => {
+    expect(parseProgressPatch({ page: 3, percent: 0.5, locator: "cfi(/6)", finished: true }))
+      .toEqual({ page: 3, percent: 0.5, locator: "cfi(/6)", finished: true });
+  });
+
+  it("rejects malformed values", () => {
+    for (const bad of [
+      { page: "three" }, { page: -1 }, { page: 1.5 },
+      { percent: 2 }, { percent: "half" },
+      { locator: 42 }, { finished: "yes" }, [], "x", null,
+    ]) {
+      expect(() => parseProgressPatch(bad)).toThrow();
+    }
+    expect(() => parseProgressPatch({ locator: "x".repeat(8193) })).toThrow();
+  });
+
+  it("rejects stored records without a valid base revision", () => {
+    expect(() => parseStoredProgress({ patch: {} })).toThrow();
+    expect(() => parseStoredProgress({ baseRevision: -1, patch: {} })).toThrow();
+    expect(parseStoredProgress({ baseRevision: 4, patch: { page: 1 } })).toEqual({ baseRevision: 4, patch: { page: 1 } });
   });
 });

@@ -91,7 +91,7 @@ export function ReadView(props: { edition: number; work?: number; format?: strin
     return <CbzReader editionId={props.edition} title={info.title || "CBZ"} progress={progress} onBack={onBack} />;
   }
   if (info.format === "pdf") {
-    return <PdfReader editionId={props.edition} title={info.title || "PDF"} isFinished={!!progress?.isFinished} onBack={onBack} />;
+    return <PdfReader editionId={props.edition} title={info.title || "PDF"} progress={progress} onBack={onBack} />;
   }
   return (
     <div style={paneStyle}>
