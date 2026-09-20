@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/libteca/libteca/internal/assets"
 	"github.com/libteca/libteca/internal/store"
 )
 
@@ -281,10 +282,15 @@ func writeBookCover(db *store.DB, workID int64, d *bookDoc, coversDir string) er
 	if len(d.cover) == 0 {
 		return nil
 	}
-	if err := writeCoverFile(dst, d.cover); err != nil {
-		return err
-	}
-	return db.SetWorkCover(workID, fmt.Sprintf("%d.jpg", workID))
+	return assets.WithCoversLock(coversDir, false, func() error {
+		if _, err := os.Stat(dst); err == nil {
+			return db.SetWorkCover(workID, fmt.Sprintf("%d.jpg", workID))
+		}
+		if err := writeCoverFile(dst, d.cover); err != nil {
+			return err
+		}
+		return db.SetWorkCover(workID, fmt.Sprintf("%d.jpg", workID))
+	})
 }
 
 func probeCBZ(p string) (int, []byte, error) {

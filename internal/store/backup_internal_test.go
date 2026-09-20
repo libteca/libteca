@@ -3,7 +3,12 @@ package store
 import (
 	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
+	"time"
+
+	"github.com/libteca/libteca/internal/assets"
 )
 
 func writeBackupNames(t *testing.T, dir string, names ...string) {
@@ -119,5 +124,118 @@ func TestPruneRemovesGenerationWhole(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, gen)); !os.IsNotExist(err) {
 		t.Fatal("pruned generation directory left behind")
+	}
+}
+
+func TestCopyTreeRejectsMissingRoot(t *testing.T) {
+	dst := t.TempDir()
+	if err := copyTree(filepath.Join(t.TempDir(), "absent"), dst); err == nil {
+		t.Fatal("missing cover root must fail the copy, not look like an empty success")
+	}
+}
+
+func TestCopyTreeRejectsNonRegularEntries(t *testing.T) {
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "7.jpg"), []byte("cover"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(filepath.Join(src, "pipe"), 0o600); err != nil {
+		t.Skipf("fifo unavailable: %v", err)
+	}
+	if err := os.Symlink("/etc/passwd", filepath.Join(src, "escape")); err != nil {
+		t.Fatal(err)
+	}
+	err := copyTree(src, t.TempDir())
+	if err == nil {
+		t.Fatal("non-regular cover entries must be rejected")
+	}
+	if !strings.Contains(err.Error(), "pipe") && !strings.Contains(err.Error(), "escape") {
+		t.Fatalf("rejection must name the offending entry: %v", err)
+	}
+}
+
+func internalBackupDB(t *testing.T) *DB {
+	t.Helper()
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	return db
+}
+
+func internalEmptyCovers(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "covers")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func TestSnapshotCleansAbandonedStages(t *testing.T) {
+	db := internalBackupDB(t)
+	backups := t.TempDir()
+	abandoned := filepath.Join(backups, ".libteca-stage-abandoned")
+	if err := os.MkdirAll(abandoned, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(abandoned, "snapshot.db"), []byte("junk"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	path, err := db.Snapshot(internalEmptyCovers(t), backups, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(abandoned); !os.IsNotExist(err) {
+		t.Fatal("abandoned stage survived a later backup")
+	}
+	if _, err := os.Stat(filepath.Join(path, "snapshot.db")); err != nil {
+		t.Fatalf("new generation missing: %v", err)
+	}
+}
+
+func TestSnapshotExcludesCoverMutationsDuringCopy(t *testing.T) {
+	db := internalBackupDB(t)
+	data := t.TempDir()
+	covers := filepath.Join(data, "covers")
+	if err := os.MkdirAll(covers, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(covers, "7.jpg"), []byte("before"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	acquired := make(chan struct{})
+	release := make(chan struct{})
+	released := make(chan struct{})
+	go func() {
+		_ = assets.WithCoversLock(covers, true, func() error {
+			close(acquired)
+			<-release
+			close(released)
+			return nil
+		})
+	}()
+	<-acquired
+	done := make(chan struct{})
+	var snapErr error
+	go func() {
+		_, snapErr = db.Snapshot(covers, filepath.Join(data, "backups"), 5)
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("snapshot copied covers while a cover mutation held the lock")
+	case <-time.After(150 * time.Millisecond):
+	}
+	close(release)
+	<-released
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("snapshot never completed after the lock was released")
+	}
+	if snapErr != nil {
+		t.Fatalf("snapshot after release: %v", snapErr)
 	}
 }

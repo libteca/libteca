@@ -15,6 +15,7 @@ import (
 	"github.com/libteca/libteca/internal/audio"
 	"github.com/libteca/libteca/internal/mediafs"
 	"github.com/libteca/libteca/internal/natural"
+	"github.com/libteca/libteca/internal/assets"
 	"github.com/libteca/libteca/internal/store"
 )
 
@@ -345,19 +346,27 @@ func ensureCover(ctx context.Context, db *store.DB, root string, workID int64, t
 		return err
 	}
 	dst := filepath.Join(coversDir, fmt.Sprintf("%d.jpg", workID))
-	for _, f := range group {
-		if f.info != nil && f.info.HasVideo {
-			src, oerr := mediafs.Open(root, f.path)
-			if oerr != nil {
-				continue
-			}
-			cmd := extractCmd(ctx, src, dst)
-			ran := cmd != nil && cmd.Run() == nil
-			src.Close()
-			if ran {
-				return db.SetWorkCover(workID, fmt.Sprintf("%d.jpg", workID))
+	linked := false
+	err = assets.WithCoversLock(coversDir, false, func() error {
+		for _, f := range group {
+			if f.info != nil && f.info.HasVideo {
+				src, oerr := mediafs.Open(root, f.path)
+				if oerr != nil {
+					continue
+				}
+				cmd := extractCmd(ctx, src, dst)
+				ran := cmd != nil && cmd.Run() == nil
+				src.Close()
+				if ran {
+					linked = true
+					return db.SetWorkCover(workID, fmt.Sprintf("%d.jpg", workID))
+				}
 			}
 		}
+		return nil
+	})
+	if err != nil || linked {
+		return err
 	}
 	return nil
 }

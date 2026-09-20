@@ -14,6 +14,7 @@ import (
 
 	"github.com/libteca/libteca/internal/audio"
 	"github.com/libteca/libteca/internal/mediafs"
+	"github.com/libteca/libteca/internal/assets"
 	"github.com/libteca/libteca/internal/store"
 )
 
@@ -284,11 +285,13 @@ func ensureCoverVideo(ctx context.Context, db *store.DB, root string, workID int
 	dst := filepath.Join(coversDir, fmt.Sprintf("%d.jpg", workID))
 	if src, oerr := mediafs.Open(root, mediaPath); oerr == nil {
 		cmd := extractCmd(ctx, src, dst)
-		ran := cmd != nil && cmd.Run() == nil
+		_ = assets.WithCoversLock(coversDir, false, func() error {
+			if cmd != nil && cmd.Run() == nil {
+				return db.SetWorkCover(workID, fmt.Sprintf("%d.jpg", workID))
+			}
+			return nil
+		})
 		src.Close()
-		if ran {
-			_ = db.SetWorkCover(workID, fmt.Sprintf("%d.jpg", workID))
-		}
 	}
 	importFanart(workID, top, mediaPath, coversDir)
 	return nil

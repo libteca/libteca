@@ -9,6 +9,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/libteca/libteca/internal/assets"
 )
 
 // BackupTo writes a consistent snapshot of the database to dest via
@@ -45,37 +47,82 @@ func (d *DB) Snapshot(coversDir, backupsDir string, keep int) (string, error) {
 		if err := os.MkdirAll(backupsDir, 0o700); err != nil {
 			return err
 		}
-		stage, err := os.MkdirTemp(backupsDir, ".libteca-stage-*")
-		if err != nil {
+		if err := cleanupBackupStages(backupsDir); err != nil {
 			return err
 		}
-		defer os.RemoveAll(stage)
-		tmp := filepath.Join(stage, "snapshot.db")
-		if err := d.BackupTo(tmp); err != nil {
+		if err := requireCoverRoot(coversDir); err != nil {
 			return err
 		}
-		if err := syncPath(tmp); err != nil {
-			return err
-		}
-		if err := copyTree(coversDir, filepath.Join(stage, "covers")); err != nil {
-			return err
-		}
-		if err := syncPath(stage); err != nil {
-			return err
-		}
-		suffix := strings.TrimPrefix(filepath.Base(stage), ".libteca-stage-")
-		dest := filepath.Join(backupsDir,
-			"gen-"+time.Now().UTC().Format("20060102-150405.000000000")+"-"+suffix)
-		if err := os.Rename(stage, dest); err != nil {
-			return err
-		}
-		if err := syncPath(backupsDir); err != nil {
-			return err
-		}
-		published = dest
-		return pruneBackups(backupsDir, keep, dest)
+		return assets.WithCoversLock(coversDir, true, func() error {
+			stage, err := os.MkdirTemp(backupsDir, ".libteca-stage-*")
+			if err != nil {
+				return err
+			}
+			defer os.RemoveAll(stage)
+			tmp := filepath.Join(stage, "snapshot.db")
+			if err := d.BackupTo(tmp); err != nil {
+				return err
+			}
+			if err := syncPath(tmp); err != nil {
+				return err
+			}
+			if err := copyTree(coversDir, filepath.Join(stage, "covers")); err != nil {
+				return err
+			}
+			if err := syncPath(stage); err != nil {
+				return err
+			}
+			suffix := strings.TrimPrefix(filepath.Base(stage), ".libteca-stage-")
+			dest := filepath.Join(backupsDir,
+				"gen-"+time.Now().UTC().Format("20060102-150405.000000000")+"-"+suffix)
+			if err := os.Rename(stage, dest); err != nil {
+				return err
+			}
+			if err := syncPath(backupsDir); err != nil {
+				return err
+			}
+			published = dest
+			return pruneBackups(backupsDir, keep, dest)
+		})
 	})
 	return published, err
+}
+
+func requireCoverRoot(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("backup cover source unavailable: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("backup cover source is not a directory")
+	}
+	return nil
+}
+
+// cleanupBackupStages removes unpublished stages abandoned by crashed
+// backups (a deferred RemoveAll cannot run after process death) so repeated
+// interruptions cannot consume disk outside the retention budget. Only the
+// application's reserved stage namespace inside the locked backup directory
+// is ever removed.
+func cleanupBackupStages(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	removed := false
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), ".libteca-stage-") {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(dir, entry.Name())); err != nil {
+			return fmt.Errorf("remove abandoned backup stage: %w", err)
+		}
+		removed = true
+	}
+	if removed {
+		return syncPath(dir)
+	}
+	return nil
 }
 
 func syncPath(path string) error {
@@ -87,13 +134,25 @@ func syncPath(path string) error {
 	return f.Sync()
 }
 
+// copyTree mirrors the cover tree into dst. The source root is pinned with
+// os.Root and every file is opened relative to it (nonblocking, then
+// stat-after-open with a regular-file check), so an entry swapped for a
+// symlink or special file between enumeration and open cannot escape the
+// root or hang the copy. A missing source root is an error, not an
+// empty-looking success: only an initialized empty directory backs up as
+// zero covers.
 func copyTree(src, dst string) error {
+	if err := requireCoverRoot(src); err != nil {
+		return err
+	}
+	root, err := os.OpenRoot(src)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
 	var dirs []string
-	err := filepath.WalkDir(src, func(p string, e os.DirEntry, err error) error {
+	err = filepath.WalkDir(src, func(p string, e os.DirEntry, err error) error {
 		if err != nil {
-			if os.IsNotExist(err) {
-				return nil
-			}
 			return err
 		}
 		rel, err := filepath.Rel(src, p)
@@ -111,12 +170,18 @@ func copyTree(src, dst string) error {
 			dirs = append(dirs, out)
 			return nil
 		}
-		if !e.Type().IsRegular() {
-			return fmt.Errorf("unsupported cover entry: %s", rel)
-		}
-		in, err := os.Open(p)
+		in, err := root.OpenFile(rel, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 		if err != nil {
 			return err
+		}
+		info, err := in.Stat()
+		if err != nil {
+			in.Close()
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			in.Close()
+			return fmt.Errorf("unsupported opened cover entry: %s", rel)
 		}
 		tmp, err := os.CreateTemp(filepath.Join(dst, filepath.Dir(rel)), ".cover-*")
 		if err != nil {
@@ -218,6 +283,10 @@ func pruneBackups(dir string, keep int, protect string) error {
 		if err := os.RemoveAll(filepath.Join(dir, "covers")); err != nil && !os.IsNotExist(err) {
 			return err
 		}
+		return syncPath(dir)
+	}
+	if len(candidates)-slots > 0 {
+		return syncPath(dir)
 	}
 	return nil
 }

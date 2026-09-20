@@ -109,7 +109,7 @@ func TestSnapshotLegacyBackupsKeepWorking(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := db.Snapshot(filepath.Join(t.TempDir(), "no-covers"), backups, 10); err != nil {
+	if _, err := db.Snapshot(mkdirEmptyCovers(t), backups, 10); err != nil {
 		t.Fatalf("Snapshot over legacy layout: %v", err)
 	}
 	for _, name := range []string{"libteca-20200101-000000.db", "libteca-20200201-000000.db"} {
@@ -132,7 +132,7 @@ func TestSnapshotPruneRemovesSharedCoversAfterLastLegacy(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(backups, "libteca-20200101-000000.db"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Snapshot(filepath.Join(t.TempDir(), "no-covers"), backups, 2); err != nil {
+	if _, err := db.Snapshot(mkdirEmptyCovers(t), backups, 2); err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(backups, "libteca-20200101-000000.db")); err != nil {
@@ -141,7 +141,7 @@ func TestSnapshotPruneRemovesSharedCoversAfterLastLegacy(t *testing.T) {
 	if _, err := os.Stat(legacyCovers); err != nil {
 		t.Fatalf("shared covers removed while a legacy backup remains: %v", err)
 	}
-	if _, err := db.Snapshot(filepath.Join(t.TempDir(), "no-covers"), backups, 1); err != nil {
+	if _, err := db.Snapshot(mkdirEmptyCovers(t), backups, 1); err != nil {
 		t.Fatalf("Snapshot 2: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(backups, "libteca-20200101-000000.db")); !os.IsNotExist(err) {
@@ -163,7 +163,7 @@ func TestSnapshotPrunesOldBackups(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	path, err := db.Snapshot(filepath.Join(t.TempDir(), "no-covers"), backups, 2)
+	path, err := db.Snapshot(mkdirEmptyCovers(t), backups, 2)
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
@@ -197,7 +197,7 @@ func TestSnapshotKeepBelowOnePrunesNothing(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	path, err := db.Snapshot(filepath.Join(t.TempDir(), "no-covers"), backups, 0)
+	path, err := db.Snapshot(mkdirEmptyCovers(t), backups, 0)
 	if err != nil {
 		t.Fatalf("Snapshot keep=0: %v", err)
 	}
@@ -230,7 +230,7 @@ func TestSnapshotNeverPrunesJustWritten(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(backups, "libteca-29991231-235959.db"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	path, err := db.Snapshot(filepath.Join(t.TempDir(), "no-covers"), backups, 1)
+	path, err := db.Snapshot(mkdirEmptyCovers(t), backups, 1)
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
@@ -242,13 +242,13 @@ func TestSnapshotNeverPrunesJustWritten(t *testing.T) {
 func TestSnapshotCapturesWalWrites(t *testing.T) {
 	db := backupDB(t)
 	dir := t.TempDir()
-	if _, err := db.Snapshot(filepath.Join(t.TempDir(), "no-covers"), dir, 5); err != nil {
+	if _, err := db.Snapshot(mkdirEmptyCovers(t), dir, 5); err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
 	if _, err := db.Exec(`INSERT INTO users (name, password_hash, is_admin, created_at, updated_at) VALUES ('late','x',0,0,0)`); err != nil {
 		t.Fatal(err)
 	}
-	path2, err := db.Snapshot(filepath.Join(t.TempDir(), "no-covers"), dir, 5)
+	path2, err := db.Snapshot(mkdirEmptyCovers(t), dir, 5)
 	if err != nil {
 		t.Fatalf("Snapshot 2: %v", err)
 	}
@@ -267,7 +267,7 @@ func TestSnapshotCapturesWalWrites(t *testing.T) {
 func TestSnapshotSameSecondNeverOverwrites(t *testing.T) {
 	db := backupDB(t)
 	backups := t.TempDir()
-	first, err := db.Snapshot(filepath.Join(t.TempDir(), "no-covers"), backups, 10)
+	first, err := db.Snapshot(mkdirEmptyCovers(t), backups, 10)
 	if err != nil {
 		t.Fatalf("Snapshot 1: %v", err)
 	}
@@ -275,7 +275,7 @@ func TestSnapshotSameSecondNeverOverwrites(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := db.Snapshot(filepath.Join(t.TempDir(), "no-covers"), backups, 10)
+	second, err := db.Snapshot(mkdirEmptyCovers(t), backups, 10)
 	if err != nil {
 		t.Fatalf("Snapshot 2 in the same second: %v", err)
 	}
@@ -323,4 +323,13 @@ func TestOpenEscapesReservedPathCharacters(t *testing.T) {
 		}
 		db.Close()
 	}
+}
+
+func mkdirEmptyCovers(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "no-covers")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/libteca/libteca/internal/assets"
 	"github.com/libteca/libteca/internal/store"
 )
 
@@ -264,26 +265,33 @@ func applyNFO(db workDB, workID int64, n *NFO) error {
 
 func importSidecarPoster(db *store.DB, workID int64, folder, coversDir string, force bool) (bool, error) {
 	rel := fmt.Sprintf("%d.jpg", workID)
-	dst := filepath.Join(coversDir, rel)
-	if !force {
+	var applied bool
+	err := assets.WithCoversLock(coversDir, false, func() error {
+		dst := filepath.Join(coversDir, rel)
+		if !force {
+			if _, err := os.Stat(dst); err == nil {
+				applied = true
+				return db.SetWorkCover(workID, rel)
+			}
+		}
+		for _, name := range sidecarPosters {
+			data, err := os.ReadFile(filepath.Join(folder, name))
+			if err != nil {
+				continue
+			}
+			if err := os.WriteFile(dst, data, 0o644); err != nil {
+				return err
+			}
+			applied = true
+			return db.SetWorkCover(workID, rel)
+		}
 		if _, err := os.Stat(dst); err == nil {
-			return true, db.SetWorkCover(workID, rel)
+			applied = true
+			return db.SetWorkCover(workID, rel)
 		}
-	}
-	for _, name := range sidecarPosters {
-		data, err := os.ReadFile(filepath.Join(folder, name))
-		if err != nil {
-			continue
-		}
-		if err := os.WriteFile(dst, data, 0o644); err != nil {
-			return false, err
-		}
-		return true, db.SetWorkCover(workID, rel)
-	}
-	if _, err := os.Stat(dst); err == nil {
-		return true, db.SetWorkCover(workID, rel)
-	}
-	return false, nil
+		return nil
+	})
+	return applied, err
 }
 
 // fileSuffixArt returns the first existing Kodi/Plex-style per-file artwork
@@ -318,10 +326,15 @@ func importSuffixArt(db *store.DB, workID int64, mediaPath, coversDir string) (b
 	if err != nil {
 		return false, err
 	}
-	if err := os.WriteFile(dst, data, 0o644); err != nil {
-		return false, err
-	}
-	return true, db.SetWorkCover(workID, fmt.Sprintf("%d.jpg", workID))
+	var applied bool
+	err = assets.WithCoversLock(coversDir, false, func() error {
+		if err := os.WriteFile(dst, data, 0o644); err != nil {
+			return err
+		}
+		applied = true
+		return db.SetWorkCover(workID, fmt.Sprintf("%d.jpg", workID))
+	})
+	return applied, err
 }
 
 // importFanart copies folder fanart/backdrop or <base>-fanart.jpg to
@@ -355,5 +368,10 @@ func importFanart(workID int64, folder, mediaPath, coversDir string) {
 	if err != nil {
 		return
 	}
-	_ = os.WriteFile(dst, data, 0o644)
+	_ = assets.WithCoversLock(coversDir, false, func() error {
+		if fileOKMedia(dst) {
+			return nil
+		}
+		return os.WriteFile(dst, data, 0o644)
+	})
 }

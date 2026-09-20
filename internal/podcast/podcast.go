@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/libteca/libteca/internal/assets"
 	"github.com/libteca/libteca/internal/store"
 )
 
@@ -330,7 +331,11 @@ func (s *Service) DeletePodcast(id int64) error {
 		osRemove(path)
 	}
 	if rel := derefStr(p.CoverPath); rel != "" {
-		osRemove(filepath.Join(s.DataDir, "covers", rel))
+		covers := filepath.Join(s.DataDir, "covers")
+		_ = assets.WithCoversLock(covers, false, func() error {
+			osRemove(filepath.Join(covers, rel))
+			return nil
+		})
 	}
 	return nil
 }
@@ -420,8 +425,14 @@ func (s *Service) DeleteLibraryPodcasts(libID int64) error {
 	for _, path := range paths {
 		osRemove(path)
 	}
-	for _, cover := range covers {
-		osRemove(cover)
+	if len(covers) > 0 {
+		coverDir := filepath.Join(s.DataDir, "covers")
+		_ = assets.WithCoversLock(coverDir, false, func() error {
+			for _, cover := range covers {
+				osRemove(cover)
+			}
+			return nil
+		})
 	}
 	return nil
 }
@@ -492,10 +503,12 @@ func (s *Service) fetchCover(ctx context.Context, podcastID int64, url string) {
 		return
 	}
 	name := fmt.Sprintf("podcast-%d.jpg", podcastID)
-	if err := writeFile(filepath.Join(covers, name), data); err != nil {
-		return
-	}
-	s.DB.SetPodcastCover(podcastID, name)
+	_ = assets.WithCoversLock(covers, false, func() error {
+		if err := writeFile(filepath.Join(covers, name), data); err != nil {
+			return err
+		}
+		return s.DB.SetPodcastCover(podcastID, name)
+	})
 }
 
 func (s *Service) acquire(id int64) bool {

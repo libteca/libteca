@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/libteca/libteca/internal/assets"
 	"github.com/libteca/libteca/internal/store"
 )
 
@@ -278,10 +279,15 @@ func writeGameCover(db *store.DB, workID int64, d *gameDoc, coversDir string) er
 		if rerr != nil || len(data) == 0 {
 			continue
 		}
-		if werr := writeCoverFile(dst, data); werr != nil {
-			return nil
-		}
-		return db.SetWorkCover(workID, fmt.Sprintf("%d.jpg", workID))
+		return assets.WithCoversLock(coversDir, false, func() error {
+			if _, err := os.Stat(dst); err == nil {
+				return db.SetWorkCover(workID, fmt.Sprintf("%d.jpg", workID))
+			}
+			if werr := writeCoverFile(dst, data); werr != nil {
+				return nil
+			}
+			return db.SetWorkCover(workID, fmt.Sprintf("%d.jpg", workID))
+		})
 	}
 	return nil
 }
