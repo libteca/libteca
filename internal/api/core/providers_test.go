@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"image"
 	"image/jpeg"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -510,11 +512,14 @@ func TestDistributeChapterMath(t *testing.T) {
 		{Title: "C3", StartSec: 350, EndSec: 600},
 		{Title: "C4", StartSec: 600, EndSec: 620},
 	}
-	got := distributeChapterMath(durations, chapters)
+	got, err := distributeChapterMath(durations, chapters)
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := [][]fileChapter{
 		{{ID: 1, Start: 0, End: 100, Title: "C1"}},
-		{{ID: 2, Start: 50, End: 200, Title: "C2"}},
-		{{ID: 3, Start: 50, End: 300, Title: "C3"}},
+		{{ID: 1, Start: 0, End: 50, Title: "C1"}, {ID: 2, Start: 50, End: 200, Title: "C2"}},
+		{{ID: 2, Start: 0, End: 50, Title: "C2"}, {ID: 3, Start: 50, End: 300, Title: "C3"}},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("len = %d, want %d", len(got), len(want))
@@ -528,6 +533,12 @@ func TestDistributeChapterMath(t *testing.T) {
 				t.Errorf("file %d chapter %d = %+v, want %+v", i, j, got[i][j], want[i][j])
 			}
 		}
+	}
+	if _, err := distributeChapterMath([]float64{100, 0, 300}, chapters); err == nil {
+		t.Fatal("unknown file duration must be an error, not a guess")
+	}
+	if _, err := distributeChapterMath(durations, []meta.Chapter{{Title: "X", StartSec: 10, EndSec: 5}}); err == nil {
+		t.Fatal("inverted chapter interval must be an error")
 	}
 }
 
@@ -564,8 +575,8 @@ func TestApplyDistributesMultiFileChapters(t *testing.T) {
 	if got, want := fileChaptersByPath(t, db, "01.mp3"), `[{"id":1,"start":0,"end":100,"title":"Chapter 1"}]`; got != want {
 		t.Fatalf("01.mp3 chapters = %q, want %q", got, want)
 	}
-	if got, want := fileChaptersByPath(t, db, "02.mp3"), `[{"id":2,"start":50,"end":200,"title":"Chapter 2"}]`; got != want {
-		t.Fatalf("02.mp3 chapters = %q, want %q (filename-titled replaced)", got, want)
+	if got, want := fileChaptersByPath(t, db, "02.mp3"), `[{"id":1,"start":0,"end":50,"title":"Chapter 1"},{"id":2,"start":50,"end":200,"title":"Chapter 2"}]`; got != want {
+		t.Fatalf("02.mp3 chapters = %q, want %q (spanning chapter keeps its continuation)", got, want)
 	}
 	if got := fileChaptersByPath(t, db, "03.mp3"); !strings.Contains(got, "ffprobe") || strings.Contains(got, "Chapter 3") {
 		t.Fatalf("03.mp3 chapters clobbered: %q", got)
@@ -593,14 +604,14 @@ func TestApplyDistributesMultipleChaptersToOneFile(t *testing.T) {
 	_, body := callHandler(t, "POST", "/works/1/apply", strconv.FormatInt(workID, 10),
 		`{"provider":"audible","id":"B1"}`, a.applyMatch)
 	apply, _ := body["apply"].(map[string]any)
-	if apply["chapters"] != float64(1) {
-		t.Fatalf("apply summary = %v, want 1 (only the file holding chapter starts)", apply)
+	if apply["chapters"] != float64(2) {
+		t.Fatalf("apply summary = %v, want 2 (holder plus continuation)", apply)
 	}
 	if got, want := fileChaptersByPath(t, db, "a.mp3"), `[{"id":1,"start":0,"end":40,"title":"C1"},{"id":2,"start":40,"end":100,"title":"C2"}]`; got != want {
 		t.Fatalf("a.mp3 chapters = %q, want %q (end clamped to file duration)", got, want)
 	}
-	if got := fileChaptersByPath(t, db, "b.mp3"); got != "[]" {
-		t.Fatalf("b.mp3 chapters = %q, want untouched []", got)
+	if got, want := fileChaptersByPath(t, db, "b.mp3"), `[{"id":2,"start":0,"end":50,"title":"C2"}]`; got != want {
+		t.Fatalf("b.mp3 chapters = %q, want %q (spanning continuation)", got, want)
 	}
 }
 
@@ -830,4 +841,147 @@ func TestRefreshMetaEventsIdleAndTerminal(t *testing.T) {
 	if !strings.Contains(body, `"status":"done"`) {
 		t.Fatalf("finished run events = %s", body)
 	}
+}
+
+func TestMetaRunSubscribeFinishRace(t *testing.T) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 2000; i++ {
+			r := &metaRun{snap: metaSnap{Status: "running"}}
+			var wg sync.WaitGroup
+			wg.Add(2)
+			go func() { defer wg.Done(); r.publish(metaSnap{Status: "running", Matched: i}) }()
+			go func() { defer wg.Done(); r.finish(metaSnap{Status: "done", Total: i}) }()
+			ch := r.subscribe()
+			terminal := false
+			for s := range ch {
+				if s.Status != "running" {
+					terminal = true
+				}
+			}
+			if !terminal {
+				t.Errorf("iteration %d: subscriber saw no terminal snapshot", i)
+				return
+			}
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(20 * time.Second):
+		t.Fatal("race loop timed out")
+	}
+}
+
+func TestMetaRunFinishKeepsTerminalOnFullBuffer(t *testing.T) {
+	r := &metaRun{snap: metaSnap{Status: "running"}}
+	ch := r.subscribe()
+	for i := 0; i < 8; i++ {
+		r.publish(metaSnap{Status: "running", Matched: i})
+	}
+	r.finish(metaSnap{Status: "done", Total: 8})
+	terminal := false
+	for s := range ch {
+		if s.Status == "done" {
+			terminal = true
+		}
+	}
+	if !terminal {
+		t.Fatal("terminal snapshot dropped on a full subscriber buffer")
+	}
+}
+
+func TestApplyChaptersUnknownDurationWarns(t *testing.T) {
+	fp := &fakeProvider{
+		name: "audible",
+		kind: "audiobook",
+		fetchRes: &meta.Result{
+			Provider: "audible", ID: "B1", Title: "W",
+			Chapters: []meta.Chapter{{Title: "C1", StartSec: 0, EndSec: 150}},
+		},
+	}
+	a, db, libID := newMatchingAPI(t, "audiobooks", fp)
+	workID := addMultiFileWork(t, db, libID, "mp3", "W", []multiFile{
+		{name: "a.mp3", duration: 0, chapters: "[]"},
+		{name: "b.mp3", duration: 50, chapters: "[]"},
+	})
+	_, body := callHandler(t, "POST", "/works/1/apply", strconv.FormatInt(workID, 10),
+		`{"provider":"audible","id":"B1"}`, a.applyMatch)
+	apply, _ := body["apply"].(map[string]any)
+	warnings, _ := apply["warnings"].([]any)
+	found := false
+	for _, w := range warnings {
+		if s, ok := w.(string); ok && strings.Contains(s, "chapters") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("unknown-duration apply must surface a chapters warning: %v", apply)
+	}
+	if got := fileChaptersByPath(t, db, "a.mp3"); got != "[]" {
+		t.Fatalf("a.mp3 chapters = %q, want untouched [] on mapping failure", got)
+	}
+}
+
+func withUnrestrictedCoverClient(t *testing.T) {
+	t.Helper()
+	saved := coverHTTPClient
+	coverHTTPClient = &http.Client{Timeout: 5 * time.Second}
+	t.Cleanup(func() { coverHTTPClient = saved })
+}
+
+func TestDownloadCoverNormalizesToJPEG(t *testing.T) {
+	withUnrestrictedCoverClient(t)
+	a, db, libID := newMatchingAPI(t, "audiobooks")
+	workID := addMatchWork(t, db, libID, "W", "A", "[]")
+	png := renderTestPNG(t, 3, 2)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(png)
+	}))
+	t.Cleanup(srv.Close)
+	saved, err := a.downloadCover(context.Background(), workID, srv.URL)
+	if err != nil || !saved {
+		t.Fatalf("downloadCover = %v %v", saved, err)
+	}
+	data, err := os.ReadFile(filepath.Join(a.DataDir, "covers", fmt.Sprintf("%d.jpg", workID)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, format, err := image.Decode(bytes.NewReader(data)); err != nil || format != "jpeg" {
+		t.Fatalf("stored cover decodes as %q err %v, want jpeg at the .jpg path", format, err)
+	}
+	saved, err = a.downloadCover(context.Background(), workID, srv.URL)
+	if err != nil || !saved {
+		t.Fatalf("cached second download = %v %v", saved, err)
+	}
+}
+
+func TestDownloadCoverRejectsTruncatedImage(t *testing.T) {
+	withUnrestrictedCoverClient(t)
+	a, db, libID := newMatchingAPI(t, "audiobooks")
+	workID := addMatchWork(t, db, libID, "W", "A", "[]")
+	truncated := renderTestPNG(t, 4, 4)[:len(renderTestPNG(t, 4, 4))-12]
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(truncated)
+	}))
+	t.Cleanup(srv.Close)
+	if _, _, err := image.DecodeConfig(bytes.NewReader(truncated)); err != nil {
+		t.Fatalf("fixture must be header-valid: %v", err)
+	}
+	if _, err := a.downloadCover(context.Background(), workID, srv.URL); err == nil {
+		t.Fatal("header-valid truncated image must be rejected")
+	}
+	if _, err := os.Stat(filepath.Join(a.DataDir, "covers", fmt.Sprintf("%d.jpg", workID))); !os.IsNotExist(err) {
+		t.Fatal("rejected cover must not be published")
+	}
+}
+
+func renderTestPNG(t *testing.T, w, h int) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, image.NewNRGBA(image.Rect(0, 0, w, h))); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
 }

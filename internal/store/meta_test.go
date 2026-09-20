@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"fmt"
 	"path/filepath"
 	"strconv"
@@ -406,5 +407,38 @@ func TestPruneProviderCache(t *testing.T) {
 	}
 	if _, _, ok := db.GetCached("audible", "old2"); !ok {
 		t.Fatal("guard failed: row pruned within 24h of last prune")
+	}
+}
+
+func TestReplaceChaptersIfUnchanged(t *testing.T) {
+	db := openMetaTestDB(t)
+	libID, err := db.AddLibrary("books", "books", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	workID, err := db.UpsertWork(&Work{LibraryID: libID, Title: "W"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eid, err := db.UpsertEdition(&Edition{WorkID: workID, Format: "mp3", Title: "W"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := db.Exec(`INSERT INTO files (edition_id, path, seq, size_bytes, mtime_secs, duration_secs, chapters, probed_at) VALUES (?, 'a.mp3', 1, 1, 0, 10, '[]', 0)`, eid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fid, _ := res.LastInsertId()
+	swapped, err := db.ReplaceChaptersIfUnchanged(fid, sql.NullString{String: "[]", Valid: true}, `[{"id":1}]`)
+	if err != nil || !swapped {
+		t.Fatalf("first swap = %v %v", swapped, err)
+	}
+	swapped, err = db.ReplaceChaptersIfUnchanged(fid, sql.NullString{String: "[]", Valid: true}, `[{"id":2}]`)
+	if err != nil || swapped {
+		t.Fatalf("stale previous value must not swap: %v %v", swapped, err)
+	}
+	var stored string
+	if err := db.QueryRow(`SELECT chapters FROM files WHERE id = ?`, fid).Scan(&stored); err != nil || stored != `[{"id":1}]` {
+		t.Fatalf("stored = %q err %v, want the first swap preserved", stored, err)
 	}
 }

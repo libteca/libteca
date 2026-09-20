@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
 	"strconv"
 	"time"
@@ -121,6 +122,21 @@ func (d *DB) FillEmptyChapters(workID int64, chapters string) (int64, error) {
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+// ReplaceChaptersIfUnchanged swaps a file's chapters only when the stored
+// value is still the previously inspected one (null-safe compare). A
+// concurrent writer landing between the read and this call keeps its value;
+// swapped is false and must not be counted as a successful replacement.
+func (d *DB) ReplaceChaptersIfUnchanged(fileID int64, previous sql.NullString, replacement string) (bool, error) {
+	res, err := d.Exec(`UPDATE files SET chapters = ?
+		WHERE id = ? AND missing = 0 AND chapters IS ?`,
+		replacement, fileID, previous)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
 }
 
 // Genres live on works.genres as a JSON array (0008). Settings-KV rows

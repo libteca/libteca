@@ -3,15 +3,19 @@ package core
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"image"
+	"image/color"
+	"image/draw"
+	"image/jpeg"
 	_ "image/gif"
-	_ "image/jpeg"
 	_ "image/png"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -202,7 +206,9 @@ func (a *API) applyEpisodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if res, err := a.fetchResult(r.Context(), body.Provider, body.ID); err == nil && len(res.Genres) > 0 {
-		_ = a.DB.SetWorkGenres(id, res.Genres)
+		if err := a.DB.SetWorkGenres(id, res.Genres); err != nil {
+			slog.Warn("libteca: optional genre update failed", "work", id, "err", err)
+		}
 	}
 	updated, skipped, err := a.applyEpisodesToWork(r.Context(), id, body.Provider, body.ID)
 	if err != nil {
@@ -349,15 +355,28 @@ func (a *API) applyMatch(w http.ResponseWriter, r *http.Request) {
 // applyResult writes a fetched result into the work: description + provider
 // identity, cover download (house convention: covers/{workID}.jpg), Audible
 // chapters for audiobooks (only where empty/generic), genres for movies/tv.
+// Optional parts never fail the whole apply, but every failure is reported
+// as a warning so "nothing to apply" stays distinguishable from "failed to
+// apply".
 func (a *API) applyResult(ctx context.Context, w *store.Work, libType string, res *meta.Result) (map[string]any, error) {
 	if err := a.DB.ApplyWorkMeta(w.ID, res.Description, res.Provider, res.ID); err != nil {
 		return nil, err
 	}
 	summary := map[string]any{"cover": false, "chapters": int64(0), "genres": 0, "episodes": 0}
+	recordPart := func(part string, apply func() (int64, error)) {
+		n, err := apply()
+		if err == nil {
+			summary[part] = n
+			return
+		}
+		slog.Warn("libteca: optional metadata application failed", "part", part, "work", w.ID, "err", err)
+		warnings, _ := summary["warnings"].([]string)
+		summary["warnings"] = append(warnings, part+" could not be applied")
+	}
 	if res.CoverURL != "" && (w.CoverPath == nil || *w.CoverPath == "") {
 		saved, cerr := a.downloadCover(ctx, w.ID, res.CoverURL)
 		if cerr != nil {
-			slog.Warn("libteca: metadata cover download failed", "work", w.ID)
+			slog.Warn("libteca: metadata cover download failed", "work", w.ID, "err", cerr)
 			summary["coverWarning"] = "cover download failed"
 		}
 		if cerr == nil && saved {
@@ -369,17 +388,21 @@ func (a *API) applyResult(ctx context.Context, w *store.Work, libType string, re
 	}
 	kind := kindForLibrary(libType)
 	if kind == "audiobook" && len(res.Chapters) > 0 {
-		summary["chapters"] = a.applyChapters(w.ID, res.Chapters)
+		recordPart("chapters", func() (int64, error) { return a.applyChapters(w.ID, res.Chapters) })
 	}
 	if (kind == "movie" || kind == "tv") && len(res.Genres) > 0 {
-		if err := a.DB.SetWorkGenres(w.ID, res.Genres); err == nil {
-			summary["genres"] = len(res.Genres)
-		}
+		recordPart("genres", func() (int64, error) {
+			if err := a.DB.SetWorkGenres(w.ID, res.Genres); err != nil {
+				return 0, err
+			}
+			return int64(len(res.Genres)), nil
+		})
 	}
 	if kind == "tv" && res.Provider != "" && res.ID != "" {
-		if n, _, err := a.applyEpisodesToWork(ctx, w.ID, res.Provider, res.ID); err == nil {
-			summary["episodes"] = n
-		}
+		recordPart("episodes", func() (int64, error) {
+			n, _, err := a.applyEpisodesToWork(ctx, w.ID, res.Provider, res.ID)
+			return int64(n), err
+		})
 	}
 	return summary, nil
 }
@@ -387,39 +410,46 @@ func (a *API) applyResult(ctx context.Context, w *store.Work, libType string, re
 // applyChapters writes Audible chapters to the work's editions: single-file
 // m4b editions get the full timeline via FillEmptyChapters (empty only);
 // multi-file editions get distributeChapters. Returns files written.
-func (a *API) applyChapters(workID int64, chapters []meta.Chapter) int64 {
+func (a *API) applyChapters(workID int64, chapters []meta.Chapter) (int64, error) {
 	var written int64
 	full := make([]fileChapter, len(chapters))
 	for i, c := range chapters {
 		full[i] = fileChapter{ID: int64(i + 1), Start: c.StartSec, End: c.EndSec, Title: c.Title}
 	}
-	if b, err := json.Marshal(full); err == nil {
-		if n, err := a.DB.FillEmptyChapters(workID, string(b)); err == nil {
-			written += n
-		}
+	b, err := json.Marshal(full)
+	if err != nil {
+		return 0, err
 	}
-	return written + a.distributeChapters(workID, chapters)
+	n, err := a.DB.FillEmptyChapters(workID, string(b))
+	if err != nil {
+		return written, err
+	}
+	written += n
+	dn, err := a.distributeChapters(workID, chapters)
+	return written + dn, err
 }
 
 type chapterFileRow struct {
 	id       int64
 	path     string
 	duration float64
-	chapters string
+	chapters sql.NullString
 }
 
 // distributeChapters spreads provider chapters across the files of every
 // multi-file edition of the work by cumulative duration. Per-file chapter
-// JSON is written only where the existing chapters are empty or generic
-// (filename-titled) — ffprobe titles are never clobbered.
-func (a *API) distributeChapters(workID int64, chapters []meta.Chapter) int64 {
+// JSON is written only where the existing chapters are still the empty or
+// generic (filename-titled) value that was inspected — the update is a
+// compare-and-swap, so a concurrent scanner/provider write of authoritative
+// titles between read and write is preserved, never clobbered.
+func (a *API) distributeChapters(workID int64, chapters []meta.Chapter) (int64, error) {
 	rows, err := a.DB.Query(`SELECT f.id, f.edition_id, f.path, f.duration_secs, f.chapters
 		FROM files f
 		JOIN editions e ON e.id = f.edition_id
 		WHERE e.work_id = ? AND f.missing = 0
 		ORDER BY f.edition_id, f.seq, f.path`, workID)
 	if err != nil {
-		return 0
+		return 0, err
 	}
 	editions := map[int64][]chapterFileRow{}
 	var order []int64
@@ -428,14 +458,20 @@ func (a *API) distributeChapters(workID int64, chapters []meta.Chapter) int64 {
 		var f chapterFileRow
 		if err := rows.Scan(&f.id, &edID, &f.path, &f.duration, &f.chapters); err != nil {
 			rows.Close()
-			return 0
+			return 0, err
 		}
 		if _, seen := editions[edID]; !seen {
 			order = append(order, edID)
 		}
 		editions[edID] = append(editions[edID], f)
 	}
-	rows.Close()
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
 	var written int64
 	for _, edID := range order {
 		files := editions[edID]
@@ -446,51 +482,69 @@ func (a *API) distributeChapters(workID int64, chapters []meta.Chapter) int64 {
 		for i, f := range files {
 			durations[i] = f.duration
 		}
-		perFile := distributeChapterMath(durations, chapters)
+		perFile, err := distributeChapterMath(durations, chapters)
+		if err != nil {
+			return written, fmt.Errorf("edition %d: %w", edID, err)
+		}
 		for i, f := range files {
-			if len(perFile[i]) == 0 || !genericChapters(f.path, f.chapters) {
+			if len(perFile[i]) == 0 || !genericChapters(f.path, f.chapters.String) {
 				continue
 			}
-			if b, err := json.Marshal(perFile[i]); err == nil {
-				if _, err := a.DB.Exec(`UPDATE files SET chapters = ? WHERE id = ? AND missing = 0`, string(b), f.id); err == nil {
-					written++
-				}
+			b, err := json.Marshal(perFile[i])
+			if err != nil {
+				return written, err
+			}
+			swapped, err := a.DB.ReplaceChaptersIfUnchanged(f.id, f.chapters, string(b))
+			if err != nil {
+				return written, err
+			}
+			if swapped {
+				written++
 			}
 		}
 	}
-	return written
+	return written, nil
 }
 
-// distributeChapterMath assigns each chapter to the file whose cumulative
-// duration range contains its start, converting start/end to file-relative
-// coordinates clamped to that file's duration. Chapters starting at or past
-// the edition total (or collapsing to nothing) are dropped.
-func distributeChapterMath(durations []float64, chapters []meta.Chapter) [][]fileChapter {
-	out := make([][]fileChapter, len(durations))
-	for idx, c := range chapters {
-		base := 0.0
-		at, offset := -1, 0.0
-		for i, d := range durations {
-			if c.StartSec >= base && c.StartSec < base+d {
-				at, offset = i, base
-				break
-			}
-			base += d
+// distributeChapterMath intersects each edition-wide chapter interval with
+// every file interval, preserving the chapter's identity and title across
+// the continuation, so a chapter spanning two files keeps its part in the
+// second file instead of losing it to the first file's boundary. Unknown
+// (non-positive or non-finite) file durations make the offsets unknowable;
+// that is an error, not a guess.
+func distributeChapterMath(durations []float64, chapters []meta.Chapter) ([][]fileChapter, error) {
+	finite := func(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
+	for _, d := range durations {
+		if !finite(d) || d <= 0 {
+			return nil, fmt.Errorf("cannot map chapters across an unknown file duration")
 		}
-		if at < 0 || durations[at] <= 0 {
-			continue
-		}
-		start := c.StartSec - offset
-		end := c.EndSec - offset
-		if end > durations[at] {
-			end = durations[at]
-		}
-		if end <= start {
-			continue
-		}
-		out[at] = append(out[at], fileChapter{ID: int64(idx + 1), Start: start, End: end, Title: c.Title})
 	}
-	return out
+	for _, c := range chapters {
+		if !finite(c.StartSec) || !finite(c.EndSec) || c.StartSec < 0 || c.EndSec <= c.StartSec {
+			return nil, fmt.Errorf("invalid provider chapter interval")
+		}
+	}
+	out := make([][]fileChapter, len(durations))
+	base := 0.0
+	for fileIndex, duration := range durations {
+		endOfFile := base + duration
+		if !finite(endOfFile) {
+			return nil, fmt.Errorf("edition duration overflow")
+		}
+		for chapterIndex, c := range chapters {
+			lo := math.Max(base, c.StartSec)
+			hi := math.Min(endOfFile, c.EndSec)
+			if hi <= lo {
+				continue
+			}
+			out[fileIndex] = append(out[fileIndex], fileChapter{
+				ID: int64(chapterIndex + 1), Title: c.Title,
+				Start: lo - base, End: hi - base,
+			})
+		}
+		base = endOfFile
+	}
+	return out, nil
 }
 
 // genericChapters reports whether a file's stored chapters are safe to
@@ -519,6 +573,12 @@ func genericChapters(path, stored string) bool {
 
 var coverHTTPClient = podcast.EgressGuardedClient(coverTimeout)
 
+// downloadCover fetches, fully decodes and normalizes a work cover to JPEG.
+// DecodeConfig alone accepted header-valid truncated payloads, and PNG/GIF
+// bytes were stored under the .jpg name every consumer assumes; the stored
+// file is now always complete, decodable JPEG at the .jpg path, published
+// crash-durably (file fsync, rename, directory fsync) before the caller
+// commits the database reference.
 func (a *API) downloadCover(ctx context.Context, workID int64, url string) (bool, error) {
 	dir := filepath.Join(a.DataDir, "covers")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -564,26 +624,50 @@ func (a *API) downloadCover(ctx context.Context, workID int64, url string) (bool
 	if format != "jpeg" && format != "png" && format != "gif" {
 		return false, fmt.Errorf("cover download: unsupported image format %q", format)
 	}
+	img, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return false, fmt.Errorf("cover download: incomplete or invalid image: %w", err)
+	}
+	bounds := img.Bounds()
+	if bounds.Dx() <= 0 || bounds.Dy() <= 0 || int64(bounds.Dx())*int64(bounds.Dy()) > 16_000_000 {
+		return false, fmt.Errorf("cover download: decoded dimensions exceed budget")
+	}
+	canvas := image.NewRGBA(bounds)
+	draw.Draw(canvas, bounds, image.NewUniform(color.White), image.Point{}, draw.Src)
+	draw.Draw(canvas, bounds, img, bounds.Min, draw.Over)
+	return true, publishJPEG(dir, dst, canvas)
+}
+
+func publishJPEG(dir, destination string, img image.Image) error {
 	tmp, err := os.CreateTemp(dir, ".cover-*")
 	if err != nil {
-		return false, err
+		return err
 	}
-	tmpName := tmp.Name()
-	_, werr := tmp.Write(data)
-	if werr == nil {
-		werr = tmp.Close()
-	} else {
-		tmp.Close()
+	name := tmp.Name()
+	err = jpeg.Encode(tmp, img, &jpeg.Options{Quality: 90})
+	if err == nil {
+		err = tmp.Sync()
 	}
-	if werr != nil {
-		os.Remove(tmpName)
-		return false, werr
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
 	}
-	if err := os.Rename(tmpName, dst); err != nil {
-		os.Remove(tmpName)
-		return false, err
+	if err == nil {
+		err = os.Rename(name, destination)
 	}
-	return true, nil
+	if err != nil {
+		os.Remove(name)
+		return err
+	}
+	d, derr := os.Open(dir)
+	if derr != nil {
+		return derr
+	}
+	serr := d.Sync()
+	cerr := d.Close()
+	if serr != nil {
+		return serr
+	}
+	return cerr
 }
 
 func (a *API) skipWork(w http.ResponseWriter, r *http.Request) {
@@ -646,6 +730,9 @@ type metaRun struct {
 func (r *metaRun) publish(s metaSnap) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.closed {
+		return
+	}
 	r.snap = s
 	for ch := range r.subs {
 		select {
@@ -661,13 +748,17 @@ func (r *metaRun) snapshot() metaSnap {
 	return r.snap
 }
 
+// subscribe registers under the same lock that governs closure and sends
+// the initial snapshot while still holding it: finish can never close the
+// channel between registration and the initial send, so the old
+// unlock-then-send window (send on closed channel) is gone. A fresh
+// buffered channel of size 8 cannot block on that first send.
 func (r *metaRun) subscribe() chan metaSnap {
 	ch := make(chan metaSnap, 8)
 	r.mu.Lock()
-	s := r.snap
+	defer r.mu.Unlock()
+	ch <- r.snap
 	if r.closed {
-		r.mu.Unlock()
-		ch <- s
 		close(ch)
 		return ch
 	}
@@ -675,8 +766,6 @@ func (r *metaRun) subscribe() chan metaSnap {
 		r.subs = map[chan metaSnap]struct{}{}
 	}
 	r.subs[ch] = struct{}{}
-	r.mu.Unlock()
-	ch <- s
 	return ch
 }
 
@@ -686,20 +775,31 @@ func (r *metaRun) unsubscribe(ch chan metaSnap) {
 	delete(r.subs, ch)
 }
 
+// finish publishes and closes under the lock. The terminal snapshot is
+// never dropped: a full subscriber buffer gives up one obsolete running
+// event instead (no publisher can refill while this lock is held, so the
+// follow-up send always has room).
 func (r *metaRun) finish(s metaSnap) {
 	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return
+	}
 	r.snap = s
 	r.closed = true
-	subs := r.subs
-	r.subs = nil
-	r.mu.Unlock()
-	for ch := range subs {
+	for ch := range r.subs {
 		select {
 		case ch <- s:
 		default:
+			select {
+			case <-ch:
+			default:
+			}
+			ch <- s
 		}
 		close(ch)
 	}
+	r.subs = nil
 }
 
 // refreshMeta starts a background match pass over the library inbox.
