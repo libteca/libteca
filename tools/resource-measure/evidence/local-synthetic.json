@@ -1,0 +1,883 @@
+{
+  "archives": [
+    {
+      "case": "cbz-flat",
+      "extraction": {
+        "concurrent_jobs_requested": 1,
+        "disk_samples": 4,
+        "final_workspace_disk": {
+          "allocated_file_bytes": 110592,
+          "logical_file_bytes": 80828,
+          "regular_files": 17
+        },
+        "jobs": [
+          {
+            "child_peak_rss_bytes": 13631488,
+            "child_system_cpu_seconds": 0.012567,
+            "child_user_cpu_seconds": 0.029193999999999998,
+            "exit_code": 0,
+            "stderr": "logs/cbz-flat-extraction-0.err",
+            "stdout": "logs/cbz-flat-extraction-0.out",
+            "timed_out": false,
+            "wall_seconds": 0.06210444400130655
+          }
+        ],
+        "sampled_aggregate_child_rss_peak_bytes": 10563584,
+        "sampled_live_children_peak": 1,
+        "sampled_peak_workspace_disk": {
+          "allocated_file_bytes": 110592,
+          "logical_file_bytes": 80828,
+          "regular_files": 17
+        },
+        "wall_seconds": 0.06284557800245238
+      },
+      "generation": {
+        "concurrent_jobs_requested": 1,
+        "disk_samples": 8,
+        "final_workspace_disk": {
+          "allocated_file_bytes": 8192,
+          "logical_file_bytes": 3352,
+          "regular_files": 3
+        },
+        "jobs": [
+          {
+            "child_peak_rss_bytes": 13762560,
+            "child_system_cpu_seconds": 0.003985,
+            "child_user_cpu_seconds": 0.137352,
+            "exit_code": 0,
+            "stderr": "logs/cbz-flat-generation-0.err",
+            "stdout": "logs/cbz-flat-generation-0.out",
+            "timed_out": false,
+            "wall_seconds": 0.14330029800112243
+          }
+        ],
+        "sampled_aggregate_child_rss_peak_bytes": 13766656,
+        "sampled_live_children_peak": 1,
+        "sampled_peak_workspace_disk": {
+          "allocated_file_bytes": 8192,
+          "logical_file_bytes": 3352,
+          "regular_files": 3
+        },
+        "wall_seconds": 0.1438863580006
+      },
+      "metrics": {
+        "actual_extracted_bytes": 76630,
+        "archive_bytes": 3214,
+        "archive_sha256": "d0987a4536869a1d462eca13d9ccd50fad041060e5267da98ede772df05383db",
+        "declared_extracted_bytes": 76630,
+        "decoded_rgba_all_images_estimate_bytes": 46080000,
+        "extraction_to_archive_ratio": 23.842563783447417,
+        "image_count": 12,
+        "largest_extracted_entry_bytes": 6386,
+        "largest_image_pixels": 960000,
+        "modeled_three_image_blob_retention_peak_bytes": 19158,
+        "modeled_three_image_rgba_retention_peak_bytes": 11520000,
+        "retained_extracted_disk": {
+          "allocated_file_bytes": 98304,
+          "logical_file_bytes": 76630,
+          "regular_files": 12
+        },
+        "streamed_extraction_seconds": 0.0008665220011607744,
+        "zip_central_directory_bytes": 708,
+        "zip_compressed_payload_bytes": 1968,
+        "zip_entry_count": 12,
+        "zip_listing_seconds": 0.00036592999822460115
+      }
+    },
+    {
+      "case": "cbz-noise",
+      "extraction": {
+        "concurrent_jobs_requested": 1,
+        "disk_samples": 4,
+        "final_workspace_disk": {
+          "allocated_file_bytes": 22278144,
+          "logical_file_bytes": 22223316,
+          "regular_files": 28
+        },
+        "jobs": [
+          {
+            "child_peak_rss_bytes": 13836288,
+            "child_system_cpu_seconds": 0.004036,
+            "child_user_cpu_seconds": 0.052149999999999995,
+            "exit_code": 0,
+            "stderr": "logs/cbz-noise-extraction-0.err",
+            "stdout": "logs/cbz-noise-extraction-0.out",
+            "timed_out": false,
+            "wall_seconds": 0.06261137099863845
+          }
+        ],
+        "sampled_aggregate_child_rss_peak_bytes": 13856768,
+        "sampled_live_children_peak": 1,
+        "sampled_peak_workspace_disk": {
+          "allocated_file_bytes": 22278144,
+          "logical_file_bytes": 22223316,
+          "regular_files": 28
+        },
+        "wall_seconds": 0.06367385799967451
+      },
+      "generation": {
+        "concurrent_jobs_requested": 1,
+        "disk_samples": 29,
+        "final_workspace_disk": {
+          "allocated_file_bytes": 11190272,
+          "logical_file_bytes": 11153723,
+          "regular_files": 20
+        },
+        "jobs": [
+          {
+            "child_peak_rss_bytes": 21422080,
+            "child_system_cpu_seconds": 0.023738,
+            "child_user_cpu_seconds": 0.540183,
+            "exit_code": 0,
+            "stderr": "logs/cbz-noise-generation-0.err",
+            "stdout": "logs/cbz-noise-generation-0.out",
+            "timed_out": false,
+            "wall_seconds": 0.5795984130018041
+          }
+        ],
+        "sampled_aggregate_child_rss_peak_bytes": 21168128,
+        "sampled_live_children_peak": 1,
+        "sampled_peak_workspace_disk": {
+          "allocated_file_bytes": 11190272,
+          "logical_file_bytes": 11153723,
+          "regular_files": 20
+        },
+        "wall_seconds": 0.5804859370000486
+      },
+      "metrics": {
+        "actual_extracted_bytes": 11068728,
+        "archive_bytes": 11072752,
+        "archive_sha256": "7b9f55ad6f5d820136ba5c41c8e26a65e93e71a321637b5332e25ba07cece54b",
+        "declared_extracted_bytes": 11068728,
+        "decoded_rgba_all_images_estimate_bytes": 14745600,
+        "extraction_to_archive_ratio": 0.9996365853764267,
+        "image_count": 6,
+        "largest_extracted_entry_bytes": 1844788,
+        "largest_image_pixels": 614400,
+        "modeled_three_image_blob_retention_peak_bytes": 5534364,
+        "modeled_three_image_rgba_retention_peak_bytes": 7372800,
+        "retained_extracted_disk": {
+          "allocated_file_bytes": 11083776,
+          "logical_file_bytes": 11068728,
+          "regular_files": 6
+        },
+        "streamed_extraction_seconds": 0.01071792299990193,
+        "zip_central_directory_bytes": 354,
+        "zip_compressed_payload_bytes": 11072118,
+        "zip_entry_count": 6,
+        "zip_listing_seconds": 0.00033852900014608167
+      }
+    },
+    {
+      "case": "cbz-large-pixels",
+      "extraction": {
+        "concurrent_jobs_requested": 1,
+        "disk_samples": 3,
+        "final_workspace_disk": {
+          "allocated_file_bytes": 22351872,
+          "logical_file_bytes": 22285275,
+          "regular_files": 34
+        },
+        "jobs": [
+          {
+            "child_peak_rss_bytes": 13631488,
+            "child_system_cpu_seconds": 0.004438999999999999,
+            "child_user_cpu_seconds": 0.037682,
+            "exit_code": 0,
+            "stderr": "logs/cbz-large-pixels-extraction-0.err",
+            "stdout": "logs/cbz-large-pixels-extraction-0.out",
+            "timed_out": false,
+            "wall_seconds": 0.04224074900048436
+          }
+        ],
+        "sampled_aggregate_child_rss_peak_bytes": 10346496,
+        "sampled_live_children_peak": 1,
+        "sampled_peak_workspace_disk": {
+          "allocated_file_bytes": 22351872,
+          "logical_file_bytes": 22285275,
+          "regular_files": 34
+        },
+        "wall_seconds": 0.043681864997779485
+      },
+      "generation": {
+        "concurrent_jobs_requested": 1,
+        "disk_samples": 10,
+        "final_workspace_disk": {
+          "allocated_file_bytes": 22286336,
+          "logical_file_bytes": 22224230,
+          "regular_files": 31
+        },
+        "jobs": [
+          {
+            "child_peak_rss_bytes": 14024704,
+            "child_system_cpu_seconds": 0.003971,
+            "child_user_cpu_seconds": 0.16706,
+            "exit_code": 0,
+            "stderr": "logs/cbz-large-pixels-generation-0.err",
+            "stdout": "logs/cbz-large-pixels-generation-0.out",
+            "timed_out": false,
+            "wall_seconds": 0.18832833200212917
+          }
+        ],
+        "sampled_aggregate_child_rss_peak_bytes": 13922304,
+        "sampled_live_children_peak": 1,
+        "sampled_peak_workspace_disk": {
+          "allocated_file_bytes": 22286336,
+          "logical_file_bytes": 22224230,
+          "regular_files": 31
+        },
+        "wall_seconds": 0.18963225200059242
+      },
+      "metrics": {
+        "actual_extracted_bytes": 60203,
+        "archive_bytes": 769,
+        "archive_sha256": "22c06346f2c78ddfc7e85e0aece0964d5cf4a6ca41785749e0e79e709847c03f",
+        "declared_extracted_bytes": 60203,
+        "decoded_rgba_all_images_estimate_bytes": 67108864,
+        "extraction_to_archive_ratio": 78.28738621586476,
+        "image_count": 1,
+        "largest_extracted_entry_bytes": 60203,
+        "largest_image_pixels": 16777216,
+        "modeled_three_image_blob_retention_peak_bytes": 60203,
+        "modeled_three_image_rgba_retention_peak_bytes": 67108864,
+        "retained_extracted_disk": {
+          "allocated_file_bytes": 61440,
+          "logical_file_bytes": 60203,
+          "regular_files": 1
+        },
+        "streamed_extraction_seconds": 0.0002838870022969786,
+        "zip_central_directory_bytes": 59,
+        "zip_compressed_payload_bytes": 645,
+        "zip_entry_count": 1,
+        "zip_listing_seconds": 0.00035009600105695426
+      }
+    },
+    {
+      "case": "zip-expansion",
+      "extraction": {
+        "concurrent_jobs_requested": 1,
+        "disk_samples": 4,
+        "final_workspace_disk": {
+          "allocated_file_bytes": 30760960,
+          "logical_file_bytes": 30683131,
+          "regular_files": 40
+        },
+        "jobs": [
+          {
+            "child_peak_rss_bytes": 13762560,
+            "child_system_cpu_seconds": 0.016301,
+            "child_user_cpu_seconds": 0.0443,
+            "exit_code": 0,
+            "stderr": "logs/zip-expansion-extraction-0.err",
+            "stdout": "logs/zip-expansion-extraction-0.out",
+            "timed_out": false,
+            "wall_seconds": 0.06357328699959908
+          }
+        ],
+        "sampled_aggregate_child_rss_peak_bytes": 13766656,
+        "sampled_live_children_peak": 1,
+        "sampled_peak_workspace_disk": {
+          "allocated_file_bytes": 30760960,
+          "logical_file_bytes": 30683131,
+          "regular_files": 40
+        },
+        "wall_seconds": 0.06502087300032144
+      },
+      "generation": {
+        "concurrent_jobs_requested": 1,
+        "disk_samples": 4,
+        "final_workspace_disk": {
+          "allocated_file_bytes": 22368256,
+          "logical_file_bytes": 22293697,
+          "regular_files": 37
+        },
+        "jobs": [
+          {
+            "child_peak_rss_bytes": 13762560,
+            "child_system_cpu_seconds": 0.003711,
+            "child_user_cpu_seconds": 0.056658999999999994,
+            "exit_code": 0,
+            "stderr": "logs/zip-expansion-generation-0.err",
+            "stdout": "logs/zip-expansion-generation-0.out",
+            "timed_out": false,
+            "wall_seconds": 0.06373890599934384
+          }
+        ],
+        "sampled_aggregate_child_rss_peak_bytes": 13815808,
+        "sampled_live_children_peak": 1,
+        "sampled_peak_workspace_disk": {
+          "allocated_file_bytes": 22368256,
+          "logical_file_bytes": 22293697,
+          "regular_files": 37
+        },
+        "wall_seconds": 0.06523927699890919
+      },
+      "metrics": {
+        "actual_extracted_bytes": 8388608,
+        "archive_bytes": 8279,
+        "archive_sha256": "bb02261ddf9d321ca262df90c81fb35ed71be2fee4bf8e07589a21be2e8aa964",
+        "declared_extracted_bytes": 8388608,
+        "decoded_rgba_all_images_estimate_bytes": 0,
+        "extraction_to_archive_ratio": 1013.239280106293,
+        "image_count": 0,
+        "largest_extracted_entry_bytes": 8388608,
+        "largest_image_pixels": 0,
+        "modeled_three_image_blob_retention_peak_bytes": 0,
+        "modeled_three_image_rgba_retention_peak_bytes": 0,
+        "retained_extracted_disk": {
+          "allocated_file_bytes": 8388608,
+          "logical_file_bytes": 8388608,
+          "regular_files": 1
+        },
+        "streamed_extraction_seconds": 0.02010601499932818,
+        "zip_central_directory_bytes": 58,
+        "zip_compressed_payload_bytes": 8157,
+        "zip_entry_count": 1,
+        "zip_listing_seconds": 0.0003124599970760755
+      }
+    },
+    {
+      "case": "zip-directory",
+      "extraction": {
+        "concurrent_jobs_requested": 1,
+        "disk_samples": 8,
+        "final_workspace_disk": {
+          "allocated_file_bytes": 30998528,
+          "logical_file_bytes": 30909370,
+          "regular_files": 2093
+        },
+        "jobs": [
+          {
+            "child_peak_rss_bytes": 14811136,
+            "child_system_cpu_seconds": 0.07207,
+            "child_user_cpu_seconds": 0.13347799999999999,
+            "exit_code": 0,
+            "stderr": "logs/zip-directory-extraction-0.err",
+            "stdout": "logs/zip-directory-extraction-0.out",
+            "timed_out": false,
+            "wall_seconds": 0.2188685470027849
+          }
+        ],
+        "sampled_aggregate_child_rss_peak_bytes": 14852096,
+        "sampled_live_children_peak": 1,
+        "sampled_peak_workspace_disk": {
+          "allocated_file_bytes": 30998528,
+          "logical_file_bytes": 30909370,
+          "regular_files": 2093
+        },
+        "wall_seconds": 0.24576350700226612
+      },
+      "generation": {
+        "concurrent_jobs_requested": 1,
+        "disk_samples": 7,
+        "final_workspace_disk": {
+          "allocated_file_bytes": 30994432,
+          "logical_file_bytes": 30908578,
+          "regular_files": 43
+        },
+        "jobs": [
+          {
+            "child_peak_rss_bytes": 14286848,
+            "child_system_cpu_seconds": 0.038742,
+            "child_user_cpu_seconds": 0.072474,
+            "exit_code": 0,
+            "stderr": "logs/zip-directory-generation-0.err",
+            "stdout": "logs/zip-directory-generation-0.out",
+            "timed_out": false,
+            "wall_seconds": 0.12837758600289817
+          }
+        ],
+        "sampled_aggregate_child_rss_peak_bytes": 14315520,
+        "sampled_live_children_peak": 1,
+        "sampled_peak_workspace_disk": {
+          "allocated_file_bytes": 30994432,
+          "logical_file_bytes": 30908578,
+          "regular_files": 43
+        },
+        "wall_seconds": 0.13013063100152067
+      },
+      "metrics": {
+        "actual_extracted_bytes": 0,
+        "archive_bytes": 225302,
+        "archive_sha256": "2d6563c110344eb759b4aa5b5d9553b50b10de4e52d33a456d2037a208de9686",
+        "declared_extracted_bytes": 0,
+        "decoded_rgba_all_images_estimate_bytes": 0,
+        "extraction_to_archive_ratio": 0.0,
+        "image_count": 0,
+        "largest_extracted_entry_bytes": 0,
+        "largest_image_pixels": 0,
+        "modeled_three_image_blob_retention_peak_bytes": 0,
+        "modeled_three_image_rgba_retention_peak_bytes": 0,
+        "retained_extracted_disk": {
+          "allocated_file_bytes": 0,
+          "logical_file_bytes": 0,
+          "regular_files": 2048
+        },
+        "streamed_extraction_seconds": 0.1274836709999363,
+        "zip_central_directory_bytes": 126976,
+        "zip_compressed_payload_bytes": 4096,
+        "zip_entry_count": 2048,
+        "zip_listing_seconds": 0.007347896000283072
+      }
+    },
+    {
+      "case": "epub-text",
+      "extraction": {
+        "concurrent_jobs_requested": 1,
+        "disk_samples": 2,
+        "final_workspace_disk": {
+          "allocated_file_bytes": 32153600,
+          "logical_file_bytes": 31990976,
+          "regular_files": 2119
+        },
+        "jobs": [
+          {
+            "child_peak_rss_bytes": 14360576,
+            "child_system_cpu_seconds": 0.003671,
+            "child_user_cpu_seconds": 0.038401,
+            "exit_code": 0,
+            "stderr": "logs/epub-text-extraction-0.err",
+            "stdout": "logs/epub-text-extraction-0.out",
+            "timed_out": false,
+            "wall_seconds": 0.0724597359985637
+          }
+        ],
+        "sampled_aggregate_child_rss_peak_bytes": 11894784,
+        "sampled_live_children_peak": 1,
+        "sampled_peak_workspace_disk": {
+          "allocated_file_bytes": 32153600,
+          "logical_file_bytes": 31990976,
+          "regular_files": 2119
+        },
+        "wall_seconds": 0.12489667200134136
+      },
+      "generation": {
+        "concurrent_jobs_requested": 1,
+        "disk_samples": 2,
+        "final_workspace_disk": {
+          "allocated_file_bytes": 31014912,
+          "logical_file_bytes": 30919476,
+          "regular_files": 2096
+        },
+        "jobs": [
+          {
+            "child_peak_rss_bytes": 14024704,
+            "child_system_cpu_seconds": 0.016042999999999998,
+            "child_user_cpu_seconds": 0.02795,
+            "exit_code": 0,
+            "stderr": "logs/epub-text-generation-0.err",
+            "stdout": "logs/epub-text-generation-0.out",
+            "timed_out": false,
+            "wall_seconds": 0.07866319599997951
+          }
+        ],
+        "sampled_aggregate_child_rss_peak_bytes": 12595200,
+        "sampled_live_children_peak": 1,
+        "sampled_peak_workspace_disk": {
+          "allocated_file_bytes": 31014912,
+          "logical_file_bytes": 30919476,
+          "regular_files": 2096
+        },
+        "wall_seconds": 0.13154447600027197
+      },
+      "metrics": {
+        "actual_extracted_bytes": 1070669,
+        "archive_bytes": 9967,
+        "archive_sha256": "f92f452e080e8c9d9c4c5b1b046a3471c68e01e8f50984c0bb954cc8abc07b66",
+        "declared_extracted_bytes": 1070669,
+        "decoded_rgba_all_images_estimate_bytes": 0,
+        "extraction_to_archive_ratio": 107.42139058894351,
+        "image_count": 0,
+        "largest_extracted_entry_bytes": 66709,
+        "largest_image_pixels": 0,
+        "modeled_three_image_blob_retention_peak_bytes": 0,
+        "modeled_three_image_rgba_retention_peak_bytes": 0,
+        "retained_extracted_disk": {
+          "allocated_file_bytes": 1134592,
+          "logical_file_bytes": 1070669,
+          "regular_files": 21
+        },
+        "streamed_extraction_seconds": 0.003219379999791272,
+        "zip_central_directory_bytes": 1395,
+        "zip_compressed_payload_bytes": 7491,
+        "zip_entry_count": 21,
+        "zip_listing_seconds": 0.00038176399903022684
+      }
+    }
+  ],
+  "cleanup_verified": true,
+  "environment": {
+    "architecture": "x86_64",
+    "ffmpeg": "ffmpeg version 7.1.5-0+deb13u1 Copyright (c) 2000-2026 the FFmpeg developers",
+    "os": "Linux",
+    "python": "3.12.14"
+  },
+  "final_workspace_disk": {
+    "allocated_file_bytes": 36192256,
+    "logical_file_bytes": 35963938,
+    "regular_files": 2160
+  },
+  "harness": {
+    "archive_extraction_chunk_bytes": 65536,
+    "max_concurrent_media_jobs": 2,
+    "max_generated_entries": 4096,
+    "max_generated_expanded_bytes": 33554432,
+    "sample_interval_seconds": 0.02,
+    "script_sha256": "a6062d859b8e28461e4a852d05396b3646c455fa0f2c288f8d168480a139194b",
+    "stage_timeout_seconds": 45
+  },
+  "measured_at_utc": "2026-10-03T00:25:24.341745+00:00",
+  "media": {
+    "generation": {
+      "concurrent_jobs_requested": 1,
+      "disk_samples": 18,
+      "final_workspace_disk": {
+        "allocated_file_bytes": 33136640,
+        "logical_file_bytes": 32971360,
+        "regular_files": 2122
+      },
+      "jobs": [
+        {
+          "child_peak_rss_bytes": 65667072,
+          "child_system_cpu_seconds": 0.056121,
+          "child_user_cpu_seconds": 0.8440719999999999,
+          "exit_code": 0,
+          "stderr": "logs/media-generation-0.err",
+          "stdout": "logs/media-generation-0.out",
+          "timed_out": false,
+          "wall_seconds": 0.8354979520008783
+        }
+      ],
+      "sampled_aggregate_child_rss_peak_bytes": 66195456,
+      "sampled_live_children_peak": 1,
+      "sampled_peak_workspace_disk": {
+        "allocated_file_bytes": 33136640,
+        "logical_file_bytes": 32971360,
+        "regular_files": 2122
+      },
+      "wall_seconds": 0.8854959319978661
+    },
+    "hls_retained_all_sessions_disk": {
+      "allocated_file_bytes": 2998272,
+      "logical_file_bytes": 2938446,
+      "regular_files": 22
+    },
+    "hls_sessions": [
+      {
+        "measurement": {
+          "child_peak_rss_bytes": 69267456,
+          "child_system_cpu_seconds": 0.050886,
+          "child_user_cpu_seconds": 0.942924,
+          "exit_code": 0,
+          "stderr": "logs/hls-0-0.err",
+          "stdout": "logs/hls-0-0.out",
+          "timed_out": false,
+          "wall_seconds": 0.8318580119994294
+        },
+        "name": "initial-a",
+        "retained_output_disk": {
+          "allocated_file_bytes": 999424,
+          "logical_file_bytes": 980142,
+          "regular_files": 7
+        },
+        "segment_bytes": 979856,
+        "segment_count": 6,
+        "start_seconds": 0
+      },
+      {
+        "measurement": {
+          "child_peak_rss_bytes": 69398528,
+          "child_system_cpu_seconds": 0.052951,
+          "child_user_cpu_seconds": 0.9279409999999999,
+          "exit_code": 0,
+          "stderr": "logs/hls-0-1.err",
+          "stdout": "logs/hls-0-1.out",
+          "timed_out": false,
+          "wall_seconds": 0.8314909100008663
+        },
+        "name": "initial-b",
+        "retained_output_disk": {
+          "allocated_file_bytes": 999424,
+          "logical_file_bytes": 980142,
+          "regular_files": 7
+        },
+        "segment_bytes": 979856,
+        "segment_count": 6,
+        "start_seconds": 0
+      },
+      {
+        "measurement": {
+          "child_peak_rss_bytes": 69267456,
+          "child_system_cpu_seconds": 0.065491,
+          "child_user_cpu_seconds": 0.660573,
+          "exit_code": 0,
+          "stderr": "logs/hls-1-0.err",
+          "stdout": "logs/hls-1-0.out",
+          "timed_out": false,
+          "wall_seconds": 0.6242460949979431
+        },
+        "name": "seek-4",
+        "retained_output_disk": {
+          "allocated_file_bytes": 667648,
+          "logical_file_bytes": 654836,
+          "regular_files": 5
+        },
+        "segment_bytes": 654616,
+        "segment_count": 4,
+        "start_seconds": 4
+      },
+      {
+        "measurement": {
+          "child_peak_rss_bytes": 69132288,
+          "child_system_cpu_seconds": 0.040313,
+          "child_user_cpu_seconds": 0.42985599999999996,
+          "exit_code": 0,
+          "stderr": "logs/hls-2-0.err",
+          "stdout": "logs/hls-2-0.out",
+          "timed_out": false,
+          "wall_seconds": 0.442653710997547
+        },
+        "name": "seek-8",
+        "retained_output_disk": {
+          "allocated_file_bytes": 331776,
+          "logical_file_bytes": 323326,
+          "regular_files": 3
+        },
+        "segment_bytes": 323172,
+        "segment_count": 2,
+        "start_seconds": 8
+      }
+    ],
+    "hls_waves": [
+      {
+        "concurrent_jobs_requested": 2,
+        "disk_samples": 17,
+        "final_workspace_disk": {
+          "allocated_file_bytes": 35135488,
+          "logical_file_bytes": 34931644,
+          "regular_files": 2140
+        },
+        "jobs": [
+          {
+            "child_peak_rss_bytes": 69267456,
+            "child_system_cpu_seconds": 0.050886,
+            "child_user_cpu_seconds": 0.942924,
+            "exit_code": 0,
+            "stderr": "logs/hls-0-0.err",
+            "stdout": "logs/hls-0-0.out",
+            "timed_out": false,
+            "wall_seconds": 0.8318580119994294
+          },
+          {
+            "child_peak_rss_bytes": 69398528,
+            "child_system_cpu_seconds": 0.052951,
+            "child_user_cpu_seconds": 0.9279409999999999,
+            "exit_code": 0,
+            "stderr": "logs/hls-0-1.err",
+            "stdout": "logs/hls-0-1.out",
+            "timed_out": false,
+            "wall_seconds": 0.8314909100008663
+          }
+        ],
+        "sampled_aggregate_child_rss_peak_bytes": 139325440,
+        "sampled_live_children_peak": 2,
+        "sampled_peak_workspace_disk": {
+          "allocated_file_bytes": 35135488,
+          "logical_file_bytes": 34931644,
+          "regular_files": 2140
+        },
+        "wall_seconds": 0.8873698079987662
+      },
+      {
+        "concurrent_jobs_requested": 1,
+        "disk_samples": 13,
+        "final_workspace_disk": {
+          "allocated_file_bytes": 35803136,
+          "logical_file_bytes": 35586480,
+          "regular_files": 2147
+        },
+        "jobs": [
+          {
+            "child_peak_rss_bytes": 69267456,
+            "child_system_cpu_seconds": 0.065491,
+            "child_user_cpu_seconds": 0.660573,
+            "exit_code": 0,
+            "stderr": "logs/hls-1-0.err",
+            "stdout": "logs/hls-1-0.out",
+            "timed_out": false,
+            "wall_seconds": 0.6242460949979431
+          }
+        ],
+        "sampled_aggregate_child_rss_peak_bytes": 69627904,
+        "sampled_live_children_peak": 1,
+        "sampled_peak_workspace_disk": {
+          "allocated_file_bytes": 35803136,
+          "logical_file_bytes": 35586480,
+          "regular_files": 2147
+        },
+        "wall_seconds": 0.6769514000006893
+      },
+      {
+        "concurrent_jobs_requested": 1,
+        "disk_samples": 10,
+        "final_workspace_disk": {
+          "allocated_file_bytes": 36134912,
+          "logical_file_bytes": 35909806,
+          "regular_files": 2152
+        },
+        "jobs": [
+          {
+            "child_peak_rss_bytes": 69132288,
+            "child_system_cpu_seconds": 0.040313,
+            "child_user_cpu_seconds": 0.42985599999999996,
+            "exit_code": 0,
+            "stderr": "logs/hls-2-0.err",
+            "stdout": "logs/hls-2-0.out",
+            "timed_out": false,
+            "wall_seconds": 0.442653710997547
+          }
+        ],
+        "sampled_aggregate_child_rss_peak_bytes": 69447680,
+        "sampled_live_children_peak": 1,
+        "sampled_peak_workspace_disk": {
+          "allocated_file_bytes": 36134912,
+          "logical_file_bytes": 35909806,
+          "regular_files": 2152
+        },
+        "wall_seconds": 0.493273476997274
+      }
+    ],
+    "large_png_native_decode": {
+      "concurrent_jobs_requested": 1,
+      "disk_samples": 5,
+      "final_workspace_disk": {
+        "allocated_file_bytes": 36192256,
+        "logical_file_bytes": 35963938,
+        "regular_files": 2160
+      },
+      "jobs": [
+        {
+          "child_peak_rss_bytes": 83628032,
+          "child_system_cpu_seconds": 0.046283,
+          "child_user_cpu_seconds": 0.158017,
+          "exit_code": 0,
+          "stderr": "logs/native-png-decode-0.err",
+          "stdout": "logs/native-png-decode-0.out",
+          "timed_out": false,
+          "wall_seconds": 0.2344721599984041
+        }
+      ],
+      "sampled_aggregate_child_rss_peak_bytes": 83734528,
+      "sampled_live_children_peak": 1,
+      "sampled_peak_workspace_disk": {
+        "allocated_file_bytes": 36192256,
+        "logical_file_bytes": 35963938,
+        "regular_files": 2160
+      },
+      "wall_seconds": 0.28838480999911553
+    },
+    "source": {
+      "audio_streams": 0,
+      "duration_seconds": 12,
+      "encoded_bytes": 980384,
+      "fps": 24,
+      "generator": "ffmpeg lavfi testsrc2",
+      "height": 360,
+      "sha256": "9bec83dc07476b98cbad3282709b7978ad609fede2af1ea46e9056eb51f55ba8",
+      "width": 640
+    },
+    "status": "measured",
+    "trickplay": [
+      {
+        "frame_height": 90,
+        "measurement": {
+          "concurrent_jobs_requested": 1,
+          "disk_samples": 6,
+          "final_workspace_disk": {
+            "allocated_file_bytes": 36147200,
+            "logical_file_bytes": 35921986,
+            "regular_files": 2155
+          },
+          "jobs": [
+            {
+              "child_peak_rss_bytes": 46985216,
+              "child_system_cpu_seconds": 0.035067,
+              "child_user_cpu_seconds": 0.182337,
+              "exit_code": 0,
+              "stderr": "logs/trickplay-160-0.err",
+              "stdout": "logs/trickplay-160-0.out",
+              "timed_out": false,
+              "wall_seconds": 0.2573291879998578
+            }
+          ],
+          "sampled_aggregate_child_rss_peak_bytes": 43196416,
+          "sampled_live_children_peak": 1,
+          "sampled_peak_workspace_disk": {
+            "allocated_file_bytes": 36147200,
+            "logical_file_bytes": 35921986,
+            "regular_files": 2155
+          },
+          "wall_seconds": 0.31044497000038973
+        },
+        "one_sheet_rgba_estimate_bytes": 5760000,
+        "retained_output_disk": {
+          "allocated_file_bytes": 12288,
+          "logical_file_bytes": 12180,
+          "regular_files": 1
+        },
+        "sample_interval_seconds": 10,
+        "sheet_count": 1,
+        "tile_columns": 10,
+        "tile_rows": 10,
+        "width": 160
+      },
+      {
+        "frame_height": 180,
+        "measurement": {
+          "concurrent_jobs_requested": 1,
+          "disk_samples": 6,
+          "final_workspace_disk": {
+            "allocated_file_bytes": 36192256,
+            "logical_file_bytes": 35963938,
+            "regular_files": 2158
+          },
+          "jobs": [
+            {
+              "child_peak_rss_bytes": 65728512,
+              "child_system_cpu_seconds": 0.032206,
+              "child_user_cpu_seconds": 0.20130199999999998,
+              "exit_code": 0,
+              "stderr": "logs/trickplay-320-0.err",
+              "stdout": "logs/trickplay-320-0.out",
+              "timed_out": false,
+              "wall_seconds": 0.2722088240006997
+            }
+          ],
+          "sampled_aggregate_child_rss_peak_bytes": 50339840,
+          "sampled_live_children_peak": 1,
+          "sampled_peak_workspace_disk": {
+            "allocated_file_bytes": 36192256,
+            "logical_file_bytes": 35963938,
+            "regular_files": 2158
+          },
+          "wall_seconds": 0.3249378649998107
+        },
+        "one_sheet_rgba_estimate_bytes": 23040000,
+        "retained_output_disk": {
+          "allocated_file_bytes": 45056,
+          "logical_file_bytes": 41952,
+          "regular_files": 1
+        },
+        "sample_interval_seconds": 10,
+        "sheet_count": 1,
+        "tile_columns": 10,
+        "tile_rows": 10,
+        "width": 320
+      }
+    ]
+  },
+  "schema_version": 1,
+  "scope": "generated disposable fixtures; no libteca runtime integration or production cap selection",
+  "status": "measured",
+  "wall_seconds": 6.031882245999441
+}

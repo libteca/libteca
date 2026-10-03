@@ -268,8 +268,8 @@ This records confirmed repairs and remaining work. A mapped review and passing t
 
 ### LT-P01 — Physical source identity and existing data repair
 - Severity/status: High; remaining; unverified acceptance
-- Evidence/limit: Work/title keys still determine source identity; same-title editions, retags, alternate encodings and previously collapsed/wrong-root records need a deliberate migration. See source-identity-proposal.md.
-- Next acceptance: Disposable real-library inventory; choose ownership schema; reviewable repair map; stable IDs/progress, rollback and every adapter acceptance
+- Evidence/limit: Standalone read-only snapshot inventory implemented and synthetically tested; reports lexical ambiguity, mixed-root candidates, possible collapse and progress references without ownership assignment. Physical-source migration and existing-data repair remain unimplemented.
+- Next acceptance: Run source-inventory-command.md against a consistent disposable real-library snapshot and optional copied-root mapping; review ambiguous identity/progress assignments, choose schema, then rehearse migration and rollback
 
 ### LT-P02 — Content/order generations and derived assets
 - Severity/status: Medium; remaining; unverified acceptance
@@ -278,18 +278,18 @@ This records confirmed repairs and remaining work. A mapped review and passing t
 
 ### LT-P04 — Durable offline media progress
 - Severity/status: Medium; remaining; unverified acceptance
-- Evidence/limit: Reader queue is durable and revision-aware. Primary/playlist audio now serialize and retry within the tab; audio/video/podcast saves still do not share a durable, complete media conflict protocol.
-- Next acceptance: Specify intent-aware restart/seek/completion conflicts and content generations, then persist user-scoped operations and test disconnect/reload/cross-device conflicts; see media-consistency-proposal.md
+- Evidence/limit: Pure intent/conflict and recovery-transition model plus decision table implemented and fixture-tested, without runtime imports, browser persistence, server receipts or podcast revisions. Current audio retry remains in-tab.
+- Next acceptance: Approve media-intent-contract.md decisions, implement durable storage/server protocol, then test native browser reload/eviction and cross-device conflicts
 
 ### LT-P05 — Multipart video, HLS and derived timelines
 - Severity/status: Medium; remaining; unverified acceptance
-- Evidence/limit: Playlist direct-audio editions now use ordered files and cumulative offsets (LT-122). Video playback and thumbnail/HLS paths still select the first file.
-- Next acceptance: Selected-file plus generation/cumulative-offset contract across server, player, resume, chapters, subtitles, thumbnails and adapters; see media-consistency-proposal.md
+- Evidence/limit: Pure multipart resolver and proposed HTTP fixtures implemented without player/server integration. Current video/HLS/thumbnail handlers still select the first file.
+- Next acceptance: Use multipart-video-contract.md to agree file/generation/offset semantics; integrate all handlers and adapters, then validate real browser/HLS multipart corpus
 
 ### LT-P06 — Broader archive/decode/transcode budgets
 - Severity/status: Medium; remaining; unverified acceptance
-- Evidence/limit: CBR cancellation/reaping/cleanup is repaired, but streamed byte caps still do not bound browser decoded pixels/aggregate cache, EPUB internals, ZIP directory parsing, ongoing unar extraction disk, or total HLS disk.
-- Next acceptance: Measure representative long media and archives; define non-breaking memory/disk quotas with cleanup/seek tests
+- Evidence/limit: Disposable generated archive/native-media measurement harness implemented; separates compressed/entry/decode-estimate/disk/RSS evidence. No production quota or runtime budget implementation added.
+- Next acceptance: Run representative long-title/archive corpus through appropriate browser/native measurements and choose justified caps, rolling-window policy and failure cleanup tests
 
 ### LT-P07 — Runtime dependency gate
 - Severity/status: Medium; remaining; unverified acceptance

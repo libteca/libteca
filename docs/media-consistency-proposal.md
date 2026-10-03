@@ -2,6 +2,16 @@
 
 Status: implementation design and acceptance plan. These are not implemented migrations, production approvals, or a claim of complete correctness. The architecture remains a single Go service, SQLite, and the embedded first-party web UI.
 
+## Executable preparation now available
+
+The isolated preparation in `source-inventory-command.md`, `media-intent-contract.md`,
+`multipart-video-contract.md` and `resource-measurement.md` implements the
+read-only inventory, pure proposed state/HTTP fixtures and generated measurements
+recommended below. Those preparation steps are now available; the next gates
+are the specific real-data inputs, schema/product decisions and runtime
+acceptance listed in those documents. No durable media migration, multipart
+player integration, source repair or production quota is enabled by them.
+
 ## What this checkpoint establishes
 
 - ABS and Kavita destination changes commit as one transaction. A failed apply or commit returns no successful plan and preserves existing rows and revisions. Foreign database discovery remains read-only and precedes the destination transaction; it is not a consistent snapshot of a concurrently changing foreign server. Use a stopped source or a consistent copy for real imports.

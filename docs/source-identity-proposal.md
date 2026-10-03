@@ -25,6 +25,15 @@ renamed, or collapsed records. This containment fix does not migrate existing ph
   location indexes separately from display metadata
 - Every open and processor input resolves through its retained source root
 
+## Preparatory inventory available
+
+`docs/source-inventory-command.md` documents the implemented standalone read-only
+command and its synthetic fixtures. It accepts an explicit consistent disposable
+snapshot, optionally stats explicitly mapped copied roots, and reports lexical
+ambiguity/mixed-root/possible-collapse evidence without assigning ownership.
+It is not a migration, a real-library result, or proof that existing identities
+are unambiguous. The schema and repair decisions below remain open.
+
 ## Migration stages
 
 1. Inventory existing editions, files, roots, titles, and progress references in

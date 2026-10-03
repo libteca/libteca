@@ -295,3 +295,29 @@ This inventory maps the source, test and build review surface; inclusion alone d
 - web/tsconfig.json
 - web/vite.config.ts
 - web/vitest.config.ts
+
+## Isolated architecture-preparation additions
+
+These additions were inspected in the bounded preparatory pass, not a repeated
+whole-repository audit. The inventory received an independent read-only and
+migration-safety review; the contracts remain test-only and the measurement
+harness uses generated disposable inputs.
+
+- cmd/source-inventory/main.go
+- cmd/source-inventory/main_test.go
+- cmd/source-inventory/readonly_review_test.go
+- docs/media-intent-contract.md
+- docs/multipart-video-contract.md
+- docs/resource-measurement.md
+- docs/source-inventory-command.md
+- internal/sourceinventory/inventory.go
+- internal/sourceinventory/inventory_test.go
+- internal/sourceinventory/readonly_review_test.go
+- tools/resource-measure/.gitignore
+- tools/resource-measure/evidence/local-synthetic.json
+- tools/resource-measure/measure.py
+- tools/resource-measure/test_measure.py
+- web/src/contracts/mediaIntent.ts
+- web/src/contracts/mediaTimeline.ts
+- web/tests/mediaIntentContract.test.ts
+- web/tests/mediaTimelineContract.test.ts

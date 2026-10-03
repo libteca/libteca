@@ -382,8 +382,8 @@
       "id": "LT-P01",
       "severity": "High",
       "title": "Physical source identity and existing data repair",
-      "evidence": "Work/title keys still determine source identity; same-title editions, retags, alternate encodings and previously collapsed/wrong-root records need a deliberate migration. See source-identity-proposal.md.",
-      "next": "Disposable real-library inventory; choose ownership schema; reviewable repair map; stable IDs/progress, rollback and every adapter acceptance",
+      "evidence": "Standalone read-only snapshot inventory implemented and synthetically tested; reports lexical ambiguity, mixed-root candidates, possible collapse and progress references without ownership assignment. Physical-source migration and existing-data repair remain unimplemented.",
+      "next": "Run source-inventory-command.md against a consistent disposable real-library snapshot and optional copied-root mapping; review ambiguous identity/progress assignments, choose schema, then rehearse migration and rollback",
       "status": "remaining; unverified acceptance"
     },
     {
@@ -398,24 +398,24 @@
       "id": "LT-P04",
       "severity": "Medium",
       "title": "Durable offline media progress",
-      "evidence": "Reader queue is durable and revision-aware. Primary/playlist audio now serialize and retry within the tab; audio/video/podcast saves still do not share a durable, complete media conflict protocol.",
-      "next": "Specify intent-aware restart/seek/completion conflicts and content generations, then persist user-scoped operations and test disconnect/reload/cross-device conflicts; see media-consistency-proposal.md",
+      "evidence": "Pure intent/conflict and recovery-transition model plus decision table implemented and fixture-tested, without runtime imports, browser persistence, server receipts or podcast revisions. Current audio retry remains in-tab.",
+      "next": "Approve media-intent-contract.md decisions, implement durable storage/server protocol, then test native browser reload/eviction and cross-device conflicts",
       "status": "remaining; unverified acceptance"
     },
     {
       "id": "LT-P05",
       "severity": "Medium",
       "title": "Multipart video, HLS and derived timelines",
-      "evidence": "Playlist direct-audio editions now use ordered files and cumulative offsets (LT-122). Video playback and thumbnail/HLS paths still select the first file.",
-      "next": "Selected-file plus generation/cumulative-offset contract across server, player, resume, chapters, subtitles, thumbnails and adapters; see media-consistency-proposal.md",
+      "evidence": "Pure multipart resolver and proposed HTTP fixtures implemented without player/server integration. Current video/HLS/thumbnail handlers still select the first file.",
+      "next": "Use multipart-video-contract.md to agree file/generation/offset semantics; integrate all handlers and adapters, then validate real browser/HLS multipart corpus",
       "status": "remaining; unverified acceptance"
     },
     {
       "id": "LT-P06",
       "severity": "Medium",
       "title": "Broader archive/decode/transcode budgets",
-      "evidence": "CBR cancellation/reaping/cleanup is repaired, but streamed byte caps still do not bound browser decoded pixels/aggregate cache, EPUB internals, ZIP directory parsing, ongoing unar extraction disk, or total HLS disk.",
-      "next": "Measure representative long media and archives; define non-breaking memory/disk quotas with cleanup/seek tests",
+      "evidence": "Disposable generated archive/native-media measurement harness implemented; separates compressed/entry/decode-estimate/disk/RSS evidence. No production quota or runtime budget implementation added.",
+      "next": "Run representative long-title/archive corpus through appropriate browser/native measurements and choose justified caps, rolling-window policy and failure cleanup tests",
       "status": "remaining; unverified acceptance"
     },
     {

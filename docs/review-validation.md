@@ -56,3 +56,35 @@ Date: 2026-10-03. Baseline: fbf2f20c291533216cb6a21699e40729622ec4f9.
 - Games downgrade produced dangling work/playlist references; independent review additionally reproduced dangling scan_jobs. Final fixture covers all three families and preserves ordinary book data
 
 See `systematic-issue-register.md` for each repaired issue and remaining acceptance gate, and `media-consistency-proposal.md` for the remaining implementation contracts and safe next steps. Logs in the bundle use the execution machine's local timestamps; this report date is UTC.
+
+## Isolated architecture-preparation checkpoint (2026-10-03)
+
+This additive checkpoint is separate from the preceding reliability fixes. It
+adds a standalone source-inventory command, pure media intent/timeline/HTTP
+contract models and a disposable generated-resource measurement harness. The
+contracts are imported only by tests. Existing player/server/migration code is
+unchanged; the issue register keeps LT-P01/P04/P05/P06 open.
+
+- 324 frontend tests pass in 24 files: prior 180 plus 72 intent and 72 timeline
+  contract tests. TypeScript and the locked production build pass
+- `go test -race -count=1 -json ./...` passes 729 tests/subtests in 23 tested
+  packages: prior 687 plus 42 source-inventory cases. The same two previously
+  documented corpus/snapshot-layout skips remain
+- Aggregate `make test` passes with the existing writable offline npm cache,
+  including Go vet. An initial run using the unavailable default home-cache
+  path failed during npm installation; no code change was needed, and that
+  failed log is retained alongside the successful rerun
+- Eleven Python measurement tests pass. The bounded generated archive/ffmpeg
+  run completes, verifies cleanup and records its script hash in the evidence
+- Independent read-only/migration review added malformed-map and orphan/state
+  regressions. Null/duplicate map-key handling was tightened before the final
+  checks. Snapshot/media fixture bytes, entries, modes and modification times
+  remain unchanged; no real-library input was used
+
+These pure tests do not prove browser persistence, eviction behavior, exact-once
+media delivery, multipart HLS/subtitle/thumbnail integration, source ownership
+repair, supported native CBR behavior, representative resource limits or release
+acceptance. No focused authentication/security review, production read/write,
+remote publication or deployment was performed. Prior release cross-build
+results belong to the previous checkpoint; they were not rerun for this
+preparatory-only bundle.

@@ -644,3 +644,17 @@ backup = `libteca backup` (15g); neutron-go published (17).
     and measured resource quotas retain explicit contracts and acceptance gates
     in docs/media-consistency-proposal.md. No schema migration, production
     mutation, publication or restricted review is implied.
+
+49. **Read-only and executable architecture preparation (2026-10-03).**
+    Keep the reliability checkpoint separate from larger media changes. The
+    source inventory opens only an explicit standalone immutable/read-only
+    snapshot, never the migrating store opener, and inspects copied media
+    metadata only through explicit root mappings. Lexical candidates and
+    collapse heuristics remain review evidence, never assigned ownership or
+    an automatic repair. Media-intent and multipart timeline/HTTP models are
+    isolated contracts imported only by tests; they do not enable new storage
+    or playback semantics. Generated resource measurements distinguish archive
+    bytes, decoded estimates, native process RSS and retained disk; no quota
+    is inferred from one synthetic run. Real-data mappings, agreed conflict
+    and generation schemas, permitted browser/native acceptance and measured
+    representative workloads remain prerequisites for the respective changes.

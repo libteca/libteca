@@ -854,3 +854,15 @@ docs/media-consistency-proposal.md. The prior security-review restriction,
 real-library/browser/client/container/hardware acceptance and publication
 boundaries remain unchanged. Existing dependency update pull requests should
 be coordinated rather than duplicated or blindly included in this patch.
+
+## Architecture gate preparation (2026-10-03)
+
+A standalone read-only source inventory and isolated executable contract models
+now prepare LT-P01/P04/P05; generated resource measurements prepare LT-P06.
+These are not deployed fixes, source repair, durable browser storage, a media
+schema migration, multipart HLS integration or selected production quotas.
+See docs/source-inventory-command.md, docs/media-intent-contract.md,
+docs/multipart-video-contract.md and docs/resource-measurement.md. Current
+runtime behavior and all real-data/browser/client/platform acceptance gates
+remain unchanged. No production input, external publication or excluded
+focused authentication/security review was performed.
