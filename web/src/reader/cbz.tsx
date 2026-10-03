@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import type { CSSProperties } from "preact";
 import { media } from "../api";
 import { c } from "../styles";
+import { extractCapped, readBoundedBody, type ZipEntryLike } from "./resources";
 import {
   clamp01, IconChevLeft, IconChevRight, IconFitHeight, IconFitWidth, IconPageDouble,
   IconPageSingle, IconRtl, IconWebtoon, isTypingTarget, loadPref, pageImageNames, pagePercent,
@@ -19,8 +20,6 @@ const ARCHIVE_MAX_BYTES = 512 << 20;
 const PAGE_MAX_BYTES = 256 << 20;
 const MAX_ENTRIES = 10000;
 
-type ZipEntryLike = { name: string; async(type: "blob"): Promise<Blob> };
-
 const IMG_MIME: Record<string, string> = {
   png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif",
   webp: "image/webp", avif: "image/avif", bmp: "image/bmp", jxl: "image/jxl",
@@ -33,55 +32,13 @@ function typedBlob(entry: ZipEntryLike, blob: Blob): Blob {
   return mime ? new Blob([blob], { type: mime }) : blob;
 }
 
-// Bounded reading of one archive entry: the decompressed byte total is
-// capped while streaming, so a tiny compressed page cannot expand into an
-// unbounded allocation.
-function extractCapped(entry: ZipEntryLike, limit: number): Promise<Blob> {
-  return entry.async("blob").then((blob) => {
-    if (blob.size > limit) throw new Error("Page too large");
-    return blob;
-  });
-}
-
-// Streams the archive body with a hard ceiling on both the declared and
-// the delivered size.
-async function readBoundedBody(response: Response, limit: number, signal?: AbortSignal): Promise<ArrayBuffer> {
-  if (!response.ok) throw new Error(`Download failed (${response.status})`);
-  const length = Number(response.headers.get("Content-Length"));
-  if (Number.isFinite(length) && length > limit) throw new Error("Book too large");
-  if (!response.body) return response.arrayBuffer();
-  const reader = response.body.getReader();
-  const parts: Uint8Array[] = [];
-  let size = 0;
-  try {
-    for (;;) {
-      if (signal?.aborted) throw new DOMException("Reader closed", "AbortError");
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value.byteLength > limit - size) throw new Error("Book too large");
-      size += value.byteLength;
-      parts.push(value);
-    }
-  } catch (error) {
-    await reader.cancel().catch(() => {});
-    throw error;
-  } finally {
-    reader.releaseLock();
-  }
-  const out = new Uint8Array(size);
-  let offset = 0;
-  for (const part of parts) {
-    out.set(part, offset);
-    offset += part.byteLength;
-  }
-  return out.buffer;
-}
-
-class PageStore {
+export class PageStore {
   private urls: (string | null)[] = [];
   private queue: number[] = [];
   private running = false;
   private revoked = false;
+  private center = 0;
+  private active: { index: number; controller: AbortController } | null = null;
 
   constructor(private entries: ZipEntryLike[], private notify: () => void) {}
 
@@ -107,7 +64,7 @@ class PageStore {
   }
 
   ensure(i: number, front = false): void {
-    if (this.revoked || i < 0 || i >= this.count || this.urls[i] !== undefined) return;
+    if (this.revoked || i < 0 || i >= this.count || this.urls[i] !== undefined || (this.active?.index === i && !this.active.controller.signal.aborted)) return;
     const qi = this.queue.indexOf(i);
     if (qi >= 0) {
       if (front) { this.queue.splice(qi, 1); this.queue.unshift(i); }
@@ -118,6 +75,9 @@ class PageStore {
   }
 
   ensureAround(i: number, radius: number): void {
+    this.center = i;
+    this.queue = this.queue.filter((j) => Math.abs(j - i) <= EVICT_RADIUS);
+    if (this.active && Math.abs(this.active.index - i) > EVICT_RADIUS) this.active.controller.abort();
     this.evictFar(i);
     this.ensure(i, true);
     for (let d = 1; d <= radius; d++) {
@@ -143,12 +103,9 @@ class PageStore {
     if (evicted) this.notify();
   }
 
-  warmAll(): void {
-    for (let i = 0; i < this.count; i++) this.ensure(i, false);
-  }
-
   revoke(): void {
     this.revoked = true;
+    this.active?.controller.abort();
     this.queue = [];
     for (const u of this.urls) if (typeof u === "string") URL.revokeObjectURL(u);
     this.urls = [];
@@ -161,15 +118,22 @@ class PageStore {
       while (this.queue.length) {
         const i = this.queue.shift()!;
         if (this.revoked) return;
-        if (this.urls[i] !== undefined) continue;
+        if (this.urls[i] !== undefined || Math.abs(i - this.center) > EVICT_RADIUS) continue;
+        const controller = new AbortController();
+        this.active = { index: i, controller };
         try {
-          const blob = typedBlob(this.entries[i], await extractCapped(this.entries[i], PAGE_MAX_BYTES));
+          const blob = typedBlob(this.entries[i], await extractCapped(this.entries[i], PAGE_MAX_BYTES, controller.signal));
           if (this.revoked) return;
+          if (controller.signal.aborted || Math.abs(i - this.center) > EVICT_RADIUS) continue;
           this.urls[i] = URL.createObjectURL(blob);
           this.notify();
         } catch {
-          this.urls[i] = null;
-          this.notify();
+          if (!this.revoked && !controller.signal.aborted) {
+            this.urls[i] = null;
+            this.notify();
+          }
+        } finally {
+          this.active = null;
         }
       }
     } finally {
@@ -195,7 +159,13 @@ function PageImg(props: { i: number; url: string | null; status: "loading" | "er
   );
 }
 
-export function CbzReader(props: { editionId: number; title: string; progress: ReadingProgress | null; onBack: () => void }) {
+type CbzReaderProps = { editionId: number; title: string; progress: ReadingProgress | null; onBack: () => void };
+
+export function CbzReader(props: CbzReaderProps) {
+  return <CbzSession key={props.editionId} {...props} />;
+}
+
+function CbzSession(props: CbzReaderProps) {
   const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
   const [error, setError] = useState("");
   const [count, setCount] = useState(0);
@@ -220,7 +190,9 @@ export function CbzReader(props: { editionId: number; title: string; progress: R
       try {
         const res = await fetch(media(`/editions/${props.editionId}/download`), { signal: controller.signal });
         const buf = await readBoundedBody(res, ARCHIVE_MAX_BYTES, controller.signal);
+        if (!alive) return;
         const JSZip = (await import("jszip")).default;
+        if (!alive) return;
         const zip = await JSZip.loadAsync(buf);
         if (!alive) return;
         const names = pageImageNames(Object.keys(zip.files));
@@ -232,7 +204,7 @@ export function CbzReader(props: { editionId: number; title: string; progress: R
         let start = 0;
         if (p && !p.isFinished) {
           const raw = p.page && p.page > 0 ? p.page : p.locator ? Number(p.locator) : NaN;
-          if (!isNaN(raw)) start = Math.max(0, Math.min(store.count - 1, Math.floor(raw) - 1));
+          if (Number.isFinite(raw)) start = Math.max(0, Math.min(store.count - 1, Math.floor(raw) - 1));
         }
         pendingScroll.current = start > 0 ? start : null;
         setPage(start);
@@ -250,13 +222,14 @@ export function CbzReader(props: { editionId: number; title: string; progress: R
 
   useEffect(() => {
     if (phase !== "ready" || count <= 0) return;
-    const body: ProgressPost = { page: page + 1, percent: pagePercent(page + 1, count), locator: String(page + 1) };
-    if (page >= count - 1) body.finished = true;
+    const reached = mode === "double" ? Math.min(pairStart(page) + 2, count) : page + 1;
+    const body: ProgressPost = { page: reached, percent: pagePercent(reached, count), locator: String(reached) };
+    if (reached >= count) body.finished = true;
     saver.save(body);
-  }, [page, count, phase]);
+  }, [page, count, phase, mode]);
 
   useEffect(() => {
-    if (phase !== "ready" || mode === "webtoon") return;
+    if (phase !== "ready") return;
     const store = storeRef.current;
     if (!store) return;
     const base = mode === "double" ? pairStart(page) : page;
@@ -273,6 +246,7 @@ export function CbzReader(props: { editionId: number; title: string; progress: R
     if (!store || store.count === 0) return;
     setPage((cur) => {
       const next = stepPage(cur, dir, mode === "double" ? "double" : "single", store.count);
+      if (next != null && mode === "webtoon") pendingScroll.current = next;
       return next == null ? cur : next;
     });
   }, [mode]);
@@ -281,33 +255,30 @@ export function CbzReader(props: { editionId: number; title: string; progress: R
     if (phase !== "ready" || mode !== "webtoon") return;
     const root = scrollRef.current;
     if (!root) return;
-    const io = new IntersectionObserver((entries) => {
-      const vis = visibleRef.current;
+    visibleRef.current.clear();
+    let active = true;
+    const preload = new IntersectionObserver((entries) => {
+      if (!active) return;
       const store = storeRef.current;
-      let changed = false;
-      for (const en of entries) {
-        const i = Number((en.target as HTMLElement).dataset.page);
-        if (isNaN(i)) continue;
-        if (en.isIntersecting) {
-          if (store) store.ensureAround(i, 2);
-          if (!vis.has(i)) { vis.add(i); changed = true; }
-        }
-        else if (vis.delete(i)) changed = true;
-      }
-      if (changed && vis.size && pendingScroll.current == null) {
-        let best = -1;
-        let bestTop = Infinity;
-        for (const i of vis) {
-          const el = pageEls.current.get(i);
-          if (!el) continue;
-          const top = el.getBoundingClientRect().top;
-          if (top >= 0 && top < bestTop) { bestTop = top; best = i; }
-        }
-        setPage(best >= 0 ? best : Math.min(...vis));
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        const i = Number((entry.target as HTMLElement).dataset.page);
+        if (Number.isFinite(i)) store?.ensure(i);
       }
     }, { root, rootMargin: "60% 0px", threshold: 0 });
-    for (const el of pageEls.current.values()) io.observe(el);
-    return () => io.disconnect();
+    const io = new IntersectionObserver((entries) => {
+      if (!active) return;
+      const vis = visibleRef.current;
+      for (const entry of entries) {
+        const i = Number((entry.target as HTMLElement).dataset.page);
+        if (!Number.isFinite(i)) continue;
+        if (entry.isIntersecting) vis.add(i);
+        else vis.delete(i);
+      }
+      if (vis.size && pendingScroll.current == null) setPage(Math.min(...vis));
+    }, { root, threshold: 0 });
+    for (const el of pageEls.current.values()) { preload.observe(el); io.observe(el); }
+    return () => { active = false; preload.disconnect(); io.disconnect(); visibleRef.current.clear(); };
   }, [phase, mode]);
 
   useEffect(() => {

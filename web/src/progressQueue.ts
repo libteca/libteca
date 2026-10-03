@@ -9,13 +9,14 @@ export type ServerProgress = {
 
 export type StoredProgress = { baseRevision: number; patch: ProgressPatch };
 
-type QueueStorage = {
+export type QueueStorage = {
   load: () => StoredProgress | null;
   save: (patch: ProgressPatch, baseRevision: number) => void;
 };
 
 type QueueOptions = {
   send: (patch: ProgressPatch, baseRevision: number) => Promise<number | void>;
+  prepare?: (patch: ProgressPatch) => ProgressPatch;
   onError?: (error: unknown, terminal: boolean) => void;
   shouldRetry?: (error: unknown) => boolean;
   retryBaseMs?: number;
@@ -115,6 +116,14 @@ export class ProgressQueue {
     return { ...this.pending };
   }
 
+  operation(): StoredProgress {
+    const patch = this.clean({ ...this.inFlight, ...this.pending });
+    return {
+      baseRevision: this.baseRevision,
+      patch: this.options.prepare ? this.options.prepare(patch) : patch,
+    };
+  }
+
   private clean(patch: ProgressPatch): ProgressPatch {
     const out: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(patch)) {
@@ -149,7 +158,8 @@ export class ProgressQueue {
         this.inFlight = batch;
         this.persist();
         try {
-          const nextBase = await this.options.send(batch, this.baseRevision);
+          const prepared = this.options.prepare ? this.options.prepare({ ...batch }) : batch;
+          const nextBase = await this.options.send(prepared, this.baseRevision);
           this.failures = 0;
           this.inFlight = undefined;
           if (typeof nextBase === "number" && Number.isSafeInteger(nextBase) && nextBase >= 0) {
@@ -240,4 +250,56 @@ export function mergeServerProgress(server: ServerProgress, patch: ProgressPatch
     merged.finished = patch.finished;
   }
   return merged;
+}
+
+export function mergeStoredProgress(records: readonly StoredProgress[]): StoredProgress | null {
+  if (records.length === 0) return null;
+  let patch: ProgressPatch = {};
+  let baseRevision = Number.MAX_SAFE_INTEGER;
+  for (const record of records) {
+    const delta = mergeServerProgress(patch, record.patch);
+    if (delta.page !== undefined || delta.percent !== undefined || delta.locator !== undefined) {
+      const finished = patch.finished;
+      patch = { ...delta };
+      if (finished !== undefined && patch.finished === undefined) patch.finished = finished;
+    } else if (delta.finished !== undefined) {
+      patch.finished = delta.finished;
+    }
+    baseRevision = Math.min(baseRevision, record.baseRevision);
+  }
+  return Object.keys(patch).length > 0 ? { baseRevision, patch } : null;
+}
+
+export function createProgressStorage(storage: Storage, prefix: string, ownKey: string): QueueStorage {
+  return {
+    load: () => {
+      const keys = Array.from({ length: storage.length }, (_, i) => storage.key(i));
+      const records: StoredProgress[] = [];
+      const sources: { key: string; raw: string }[] = [];
+      for (const key of keys) {
+        if (!key || !key.startsWith(prefix) || key === ownKey) continue;
+        const raw = storage.getItem(key);
+        if (raw === null) continue;
+        try {
+          records.push(parseStoredProgress(JSON.parse(raw)));
+          sources.push({ key, raw });
+        } catch {
+          try { storage.removeItem(key); } catch {}
+        }
+      }
+      const merged = mergeStoredProgress(records);
+      if (!merged) return null;
+      try {
+        storage.setItem(ownKey, JSON.stringify(merged));
+        for (const source of sources) {
+          if (storage.getItem(source.key) === source.raw) storage.removeItem(source.key);
+        }
+      } catch {}
+      return merged;
+    },
+    save: (patch, baseRevision) => {
+      if (Object.keys(patch).length === 0) storage.removeItem(ownKey);
+      else storage.setItem(ownKey, JSON.stringify({ baseRevision, patch }));
+    },
+  };
 }

@@ -64,6 +64,15 @@ func (d *DB) SetReadingProgress(p *ReadingProgress) error {
 	})
 }
 
+func (t *Tx) SetReadingProgress(p *ReadingProgress) error {
+	return t.SetReadingProgressFields(p, ProgressFields{
+		Position: true,
+		Duration: true,
+		Device:   true,
+		Finished: true,
+	})
+}
+
 func (d *DB) SetReadingProgressPatch(p *ReadingProgress, finishedProvided bool) error {
 	return d.SetReadingProgressFields(p, ProgressFields{Finished: finishedProvided})
 }
@@ -76,7 +85,15 @@ type ProgressFields struct {
 }
 
 func (d *DB) SetReadingProgressFields(p *ReadingProgress, fields ProgressFields) error {
-	_, err := d.Exec(`INSERT INTO progress (user_id, edition_id, file_id, file_offset_secs, edition_position_secs, duration_secs, is_finished, device, updated_at, page, percent, locator, revision)
+	return setReadingProgressFields(d, p, fields)
+}
+
+func (t *Tx) SetReadingProgressFields(p *ReadingProgress, fields ProgressFields) error {
+	return setReadingProgressFields(t, p, fields)
+}
+
+func setReadingProgressFields(q dbtx, p *ReadingProgress, fields ProgressFields) error {
+	_, err := q.Exec(`INSERT INTO progress (user_id, edition_id, file_id, file_offset_secs, edition_position_secs, duration_secs, is_finished, device, updated_at, page, percent, locator, revision)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1)
 		ON CONFLICT(user_id, edition_id) DO UPDATE SET
 			file_id = CASE WHEN ? THEN excluded.file_id ELSE progress.file_id END,

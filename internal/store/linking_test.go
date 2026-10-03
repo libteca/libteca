@@ -250,3 +250,87 @@ func TestMergeWorksUnknownTargetRollsBack(t *testing.T) {
 	}
 	_ = e1
 }
+
+func TestCrossLibraryLinkingRejectsBeforeMutation(t *testing.T) {
+	db := openLinkDB(t)
+	for _, path := range []string{"/audio", "/books"} {
+		if _, err := db.AddLibrary(path, "audiobooks", path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	user := seedLinkUser(t, db)
+	source := seedLinkWork(t, db, "Source", "Author", "keep source")
+	target, err := db.UpsertWork(&Work{LibraryID: 2, Title: "Target"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	edition := seedLinkEdition(t, db, source, "Source audio")
+	seedLinkEdition(t, db, source, "Source alternate")
+	seedLinkFile(t, db, edition, "/audio/book.m4b")
+	if err := db.SetProgress(&Progress{UserID: user, EditionID: edition, EditionPositionSecs: 42}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := db.GetReadingProgress(user, edition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name      string
+		operation func() error
+	}{
+		{"move", func() error {
+			_, err := db.MoveEditionToWork(edition, target)
+			return err
+		}},
+		{"merge", func() error { return db.MergeWorks(source, target) }},
+		{"new title", func() error {
+			_, err := db.MoveEditionToNewWork(edition, 2, "Must not exist", nil)
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.operation(); err != ErrCrossLibrary {
+				t.Fatalf("error = %v, want ErrCrossLibrary", err)
+			}
+			if got := linkCount(t, db, `SELECT count(*) FROM works`); got != 2 {
+				t.Fatalf("work count changed to %d", got)
+			}
+			if got := linkCount(t, db, `SELECT count(*) FROM editions WHERE work_id = ?`, source); got != 2 {
+				t.Fatalf("source edition count changed to %d", got)
+			}
+			if got := linkCount(t, db, `SELECT count(*) FROM files WHERE edition_id = ? AND path = '/audio/book.m4b'`, edition); got != 1 {
+				t.Fatalf("source file changed: %d", got)
+			}
+			root, err := db.LibraryRootForEdition(edition)
+			if err != nil || root != "/audio" {
+				t.Fatalf("source root = %q, %v", root, err)
+			}
+			after, err := db.GetReadingProgress(user, edition)
+			if err != nil || after.Revision != before.Revision || after.EditionPositionSecs != 42 {
+				t.Fatalf("progress changed = %+v, %v", after, err)
+			}
+		})
+	}
+}
+
+func TestMoveEditionToNewWorkRollsBackCreatedTarget(t *testing.T) {
+	db := openLinkDB(t)
+	lib, err := db.AddLibrary("Audio", "audiobooks", "/audio")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := seedLinkWork(t, db, "Source", "Author", "")
+	edition := seedLinkEdition(t, db, source, "Audio")
+	if _, err := db.Exec(`CREATE TRIGGER refuse_move BEFORE UPDATE OF work_id ON editions BEGIN SELECT RAISE(ABORT, 'injected failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.MoveEditionToNewWork(edition, lib, "New target", nil); err == nil {
+		t.Fatal("expected move failure")
+	}
+	if got := linkCount(t, db, `SELECT count(*) FROM works`); got != 1 {
+		t.Fatalf("failed move left %d works, want 1", got)
+	}
+	if got := linkCount(t, db, `SELECT count(*) FROM editions WHERE id = ? AND work_id = ?`, edition, source); got != 1 {
+		t.Fatalf("failed move changed source: %d", got)
+	}
+}

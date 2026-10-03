@@ -225,29 +225,22 @@ func TestStartupReconcileScansStaleLibraries(t *testing.T) {
 }
 
 func TestLibraryAddedAtRuntimeGetsWatched(t *testing.T) {
-	dir := t.TempDir()
-	db, err := store.Open(filepath.Join(dir, "test.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if err := os.MkdirAll(filepath.Join(dir, "data", "covers"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	libDir := filepath.Join(dir, "late")
-	if err := os.MkdirAll(libDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	a := core.New(db, filepath.Join(dir, "data"))
-	w := New(a, db, Config{Debounce: 300 * time.Millisecond, SweepEvery: 0, SyncEvery: 200 * time.Millisecond})
+	w, db, initialID, initialDir := newEnv(t, Config{Debounce: 300 * time.Millisecond, SweepEvery: 0, SyncEvery: 200 * time.Millisecond})
+	seedFreshJob(t, db, initialID)
 	start(t, w)
+	waitWatched(t, w, initialDir)
 
-	libID, err := db.AddLibrary("Late", "books", libDir)
-	if err != nil {
+	libDir := filepath.Join(t.TempDir(), "late")
+	if err := os.MkdirAll(libDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(libDir, "Late Author - Late Book.cbz")
 	writeCBZ(t, path)
+	libID, err := db.AddLibrary("Late", "books", libDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitWatched(t, w, libDir)
 
 	jobs := waitJobs(t, db, libID, 1)
 	if jobs[0].FilesAdded != 1 {
@@ -256,6 +249,38 @@ func TestLibraryAddedAtRuntimeGetsWatched(t *testing.T) {
 	var missing int
 	if err := db.QueryRow(`SELECT missing FROM files WHERE path = ?`, path).Scan(&missing); err != nil || missing != 0 {
 		t.Fatalf("file row missing=%d err=%v, want 0", missing, err)
+	}
+}
+
+func TestPartialWriteIsRetriedAfterCompletion(t *testing.T) {
+	w, db, libID, libDir := newEnv(t, Config{Debounce: 100 * time.Millisecond, SweepEvery: 0})
+	seedFreshJob(t, db, libID)
+	cancel, done := start(t, w)
+	waitWatched(t, w, libDir)
+
+	path := filepath.Join(libDir, "Incomplete Book.cbz")
+	if err := os.WriteFile(path, []byte("unfinished archive"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	jobs := waitJobs(t, db, libID, 2)
+	if jobs[0].Status != "error" || jobs[0].FilesAdded != 0 {
+		t.Fatalf("partial file should fail without ingestion: %+v", jobs[0])
+	}
+
+	writeCBZ(t, path)
+	jobs = waitJobs(t, db, libID, 3)
+	if jobs[0].Status != "done" || jobs[0].FilesAdded != 1 {
+		t.Fatalf("completed file was not ingested by a later scan: %+v", jobs[0])
+	}
+	var count, missing int
+	if err := db.QueryRow(`SELECT count(*), coalesce(sum(missing), 0) FROM files WHERE path = ?`, path).Scan(&count, &missing); err != nil || count != 1 || missing != 0 {
+		t.Fatalf("completed file count=%d missing=%d err=%v", count, missing, err)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("watcher did not stop after partial-write recovery")
 	}
 }
 

@@ -139,16 +139,17 @@ func ABS(dataDir string, db *store.DB, dryRun bool) (*Plan, error) {
 	}
 
 	type podRow struct {
-		itemID int64
-		libID  int64
-		title  string
-		author string
+		mediaID int64
+		itemID  int64
+		libID   int64
+		title   string
+		author  string
 	}
 	var podRows []podRow
-	prows, err := fdb.Query(`SELECT li.id, li.libraryId, li.title, p.itunesAuthor
+	prows, err := fdb.Query(`SELECT li.id, li.libraryId, li.mediaId, li.title, p.itunesAuthor
 		FROM libraryItems li LEFT JOIN podcasts p ON p.id = li.mediaId WHERE li.mediaType = 'podcast'`)
 	if err != nil && schemaErr(err) {
-		prows, err = fdb.Query(`SELECT li.id, li.libraryId, li.title FROM libraryItems li WHERE li.mediaType = 'podcast'`)
+		prows, err = fdb.Query(`SELECT li.id, li.libraryId, li.mediaId, li.title, NULL FROM libraryItems li WHERE li.mediaType = 'podcast'`)
 	}
 	if err != nil {
 		if !schemaErr(err) {
@@ -159,7 +160,7 @@ func ABS(dataDir string, db *store.DB, dryRun bool) (*Plan, error) {
 		for prows.Next() {
 			var p podRow
 			var author sql.NullString
-			if err := prows.Scan(&p.itemID, &p.libID, &p.title, &author); err != nil {
+			if err := prows.Scan(&p.itemID, &p.libID, &p.mediaID, &p.title, &author); err != nil {
 				prows.Close()
 				return nil, err
 			}
@@ -337,7 +338,7 @@ func ABS(dataDir string, db *store.DB, dryRun bool) (*Plan, error) {
 			continue
 		}
 		rp := resolvedPodcast{p: p, libPath: libPaths[p.libID]}
-		for _, e := range epsByPod[p.itemID] {
+		for _, e := range epsByPod[p.mediaID] {
 			path, dur := episodeFile(e.audioFile, e.duration)
 			if path == "" {
 				plan.Libraries[libIndex[p.libID]].Skipped++
@@ -375,15 +376,15 @@ func ABS(dataDir string, db *store.DB, dryRun bool) (*Plan, error) {
 	}
 	var progress []mappedProgress
 	skippedProg := 0
-	editionDurations := map[int64]float64{}
+	editionDurations := map[string]map[int64]float64{"book": {}, "podcastEpisode": {}}
 	for _, b := range books {
 		for _, f := range b.files {
-			editionDurations[b.b.itemID] += f.Duration
+			editionDurations["book"][b.b.itemID] += f.Duration
 		}
 	}
 	for _, rp := range podcasts {
 		for _, e := range rp.episodes {
-			editionDurations[e.e.id] = e.file.Duration
+			editionDurations["podcastEpisode"][e.e.id] = e.file.Duration
 		}
 	}
 	for _, p := range progRows {
@@ -406,7 +407,7 @@ func ABS(dataDir string, db *store.DB, dryRun bool) (*Plan, error) {
 			skippedProg++
 			continue
 		}
-		progress = append(progress, mappedProgress{p: p, duration: editionDurations[p.mediaID]})
+		progress = append(progress, mappedProgress{p: p, duration: editionDurations[p.itemType][p.mediaID]})
 	}
 	if skippedProg > 0 {
 		plan.warnf("%d mediaProgress rows skipped (unknown user or unimported item)", skippedProg)
@@ -445,156 +446,165 @@ func ABS(dataDir string, db *store.DB, dryRun bool) (*Plan, error) {
 		return plan, nil
 	}
 
-	userMap, err := applyUsers(db, users, plan, true)
-	if err != nil {
-		return nil, err
-	}
+	err = db.Update(func(tx *store.Tx) error {
+		userMap, err := applyUsers(tx, users, plan, true)
+		if err != nil {
+			return err
+		}
 
-	type edRef struct {
-		id    int64
-		files []fileSpec
-		ids   []int64
-	}
-	bookEds := map[int64]*edRef{}
-	epEds := map[int64]*edRef{}
+		type edRef struct {
+			id    int64
+			files []fileSpec
+			ids   []int64
+		}
+		bookEds := map[int64]*edRef{}
+		epEds := map[int64]*edRef{}
 
-	libIDs := map[int64]int64{}
-	for _, l := range libs {
-		if _, ok := libIndex[l.id]; !ok {
-			continue
-		}
-		fallback := filepath.Join(dataDir, "imported", plan.Libraries[libIndex[l.id]].Name)
-		if p := libPaths[l.id]; p != "" {
-			fallback = p
-		}
-		id, err := ensureLibrary(db, l.name, libType[l.id], fallback, plan, libIndex[l.id], true)
-		if err != nil {
-			return nil, err
-		}
-		libIDs[l.id] = id
-	}
-
-	for _, b := range books {
-		w := &store.Work{LibraryID: libIDs[b.b.libID], Title: b.b.title, Author: strPtr(b.b.author), Description: strPtr(b.b.desc)}
-		wid, err := db.UpsertWork(w)
-		if err != nil {
-			return nil, err
-		}
-		total := 0.0
-		for _, f := range b.files {
-			total += f.Duration
-		}
-		e := &store.Edition{WorkID: wid, Format: b.format, Title: b.b.title, DurationSecs: &total}
-		eid, err := db.UpsertEdition(e)
-		if err != nil {
-			return nil, err
-		}
-		ids, err := applyFiles(db, eid, b.files)
-		if err != nil {
-			return nil, err
-		}
-		bookEds[b.b.itemID] = &edRef{id: eid, files: b.files, ids: ids}
-	}
-
-	for _, rp := range podcasts {
-		w := &store.Work{LibraryID: libIDs[rp.p.libID], Title: rp.p.title, Author: strPtr(rp.p.author)}
-		wid, err := db.UpsertWork(w)
-		if err != nil {
-			return nil, err
-		}
-		for _, e := range rp.episodes {
-			season := int(e.e.season.Int64)
-			episode := int(e.e.episode.Int64)
-			title := e.e.title
-			if title == "" {
-				title = e.fallback
+		libIDs := map[int64]int64{}
+		for _, l := range libs {
+			if _, ok := libIndex[l.id]; !ok {
+				continue
 			}
-			dur := e.file.Duration
-			ed := &store.Edition{
-				WorkID: wid, Format: e.format, Title: title, DurationSecs: &dur,
-				SeasonNum: &season, EpisodeNum: &episode,
+			fallback := filepath.Join(dataDir, "imported", plan.Libraries[libIndex[l.id]].Name)
+			if p := libPaths[l.id]; p != "" {
+				fallback = p
 			}
-			eid, err := db.UpsertEdition(ed)
+			id, err := ensureLibrary(tx, l.name, libType[l.id], fallback, plan, libIndex[l.id], true)
 			if err != nil {
-				return nil, err
+				return err
 			}
-			ids, err := applyFiles(db, eid, []fileSpec{e.file})
-			if err != nil {
-				return nil, err
-			}
-			epEds[e.e.id] = &edRef{id: eid, files: []fileSpec{e.file}, ids: ids}
+			libIDs[l.id] = id
 		}
-	}
 
-	for _, p := range progress {
-		uid, ok := userMap[p.p.userID]
-		if !ok {
-			continue
-		}
-		var ref *edRef
-		switch p.p.itemType {
-		case "book":
-			ref = bookEds[p.p.mediaID]
-		case "podcastEpisode":
-			ref = epEds[p.p.mediaID]
-		}
-		if ref == nil {
-			continue
-		}
-		fid, off := locate(ref.files, ref.ids, p.p.current)
-		if p.p.ebook > 0 && p.p.current == 0 {
-			rp := &store.ReadingProgress{
-				Progress: store.Progress{UserID: uid, EditionID: ref.id, FileID: fid, EditionPositionSecs: 0, IsFinished: p.p.finished},
-				Percent:  &p.p.ebook,
-			}
-			if err := db.SetReadingProgress(rp); err != nil {
-				return nil, err
-			}
-			continue
-		}
-		var dur *float64
-		if p.duration > 0 {
-			d := p.duration
-			dur = &d
-		}
-		if err := db.SetProgress(&store.Progress{
-			UserID: uid, EditionID: ref.id, FileID: fid, FileOffsetSecs: off,
-			EditionPositionSecs: p.p.current, DurationSecs: dur,
-			IsFinished: p.p.finished, Device: strPtr("abs-import"),
-		}); err != nil {
-			return nil, err
-		}
-	}
-
-	for _, p := range mappedPlaylists {
-		uid, ok := userMap[p.userID]
-		if !ok {
-			continue
-		}
-		plID := int64(0)
-		existing, err := db.ListPlaylists(uid)
-		if err != nil {
-			return nil, err
-		}
-		for _, ex := range existing {
-			if ex.Name == p.name {
-				plID = ex.ID
-				break
-			}
-		}
-		if plID == 0 {
-			plID, err = db.CreatePlaylist(uid, p.name)
+		for _, b := range books {
+			w := &store.Work{LibraryID: libIDs[b.b.libID], Title: b.b.title, Author: strPtr(b.b.author), Description: strPtr(b.b.desc)}
+			wid, err := tx.UpsertWork(w)
 			if err != nil {
-				return nil, err
+				return err
+			}
+			total := 0.0
+			for _, f := range b.files {
+				total += f.Duration
+			}
+			e := &store.Edition{WorkID: wid, Format: b.format, Title: b.b.title, DurationSecs: &total}
+			eid, err := tx.UpsertEdition(e)
+			if err != nil {
+				return err
+			}
+			ids, err := applyFilesTx(tx, eid, b.files)
+			if err != nil {
+				return err
+			}
+			bookEds[b.b.itemID] = &edRef{id: eid, files: b.files, ids: ids}
+		}
+
+		for _, rp := range podcasts {
+			w := &store.Work{LibraryID: libIDs[rp.p.libID], Title: rp.p.title, Author: strPtr(rp.p.author)}
+			wid, err := tx.UpsertWork(w)
+			if err != nil {
+				return err
+			}
+			for _, e := range rp.episodes {
+				var season, episode *int
+				if e.e.episode.Valid && e.e.episode.Int64 > 0 {
+					s, n := int(e.e.season.Int64), int(e.e.episode.Int64)
+					season, episode = &s, &n
+				}
+				title := e.e.title
+				if title == "" {
+					title = e.fallback
+				}
+				dur := e.file.Duration
+				ed := &store.Edition{
+					WorkID: wid, Format: e.format, Title: title, DurationSecs: &dur,
+					SeasonNum: season, EpisodeNum: episode,
+				}
+				eid, err := tx.UpsertEdition(ed)
+				if err != nil {
+					return err
+				}
+				ids, err := applyFilesTx(tx, eid, []fileSpec{e.file})
+				if err != nil {
+					return err
+				}
+				epEds[e.e.id] = &edRef{id: eid, files: []fileSpec{e.file}, ids: ids}
 			}
 		}
-		for _, it := range p.items {
-			if ref := bookEds[it]; ref != nil {
-				if _, err := db.AddPlaylistItem(plID, ref.id); err != nil {
-					return nil, err
+
+		for _, p := range progress {
+			uid, ok := userMap[p.p.userID]
+			if !ok {
+				continue
+			}
+			var ref *edRef
+			switch p.p.itemType {
+			case "book":
+				ref = bookEds[p.p.mediaID]
+			case "podcastEpisode":
+				ref = epEds[p.p.mediaID]
+			}
+			if ref == nil {
+				continue
+			}
+			fid, off := locate(ref.files, ref.ids, p.p.current)
+			if p.p.ebook > 0 && p.p.current == 0 {
+				rp := &store.ReadingProgress{
+					Progress: store.Progress{UserID: uid, EditionID: ref.id, FileID: fid, EditionPositionSecs: 0, IsFinished: p.p.finished},
+					Percent:  &p.p.ebook,
+				}
+				if err := tx.SetReadingProgress(rp); err != nil {
+					return err
+				}
+				continue
+			}
+			var dur *float64
+			if p.duration > 0 {
+				d := p.duration
+				dur = &d
+			}
+			if err := tx.SetProgress(&store.Progress{
+				UserID: uid, EditionID: ref.id, FileID: fid, FileOffsetSecs: off,
+				EditionPositionSecs: p.p.current, DurationSecs: dur,
+				IsFinished: p.p.finished, Device: strPtr("abs-import"),
+			}); err != nil {
+				return err
+			}
+		}
+
+		for _, p := range mappedPlaylists {
+			uid, ok := userMap[p.userID]
+			if !ok {
+				continue
+			}
+			plID := int64(0)
+			existing, err := tx.ListPlaylists(uid)
+			if err != nil {
+				return err
+			}
+			for _, ex := range existing {
+				if ex.Name == p.name {
+					plID = ex.ID
+					break
+				}
+			}
+			if plID == 0 {
+				plID, err = tx.CreatePlaylist(uid, p.name)
+				if err != nil {
+					return err
+				}
+			}
+			for _, it := range p.items {
+				if ref := bookEds[it]; ref != nil {
+					if _, err := tx.AddPlaylistItem(plID, ref.id); err != nil {
+						return err
+					}
 				}
 			}
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	return plan, nil

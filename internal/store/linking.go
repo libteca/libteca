@@ -6,6 +6,7 @@ import (
 )
 
 var ErrSameWork = errors.New("cannot merge a work into itself")
+var ErrCrossLibrary = errors.New("cannot move editions between libraries")
 
 type MoveResult struct {
 	TargetWorkID  int64
@@ -61,10 +62,6 @@ func ensureWorkInLibrary(q dbtx, w *Work) (int64, error) {
 	return upsertWork(q, w)
 }
 
-// MoveEditionToWork reparents an edition; files and progress follow the
-// edition id. A source work left without editions is deleted, so a move can
-// never strand an empty work. Moving to a work in another library is allowed:
-// editions carry no library FK, the work's library applies to all of them.
 func (d *DB) MoveEditionToWork(editionID, targetWorkID int64) (MoveResult, error) {
 	tx, err := d.Begin()
 	if err != nil {
@@ -85,6 +82,17 @@ func moveEditionToWork(q dbtx, editionID, targetWorkID int64) (MoveResult, error
 	}
 	if e.WorkID == targetWorkID {
 		return MoveResult{TargetWorkID: targetWorkID, SourceWorkID: e.WorkID}, nil
+	}
+	source, err := workRow(q, e.WorkID)
+	if err != nil {
+		return MoveResult{}, err
+	}
+	target, err := workRow(q, targetWorkID)
+	if err != nil {
+		return MoveResult{}, err
+	}
+	if source.LibraryID != target.LibraryID {
+		return MoveResult{}, ErrCrossLibrary
 	}
 	if _, err := q.Exec(`UPDATE editions SET work_id = ? WHERE id = ?`, targetWorkID, editionID); err != nil {
 		return MoveResult{}, err
@@ -115,11 +123,16 @@ func (d *DB) MergeWorks(sourceID, targetID int64) error {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := workRow(tx, sourceID); err != nil {
+	source, err := workRow(tx, sourceID)
+	if err != nil {
 		return err
 	}
-	if _, err := workRow(tx, targetID); err != nil {
+	target, err := workRow(tx, targetID)
+	if err != nil {
 		return err
+	}
+	if source.LibraryID != target.LibraryID {
+		return ErrCrossLibrary
 	}
 	if _, err := tx.Exec(`UPDATE editions SET work_id = ? WHERE work_id = ?`, targetID, sourceID); err != nil {
 		return err
@@ -155,6 +168,39 @@ func (d *DB) SplitEditionToNewWork(editionID int64, title string, author *string
 		author = src.Author
 	}
 	w := &Work{LibraryID: src.LibraryID, Title: title, Author: author}
+	targetID, err := ensureWorkInLibrary(tx, w)
+	if err != nil {
+		return MoveResult{}, err
+	}
+	res, err := moveEditionToWork(tx, editionID, targetID)
+	if err != nil {
+		return MoveResult{}, err
+	}
+	res.Created = w.Created
+	if err := tx.Commit(); err != nil {
+		return MoveResult{}, err
+	}
+	return res, nil
+}
+
+func (d *DB) MoveEditionToNewWork(editionID, libraryID int64, title string, author *string) (MoveResult, error) {
+	tx, err := d.Begin()
+	if err != nil {
+		return MoveResult{}, err
+	}
+	defer tx.Rollback()
+	e, err := editionRow(tx, editionID)
+	if err != nil {
+		return MoveResult{}, err
+	}
+	source, err := workRow(tx, e.WorkID)
+	if err != nil {
+		return MoveResult{}, err
+	}
+	if libraryID != 0 && libraryID != source.LibraryID {
+		return MoveResult{}, ErrCrossLibrary
+	}
+	w := &Work{LibraryID: source.LibraryID, Title: title, Author: author}
 	targetID, err := ensureWorkInLibrary(tx, w)
 	if err != nil {
 		return MoveResult{}, err

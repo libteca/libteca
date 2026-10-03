@@ -1,15 +1,26 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import { apiChecked, media } from "../api";
+import { apiWithDeadline, media } from "../api";
 import { c, ghostBtn } from "../styles";
 import { IconCheckSmall, IconDownload, isTypingTarget, pagePercent, readerOverlay, TopBar, useProgressSaver, type ReadingProgress } from "./shared";
 
-export function PdfReader(props: { editionId: number; title: string; progress: ReadingProgress | null; onBack: () => void }) {
+type PdfReaderProps = { editionId: number; title: string; progress: ReadingProgress | null; onBack: () => void };
+
+function resumePage(progress: ReadingProgress | null): number {
+  const page = progress?.page;
+  return !progress?.isFinished && typeof page === "number" && Number.isSafeInteger(page) && page > 0 ? page : 1;
+}
+
+export function PdfReader(props: PdfReaderProps) {
+  return <PdfSession key={props.editionId} {...props} />;
+}
+
+function PdfSession(props: PdfReaderProps) {
   const [finished, setFinished] = useState(!!props.progress?.isFinished);
-  const [draft, setDraft] = useState("1");
+  const [draft, setDraft] = useState(() => String(resumePage(props.progress)));
   const [pageCount, setPageCount] = useState<number | undefined>();
-  const [openPage, setOpenPage] = useState<number | null>(null);
+  const [openPage, setOpenPage] = useState(() => resumePage(props.progress));
   const [ready, setReady] = useState(false);
-  const pageRef = useRef(1);
+  const pageRef = useRef(resumePage(props.progress));
   const countRef = useRef<number | undefined>();
   const saver = useProgressSaver(props.editionId, props.progress?.revision ?? 0, {
     page: props.progress?.page, percent: props.progress?.percent,
@@ -26,7 +37,7 @@ export function PdfReader(props: { editionId: number; title: string; progress: R
   const commit = (raw: string) => {
     const t = raw.trim();
     const n = t === "" ? NaN : Math.floor(Number(t));
-    if (!isFinite(n)) {
+    if (!Number.isSafeInteger(n)) {
       setDraft(String(pageRef.current));
       return;
     }
@@ -42,24 +53,24 @@ export function PdfReader(props: { editionId: number; title: string; progress: R
 
   useEffect(() => {
     let alive = true;
-    apiChecked<ReadingProgress & { pageCount?: number }>(`/progress/${props.editionId}`).then((p) => {
+    const controller = new AbortController();
+    apiWithDeadline(`/progress/${props.editionId}`, { signal: controller.signal }).then((p: ReadingProgress & { pageCount?: number; error?: string }) => {
+      if (p?.error) throw new Error(p.error);
       if (!alive) return;
-      const n = p?.page && p.page >= 1 ? Math.floor(p.page) : 0;
-      if (n >= 1) {
-        setDraft(String(n));
-        if (!p.isFinished) setOpenPage(n);
-        pageRef.current = n;
-      }
       const pc = p?.pageCount;
-      if (typeof pc === "number" && pc > 0) {
-        setPageCount(pc);
-        countRef.current = pc;
-      }
+      const count = typeof pc === "number" && Number.isSafeInteger(pc) && pc > 0 ? pc : undefined;
+      setPageCount(count);
+      countRef.current = count;
+      const n = Math.min(resumePage(p), count ?? Number.MAX_SAFE_INTEGER);
+      setFinished(!!p?.isFinished);
+      setDraft(String(n));
+      setOpenPage(n);
+      pageRef.current = n;
       setReady(true);
     }).catch(() => {
       if (alive) setReady(true);
     });
-    return () => { alive = false; };
+    return () => { alive = false; controller.abort(); };
   }, [props.editionId]);
 
   useEffect(() => {
@@ -86,6 +97,7 @@ export function PdfReader(props: { editionId: number; title: string; progress: R
         <span style={{ display: "inline-flex", alignItems: "center", gap: "0.25rem", color: c.muted, fontSize: "0.78rem", fontVariantNumeric: "tabular-nums" }}>
           <input
             type="number"
+            disabled={!ready}
             inputMode="numeric"
             min={1}
             max={pageCount}
@@ -124,7 +136,7 @@ export function PdfReader(props: { editionId: number; title: string; progress: R
             <IconCheckSmall size={14} /> Finished
           </span>
         ) : (
-          <button style={ghostBtn} onClick={markFinished}>Mark finished</button>
+          <button style={ghostBtn} disabled={!ready} onClick={markFinished}>Mark finished</button>
         )}
         <a style={{ ...ghostBtn, display: "inline-flex", alignItems: "center", gap: "0.4rem", textDecoration: "none" }} href={download} download>
           <IconDownload size={14} /> Download

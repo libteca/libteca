@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import { api, getToken, media } from "../api";
+import { api, apiWithDeadline, getToken, type EditionDetail, type WorkDetail } from "../api";
+import { EditionAudio } from "../players/editionAudio";
 import { EmptyState, QuietLoad } from "../components/rail";
 import { IconBack30, IconChevronDown, IconChevronLeft, IconChevronUp, IconFwd30, IconMusic, IconPause, IconPlay, IconX } from "../components/svg";
 import { toast } from "../toast";
@@ -20,112 +21,82 @@ type PlaylistItem = {
 
 type PlaylistDetail = Playlist & { items: PlaylistItem[] };
 
-// Sequential playback for a playlist's audio editions. Items are editions,
-// not files, so each src is the edition download (first file) — music tracks
-// are one file per edition.
+function PlaylistEdition(props: {
+  item: PlaylistItem;
+  sessionToken: string;
+  position?: number;
+  audioRef: { current: HTMLAudioElement | null };
+  seekRef: { current: ((position: number) => void) | null };
+  onPlaying: (playing: boolean) => void;
+  onTime: (position: number, duration: number) => void;
+  onProgress: (position: number, finished: boolean) => void;
+  onEnded: () => void;
+}) {
+  const [edition, setEdition] = useState<EditionDetail | null>(null);
+  const [error, setError] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    let active = true;
+    const controller = new AbortController();
+    setError(false);
+    props.onPlaying(false);
+    props.onTime(props.position || 0, props.item.durationSecs);
+    apiWithDeadline(`/works/${props.item.workId}`, { signal: controller.signal }).then((work: WorkDetail) => {
+      if (!active || getToken() !== props.sessionToken) return;
+      const found = work?.editions?.find((candidate) => candidate.id === props.item.editionId);
+      if (!found?.files?.length || found.files.some((file) => !Number.isFinite(file.duration) || file.duration < 0 || !file.id)) {
+        setError(true);
+        return;
+      }
+      setEdition({ ...found, files: [...found.files].sort((a, b) => a.seq - b.seq || a.id - b.id) });
+    }).catch(() => { if (active) setError(true); });
+    return () => { active = false; controller.abort(); };
+  }, [props.item.editionId, props.item.workId, attempt]);
+  if (error) return <span style={errStyle}>Couldn't load audio. <button style={linkBtn} onClick={() => setAttempt(attempt + 1)}>Retry</button></span>;
+  if (!edition) return <span style={muted}>Loading audio…</span>;
+  return <EditionAudio {...props} edition={edition} />;
+}
+
 function PlaylistPlayer(props: { items: PlaylistItem[]; onDone: () => void }) {
   const [idx, setIdx] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [duration, setDuration] = useState(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const autoplay = useRef(false);
-  const lastPostRef = useRef(0);
+  const seekRef = useRef<((position: number) => void) | null>(null);
+  const positions = useRef(new Map<number, number>());
+  const sessionToken = useRef(getToken());
   const item = props.items[idx];
-  const itemRef = useRef(item);
-  itemRef.current = item;
-
-  useEffect(() => {
-    const post = () => {
-      const a = audioRef.current;
-      const it = itemRef.current;
-      if (!a || !it || a.ended || a.currentTime <= 1) return;
-      fetch(`/api/core/progress/${it.editionId}`, {
-        method: "POST", keepalive: true,
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${getToken()}` },
-        body: JSON.stringify({
-          position: a.currentTime,
-          duration: isFinite(a.duration) && a.duration > 0 ? a.duration : (it.durationSecs || 0),
-          finished: false,
-        }),
-      }).catch(() => {});
-    };
-    addEventListener("pagehide", post);
-    return () => {
-      removeEventListener("pagehide", post);
-      post();
-    };
-  }, []);
-
-  useEffect(() => {
-    const a = audioRef.current;
-    if (!a) return;
-    setElapsed(0);
-    setDuration(item?.durationSecs || 0);
-    if (autoplay.current) a.play().catch(() => {});
-  }, [idx]);
 
   const jump = (i: number) => {
-    if (i < 0 || i >= props.items.length) return;
-    autoplay.current = true;
-    setIdx(i);
-  };
-
-  const saveProgress = (finished: boolean) => {
-    const a = audioRef.current;
-    if (!a || !item) return;
-    const pos = a.currentTime;
-    if (pos <= 1 && !finished) return;
-    lastPostRef.current = Date.now();
-    api(`/progress/${item.editionId}`, {
-      method: "POST",
-      body: JSON.stringify({
-        position: pos,
-        duration: isFinite(a.duration) && a.duration > 0 ? a.duration : (item.durationSecs || 0),
-        finished,
-      }),
-    }).catch(() => {});
+    if (i >= 0 && i < props.items.length) setIdx(i);
   };
 
   const ended = () => {
-    saveProgress(true);
-    if (idx < props.items.length - 1) {
-      autoplay.current = true;
-      setIdx(idx + 1);
-    } else {
-      setPlaying(false);
-      autoplay.current = false;
-      props.onDone();
-    }
+    if (idx < props.items.length - 1) setIdx(idx + 1);
+    else props.onDone();
   };
 
   const toggle = () => {
     const a = audioRef.current;
     if (!a) return;
-    if (a.paused) { autoplay.current = true; a.play().catch(() => {}); } else a.pause();
+    if (a.paused) a.play().catch(() => {}); else a.pause();
   };
 
   return (
     <div className="player-bar" style={playerBar}>
-      <audio
-        ref={audioRef}
-        src={item ? media(`/editions/${item.editionId}/download`) : undefined}
-        onPlay={() => setPlaying(true)}
-        onPause={() => {
-          setPlaying(false);
-          const a = audioRef.current;
-          if (a && !a.ended) saveProgress(false);
-        }}
-        onTimeUpdate={(e) => {
-          setElapsed((e.target as HTMLAudioElement).currentTime);
-          if (Date.now() - lastPostRef.current >= 15000) saveProgress(false);
-        }}
-        onLoadedMetadata={(e) => {
-          const a = e.target as HTMLAudioElement;
-          if (isFinite(a.duration) && a.duration > 0) setDuration(a.duration);
-        }}
+      {item && <PlaylistEdition
+        key={item.editionId}
+        item={item}
+        sessionToken={sessionToken.current}
+        position={positions.current.get(item.editionId)}
+        audioRef={audioRef}
+        seekRef={seekRef}
+        onPlaying={setPlaying}
+        onTime={(position, total) => { setElapsed(position); setDuration(total); }}
+        onProgress={(position, finished) => positions.current.set(item.editionId, finished ? 0 : position)}
         onEnded={ended}
-      />
+      />}
       <div style={{ display: "flex", flexDirection: "column", minWidth: 0, width: "13rem", flexShrink: 1 }}>
         <span style={{ fontSize: "0.88rem", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item ? item.title : ""}</span>
         <span style={{ fontSize: "0.75rem", color: c.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -149,19 +120,18 @@ function PlaylistPlayer(props: { items: PlaylistItem[]; onDone: () => void }) {
           backgroundSize: "100% 5px", backgroundRepeat: "no-repeat", backgroundPosition: "center", borderRadius: "999px",
         }}
         onInput={(e) => {
-          const a = audioRef.current;
-          if (a) a.currentTime = Number((e.target as HTMLInputElement).value);
+          seekRef.current?.(Number((e.target as HTMLInputElement).value));
         }}
         aria-label="Seek"
       />
       <span style={{ fontSize: "0.75rem", color: c.muted, fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>{fmtClock(duration)}</span>
-      <button className="press" style={{ ...linkBtn, marginLeft: "0.2rem", flexShrink: 0 }} onClick={() => { saveProgress(false); props.onDone(); }}>Stop</button>
+      <button className="press" style={{ ...linkBtn, marginLeft: "0.2rem", flexShrink: 0 }} onClick={props.onDone}>Stop</button>
     </div>
   );
 }
 
 export function PlaylistsView(props: { id?: number }) {
-  if (props.id != null) return <PlaylistDetail id={props.id} />;
+  if (props.id != null) return <PlaylistDetail key={props.id} id={props.id} />;
   return <PlaylistList />;
 }
 
@@ -263,9 +233,10 @@ function PlaylistDetail(props: { id: number }) {
   const [moving, setMoving] = useState(false);
 
   const refresh = () => api(`/playlists/${props.id}`)
-    .then((r: PlaylistDetail & { error?: string }) => {
+    .then((r: PlaylistDetail & { error?: string; status?: number }) => {
       if (r && !r.error) { setP(r); setNotFound(false); setLoadErr(false); }
-      else setNotFound(true);
+      else if (r?.status === 404) setNotFound(true);
+      else setLoadErr(true);
     })
     .catch(() => setLoadErr(true));
   useEffect(() => { refresh(); }, [props.id]);
@@ -372,7 +343,7 @@ function PlaylistDetail(props: { id: number }) {
         </div>
       )}
       {playing && audioItems.length > 0 && (
-        <PlaylistPlayer items={audioItems} onDone={() => setPlaying(false)} />
+        <PlaylistPlayer key={audioItems.map((item) => item.editionId).join(",")} items={audioItems} onDone={() => setPlaying(false)} />
       )}
     </div>
   );

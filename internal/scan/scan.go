@@ -215,14 +215,20 @@ func scanBook(ctx context.Context, db *store.DB, lib *store.Library, root, top s
 		}
 	}
 	if unchanged {
-		title, author := titleAuthor(top, bookFile{})
-		authorPtr := nullable(author)
-		if id, ok := db.FindWorkID(lib.ID, title, &authorPtr); ok {
-			if err := ensureCover(ctx, db, root, id, top, group, coversDir); err != nil {
+		ordered, err := bookOrderCurrent(db, group)
+		if err != nil {
+			return err
+		}
+		if !ordered {
+			if err := probeBookFiles(ctx, root, group, tr); err != nil {
+				return err
+			}
+			sortBookFiles(top, group)
+			if err := repairBookOrder(ctx, db, group, tr); err != nil {
 				return err
 			}
 		}
-		return nil
+		return ensureStoredBookCovers(ctx, db, root, top, group, coversDir)
 	}
 
 	format := "mp3"
@@ -233,20 +239,8 @@ func scanBook(ctx context.Context, db *store.DB, lib *store.Library, root, top s
 		}
 	}
 
-	for i := range group {
-		f := &group[i]
-		pf, err := mediafs.Open(root, f.path)
-		if err != nil {
-			return err
-		}
-		probe, perr := audio.ProbeFile(ctx, pf)
-		pf.Close()
-		if perr != nil {
-			return perr
-		}
-		f.info = probe
-		f.hash = hashFile(f.path, f.size)
-		tr.probed()
+	if err := probeBookFiles(ctx, root, group, tr); err != nil {
+		return err
 	}
 
 	first := group[0]
@@ -282,8 +276,12 @@ func scanBook(ctx context.Context, db *store.DB, lib *store.Library, root, top s
 			w.Description = &d
 		}
 	}
+	sortBookFiles(top, group)
 	var workID int64
 	txErr := db.Update(func(tx *store.Tx) error {
+		if err := cancelErr(ctx); err != nil {
+			return err
+		}
 		var err error
 		workID, err = tx.UpsertWork(w)
 		if err != nil {
@@ -326,12 +324,18 @@ func scanBook(ctx context.Context, db *store.DB, lib *store.Library, root, top s
 				Codec: &c, Container: &ct, Bitrate: &br, Channels: &ch, SampleRate: &sr,
 				DurationSecs: f.info.Duration, Chapters: chap,
 			}
+			if err := cancelErr(ctx); err != nil {
+				return err
+			}
 			if err := tx.UpsertFile(fr); err != nil {
+				return err
+			}
+			if err := markBookOrder(tx, fr.ID, f); err != nil {
 				return err
 			}
 			tr.file(fr.Inserted)
 		}
-		return nil
+		return cancelErr(ctx)
 	})
 	if txErr != nil {
 		return txErr

@@ -26,7 +26,15 @@ func workSearchCols(title string, author *string) (string, string) {
 }
 
 func (d *DB) Libraries() ([]Library, error) {
-	rows, err := d.Query(`SELECT id, name, type, path, created_at FROM libraries ORDER BY id`)
+	return libraries(d)
+}
+
+func (t *Tx) Libraries() ([]Library, error) {
+	return libraries(t)
+}
+
+func libraries(q dbtx) ([]Library, error) {
+	rows, err := q.Query(`SELECT id, name, type, path, created_at FROM libraries ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -53,7 +61,15 @@ func (d *DB) Library(id int64) (*Library, error) {
 }
 
 func (d *DB) AddLibrary(name, typ, path string) (int64, error) {
-	res, err := d.Exec(`INSERT INTO libraries (name, type, path, created_at) VALUES (?,?,?,?)`,
+	return addLibrary(d, name, typ, path)
+}
+
+func (t *Tx) AddLibrary(name, typ, path string) (int64, error) {
+	return addLibrary(t, name, typ, path)
+}
+
+func addLibrary(q dbtx, name, typ, path string) (int64, error) {
+	res, err := q.Exec(`INSERT INTO libraries (name, type, path, created_at) VALUES (?,?,?,?)`,
 		name, typ, path, nowMilli())
 	if err != nil {
 		return 0, err
@@ -208,8 +224,16 @@ func (d *DB) Users() ([]User, error) {
 }
 
 func (d *DB) UserByName(name string) (*User, error) {
+	return userByName(d, name)
+}
+
+func (t *Tx) UserByName(name string) (*User, error) {
+	return userByName(t, name)
+}
+
+func userByName(q dbtx, name string) (*User, error) {
 	var u User
-	err := d.QueryRow(`SELECT id, name, password_hash, is_admin, created_at, updated_at FROM users WHERE name = ? COLLATE NOCASE`, name).
+	err := q.QueryRow(`SELECT id, name, password_hash, is_admin, created_at, updated_at FROM users WHERE name = ? COLLATE NOCASE`, name).
 		Scan(&u.ID, &u.Name, &u.PasswordHash, &u.IsAdmin, &u.CreatedAt, &u.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound

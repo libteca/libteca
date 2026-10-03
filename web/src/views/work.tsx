@@ -1,9 +1,10 @@
 import type { ComponentChildren } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
-import { api, media, type EditionDetail, type WorkDetail } from "../api";
+import { api, apiWithDeadline, getToken, media, type EditionDetail, type WorkDetail } from "../api";
 import { Cover } from "../components/cover";
 import { EmptyState, SkeletonWork } from "../components/rail";
 import { AudioPlayer, type AudioController, type PlayerFile } from "../players/audio";
+import { AudioProgressSaver } from "../players/audioProgress";
 import { VideoPlayer } from "../players/video";
 import { IconBook, IconCheck, IconChevronLeft, IconPlay } from "../components/svg";
 import { toast } from "../toast";
@@ -54,6 +55,14 @@ function readerProgress(e: { isFinished?: boolean; percent?: number; page?: numb
 }
 
 export function WorkView(props: { id: number }) {
+  return <WorkSession key={`${getToken()}:${props.id}`} {...props} />;
+}
+
+type LocalAudioProgress = Map<number, { position: number; isFinished: boolean }>;
+
+function WorkSession(props: { id: number }) {
+  const audioProgress = useRef<LocalAudioProgress>(new Map());
+  const sessionToken = useRef(getToken());
   const [w, setW] = useState<WorkDetail | null>(null);
   const [edition, setEdition] = useState<number>(0);
   const [videoEdition, setVideoEdition] = useState<number | null>(null);
@@ -61,15 +70,26 @@ export function WorkView(props: { id: number }) {
   const [missing, setMissing] = useState(false);
   const [loadErr, setLoadErr] = useState(false);
 
+  const loadGeneration = useRef(0);
+  const loadController = useRef<AbortController | null>(null);
   const reload = () => {
+    const generation = ++loadGeneration.current;
+    loadController.current?.abort();
+    const controller = new AbortController();
+    loadController.current = controller;
     setMissing(false);
     setLoadErr(false);
-    api(`/works/${props.id}`).then((d: WorkDetail) => {
+    apiWithDeadline(`/works/${props.id}`, { signal: controller.signal }).then((d: WorkDetail & { error?: string; status?: number }) => {
+      if (generation !== loadGeneration.current || getToken() !== sessionToken.current) return;
+      if (d?.error && d.status !== 404) { setW(null); setLoadErr(true); return; }
       if (!d || !Array.isArray(d.editions)) { setW(null); setMissing(true); return; }
       setW(d);
-    }).catch(() => { setW(null); setLoadErr(true); });
+    }).catch(() => { if (generation === loadGeneration.current) { setW(null); setLoadErr(true); } });
   };
-  useEffect(() => { setVideoEdition(null); reload(); }, [props.id]);
+  useEffect(() => {
+    reload();
+    return () => { ++loadGeneration.current; loadController.current?.abort(); };
+  }, [props.id]);
   useEffect(() => {
     api("/me").then((u: { isAdmin?: boolean }) => setIsAdmin(!!u.isAdmin)).catch(() => {});
   }, []);
@@ -99,7 +119,7 @@ export function WorkView(props: { id: number }) {
     return <VideoPlayer w={w} editionId={videoEdition} onClose={() => setVideoEdition(null)} onSelectEdition={setVideoEdition} />;
   }
   if (isTV) return <><style>{WORK_CSS}</style><EpisodeList w={w} onPlay={setVideoEdition} /></>;
-  if (isMusic) return <><style>{WORK_CSS}</style><TrackList w={w} /></>;
+  if (isMusic) return <><style>{WORK_CSS}</style><TrackList key={w.id} w={w} sessionToken={sessionToken.current} /></>;
   if (isMovie) {
     const vf = first?.files?.[0];
     const facts = [
@@ -134,7 +154,7 @@ export function WorkView(props: { id: number }) {
     );
     return <><style>{WORK_CSS}</style>{movie}</>;
   }
-  return <><style>{WORK_CSS}</style><EditionsView w={w} editionId={edition} setEdition={setEdition} isAdmin={isAdmin} reload={reload} /></>;
+  return <><style>{WORK_CSS}</style><EditionsView key={`${w.id}:${edition}`} w={w} editionId={edition} setEdition={setEdition} isAdmin={isAdmin} reload={reload} audioProgress={audioProgress.current} sessionToken={sessionToken.current} /></>;
 }
 
 function Wash(props: { id: number; has: boolean; fanart?: boolean; children: ComponentChildren }) {
@@ -222,28 +242,30 @@ function EpisodeList(props: { w: WorkDetail; onPlay: (id: number) => void }) {
   );
 }
 
-function TrackList(props: { w: WorkDetail }) {
+function TrackList(props: { w: WorkDetail; sessionToken: string }) {
   const [idx, setIdx] = useState<number | null>(null);
   const ctl = useRef<AudioController | null>(null);
   const tracks = props.w.editions;
   const files: PlayerFile[] = tracks.map((t) => ({ id: t.files[0]?.id || 0, title: t.title, duration: t.duration }));
 
-  const saveTrack = async (i: number, position: number, finished = false) => {
-    const t = tracks[i];
-    if (!t || position <= 1) return;
-    try {
-      await api(`/progress/${t.id}`, { method: "POST", body: JSON.stringify({ position, duration: t.duration, finished }) });
-    } catch { /* offline; next tick retries */ }
+  const savers = useRef(new Map<number, AudioProgressSaver>());
+  const saverFor = (i: number) => {
+    const track = tracks[i];
+    if (!track) return null;
+    let saver = savers.current.get(track.id);
+    if (!saver) { saver = new AudioProgressSaver(`/progress/${track.id}`, track.duration, props.sessionToken); savers.current.set(track.id, saver); }
+    return saver;
   };
-
-  const trackAt = (abs: number) => {
-    let cum = 0;
-    for (let i = 0; i < files.length; i++) {
-      if (cum + files[i].duration > abs) return { i, off: abs - cum };
-      cum += files[i].duration;
+  const saveTrack = (i: number, position: number, finished = false) => saverFor(i)?.save(position, finished);
+  const requested = useRef<{ index: number; offset: number } | null>(null);
+  useEffect(() => {
+    if (idx != null && requested.current && ctl.current) {
+      const { index, offset } = requested.current;
+      requested.current = null;
+      ctl.current.playAt(index, offset);
     }
-    return { i: files.length - 1, off: 0 };
-  };
+  }, [idx]);
+
 
   return (
     <Wash id={props.w.id} has={!!props.w.hasCover} fanart={props.w.hasFanart}>
@@ -263,13 +285,9 @@ function TrackList(props: { w: WorkDetail }) {
           return (
           <div key={t.id} style={{ display: "flex", alignItems: "center", gap: "0.35rem", borderBottom: `1px solid ${c.lineSoft}` }}>
             <button className="row-hit" style={{ ...chapterRow, width: "auto", flex: 1, minWidth: 0, borderBottom: "none", color: t.isFinished ? c.faint : i === idx ? c.text : c.textDim }} onClick={() => {
-              if (idx == null) {
-                setIdx(i);
-                setTimeout(() => ctl.current?.playAt(i, off), 60);
-              } else {
-                setIdx(i);
-                ctl.current?.playAt(i, off);
-              }
+              if (ctl.current) ctl.current.playAt(i, off);
+              else requested.current = { index: i, offset: off };
+              setIdx(i);
             }}>
               <span style={{ display: "flex", gap: "0.7rem", alignItems: "baseline", minWidth: 0 }}>
                 <span style={{ color: c.faint, fontVariantNumeric: "tabular-nums" }}>{i + 1}.</span>
@@ -294,22 +312,38 @@ function TrackList(props: { w: WorkDetail }) {
           artwork={props.w.hasCover ? media(`/covers/${props.w.id}.jpg`) : undefined}
           controllerRef={ctl}
           onIndexChange={setIdx}
-          onPos={(abs) => { const { i, off } = trackAt(abs); saveTrack(i, off); }}
-          onFileEnded={(i) => saveTrack(i, tracks[i]?.duration || 0, true)}
+          onFilePos={(i, offset) => saveTrack(i, offset)}
+          onSeek={(i, offset) => { void saverFor(i)?.start(offset); }}
+          onFileEnded={(i) => {
+            saveTrack(i, tracks[i]?.duration || 0, true);
+            if (i + 1 < tracks.length) void saverFor(i + 1)?.start(0);
+          }}
         />
       )}
     </Wash>
   );
 }
 
-function EditionsView(props: { w: WorkDetail; editionId: number; setEdition: (id: number) => void; isAdmin: boolean; reload: () => void }) {
+function EditionsView(props: { w: WorkDetail; editionId: number; setEdition: (id: number) => void; isAdmin: boolean; reload: () => void; audioProgress: LocalAudioProgress; sessionToken: string }) {
   const w = props.w;
-  const ed = w.editions.find((e) => e.id === props.editionId)
+  const sourceEdition = w.editions.find((e) => e.id === props.editionId)
     || w.editions.find((e) => !e.isFinished && ((e.position && e.position > 0) || (e.percent && e.percent > 0) || (e.page && e.page > 0)))
     || w.editions[0];
+  const ed = sourceEdition ? { ...sourceEdition, ...props.audioProgress.get(sourceEdition.id) } : undefined;
   const [playing, setPlaying] = useState(false);
   const [pos, setPos] = useState(0);
   const ctl = useRef<AudioController | null>(null);
+  const requested = useRef<{ index: number; offset: number } | null>(null);
+  const saver = useRef<AudioProgressSaver | null>(null);
+  const completed = useRef(false);
+  if (!saver.current && ed) saver.current = new AudioProgressSaver(`/progress/${ed.id}`, ed.duration, props.sessionToken);
+  useEffect(() => {
+    if (playing && requested.current && ctl.current) {
+      const { index, offset } = requested.current;
+      requested.current = null;
+      ctl.current.playAt(index, offset);
+    }
+  }, [playing]);
 
   const files: PlayerFile[] = (ed?.files || []).map((f) => ({ id: f.id, title: `Part ${f.seq}`, duration: f.duration }));
   const readable = READER_FORMATS.has((ed?.format || "").toLowerCase());
@@ -319,22 +353,20 @@ function EditionsView(props: { w: WorkDetail; editionId: number; setEdition: (id
   const fileIndexOf = (fileId: number) => (ed?.files || []).findIndex((f) => f.id === fileId);
 
   const kick = (fi: number, off: number) => {
-    setPlaying(true);
+    if (!files[fi]) return;
     if (ctl.current) ctl.current.playAt(fi, off);
-    else setTimeout(() => ctl.current?.playAt(fi, off), 60);
+    else requested.current = { index: fi, offset: off };
+    setPlaying(true);
   };
 
-  const save = async (position: number, finished = false) => {
-    if (!ed) return;
-    if (position <= 1 && !finished) return;
-    try {
-      await api(`/progress/${ed.id}`, { method: "POST", body: JSON.stringify({ position, duration: ed.duration, finished }) });
-    } catch { /* offline; next tick retries */ }
+  const save = (position: number, finished = false) => {
+    if (ed) props.audioProgress.set(ed.id, { position, isFinished: finished });
+    return saver.current?.save(position, finished);
   };
 
   const resumeOrPlay = () => {
     if (!ed) return;
-    if (ed.position && ed.position > 0 && !ed.isFinished) {
+    if (ed.position && ed.position > 0 && !ed.isFinished && !completed.current) {
       let fid = 0, before = 0, cum = 0;
       const fs = ed.files;
       for (let i = 0; i < fs.length; i++) {
@@ -448,7 +480,13 @@ function EditionsView(props: { w: WorkDetail; editionId: number; setEdition: (id
           artwork={w.hasCover ? media(`/covers/${w.id}.jpg`) : undefined}
           controllerRef={ctl}
           onPos={(abs) => { setPos(abs); save(abs); }}
-          onQueueEnded={() => { save(ed.duration, true); setPlaying(false); }}
+          onSeek={(i, offset) => {
+            completed.current = false;
+            const position = cumBeforeFile(i) + offset;
+            props.audioProgress.set(ed.id, { position, isFinished: false });
+            void saver.current?.start(position);
+          }}
+          onQueueEnded={() => { completed.current = true; save(ed.duration, true); setPlaying(false); }}
         />
       )}
     </Wash>

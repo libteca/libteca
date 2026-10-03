@@ -63,7 +63,15 @@ func (d *DB) UserProgressList(userID int64) ([]Progress, error) {
 }
 
 func (d *DB) SetProgress(p *Progress) error {
-	_, err := d.Exec(`INSERT INTO progress (user_id, edition_id, file_id, file_offset_secs, edition_position_secs, duration_secs, is_finished, device, updated_at, revision)
+	return setProgress(d, p)
+}
+
+func (t *Tx) SetProgress(p *Progress) error {
+	return setProgress(t, p)
+}
+
+func setProgress(q dbtx, p *Progress) error {
+	_, err := q.Exec(`INSERT INTO progress (user_id, edition_id, file_id, file_offset_secs, edition_position_secs, duration_secs, is_finished, device, updated_at, revision)
 		VALUES (?,?,?,?,?,?,?,?,?,1)
 		ON CONFLICT(user_id, edition_id) DO UPDATE SET
 			file_id = excluded.file_id,

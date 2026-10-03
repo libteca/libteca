@@ -21,6 +21,13 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - name: Check Go formatting
         run: test -z "$(gofmt -l cmd internal)"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build embedded web assets
+        run: make web
       - run: go vet ./...
       - run: go test -race ./... -timeout 600s
 

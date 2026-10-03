@@ -21,19 +21,12 @@ func (a *API) MountLinking(r *neutron.Router) {
 	r.HandleFunc("POST /works/{id}/merge", a.workMerge)
 }
 
-// editionMove: POST /api/core/editions/{id}/move
-// {workId | newTitle, newAuthor?, libraryId?}. With workId the edition joins
-// that work. With newTitle the target work is matched (or created) using the
-// library/title/author unique index; libraryId defaults to the source work's
-// library. Moving to a different library is allowed and applies to ALL
-// editions of the target work (works own the library, editions do not).
 func (a *API) editionMove(w http.ResponseWriter, r *http.Request) {
 	if !a.requireAdmin(w, r) {
 		return
 	}
 	eid := auth.Atoi64(r.PathValue("id"))
-	e, err := a.DB.EditionRow(eid)
-	if err != nil {
+	if _, err := a.DB.EditionRow(eid); err != nil {
 		writeJSON(w, 404, map[string]string{"error": "edition not found"})
 		return
 	}
@@ -47,59 +40,38 @@ func (a *API) editionMove(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "bad request"})
 		return
 	}
-	src, err := a.DB.WorkByID(e.WorkID)
-	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": "internal error"})
-		return
-	}
-
-	targetID := body.WorkID
-	targetLib := int64(0)
-	created := false
+	var res store.MoveResult
+	var err error
 	switch {
 	case body.WorkID != 0:
-		tw, err := a.DB.WorkByID(body.WorkID)
-		if err != nil {
-			writeJSON(w, 404, map[string]string{"error": "work not found"})
-			return
-		}
-		targetLib = tw.LibraryID
+		res, err = a.DB.MoveEditionToWork(eid, body.WorkID)
 	case strings.TrimSpace(body.NewTitle) != "":
-		targetLib = src.LibraryID
 		if body.LibraryID != 0 {
 			if _, err := a.DB.Library(body.LibraryID); err != nil {
 				writeJSON(w, 404, map[string]string{"error": "library not found"})
 				return
 			}
-			targetLib = body.LibraryID
 		}
-		nw := &store.Work{LibraryID: targetLib, Title: strings.TrimSpace(body.NewTitle), Author: body.NewAuthor}
-		id, err := a.DB.EnsureWorkInLibrary(nw)
-		if err != nil {
-			writeJSON(w, 500, map[string]string{"error": "internal error"})
-			return
-		}
-		targetID = id
-		created = nw.Created
+		res, err = a.DB.MoveEditionToNewWork(eid, body.LibraryID, strings.TrimSpace(body.NewTitle), body.NewAuthor)
 	default:
 		writeJSON(w, 400, map[string]string{"error": "workId or newTitle required"})
 		return
 	}
-	res, err := a.DB.MoveEditionToWork(eid, targetID)
 	if err != nil {
+		if errors.Is(err, store.ErrCrossLibrary) {
+			writeJSON(w, 400, map[string]string{"error": "cannot move editions between libraries"})
+			return
+		}
 		if errors.Is(err, store.ErrNotFound) {
-			writeJSON(w, 404, map[string]string{"error": "edition not found"})
+			writeJSON(w, 404, map[string]string{"error": "edition or work not found"})
 			return
 		}
 		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	resp := map[string]any{
-		"ok": true, "workId": res.TargetWorkID, "created": created,
+		"ok": true, "workId": res.TargetWorkID, "created": res.Created,
 		"sourceWorkId": res.SourceWorkID, "sourceDeleted": res.SourceDeleted,
-	}
-	if targetLib != src.LibraryID {
-		resp["warning"] = "target work is in a different library; a work's library applies to all of its editions"
 	}
 	writeJSON(w, 200, resp)
 }
@@ -156,6 +128,10 @@ func (a *API) workMerge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.DB.MergeWorks(id, body.IntoWorkID); err != nil {
+		if errors.Is(err, store.ErrCrossLibrary) {
+			writeJSON(w, 400, map[string]string{"error": "cannot merge works from different libraries"})
+			return
+		}
 		if errors.Is(err, store.ErrNotFound) {
 			writeJSON(w, 404, map[string]string{"error": "work not found"})
 			return

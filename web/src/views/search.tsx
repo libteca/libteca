@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import { api, type SearchItem } from "../api";
+import { apiWithDeadline, type SearchItem } from "../api";
 import { Cover } from "../components/cover";
 import { CardProgress, QuietLoad } from "../components/rail";
 import { IconPlay, IconSearch, TypeIcon } from "../components/svg";
@@ -41,24 +41,47 @@ export function SearchBox() {
   const [items, setItems] = useState<SearchItem[]>([]);
   const boxRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const generation = useRef(0);
+  const request = useRef<AbortController | null>(null);
 
   useEffect(() => {
     focusTrigger = () => inputRef.current?.focus();
     return () => { focusTrigger = null; };
   }, []);
 
-  const run = useRef(debounce((query: string) => {
-    if (!query.trim()) { setItems([]); setOpen(false); return; }
-    api(`/search?q=${encodeURIComponent(query)}`)
-      .then((d) => { setItems(d.results || []); setOpen(true); })
-      .catch(() => setItems([]));
+  const run = useRef(debounce((query: string, version: number) => {
+    if (version !== generation.current || query.trim().length < 2) return;
+    const controller = new AbortController();
+    request.current = controller;
+    apiWithDeadline(`/search?q=${encodeURIComponent(query)}`, { signal: controller.signal })
+      .then((d) => {
+        if (version !== generation.current) return;
+        setItems(Array.isArray(d?.results) ? d.results : []);
+        setOpen(!d?.error);
+      })
+      .catch(() => {
+        if (version !== generation.current) return;
+        setItems([]);
+        setOpen(false);
+      });
   }, 250)).current;
 
-  useEffect(() => run.cancel, []);
+  const dismiss = () => {
+    ++generation.current;
+    run.cancel();
+    request.current?.abort();
+    setOpen(false);
+  };
+
+  useEffect(() => () => {
+    ++generation.current;
+    run.cancel();
+    request.current?.abort();
+  }, []);
 
   useEffect(() => {
     const onDoc = (e: MouseEvent) => {
-      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) dismiss();
     };
     document.addEventListener("mousedown", onDoc);
     return () => document.removeEventListener("mousedown", onDoc);
@@ -66,7 +89,7 @@ export function SearchBox() {
 
   const go = () => {
     if (q.trim()) location.hash = `#/search?q=${encodeURIComponent(q.trim())}`;
-    setOpen(false);
+    dismiss();
   };
 
   return (
@@ -77,11 +100,24 @@ export function SearchBox() {
           ref={inputRef}
           value={q}
           placeholder="Search"
-          onInput={(e) => { const v = (e.target as HTMLInputElement).value; setQ(v); run(v); }}
-          onFocus={(e) => { if (items.length && (e.target as HTMLInputElement).value.trim()) setOpen(true); }}
+          onInput={(e) => {
+            const v = (e.target as HTMLInputElement).value;
+            const version = ++generation.current;
+            request.current?.abort();
+            run.cancel();
+            setQ(v);
+            setItems([]);
+            setOpen(false);
+            run(v, version);
+          }}
+          onFocus={(e) => {
+            const value = (e.target as HTMLInputElement).value;
+            if (items.length && value.trim()) setOpen(true);
+            else if (value.trim().length >= 2) run(value, ++generation.current);
+          }}
           onKeyDown={(e) => {
             if (e.key === "Enter") { e.preventDefault(); go(); }
-            else if (e.key === "Escape") setOpen(false);
+            else if (e.key === "Escape") dismiss();
           }}
           style={{ background: "none", border: "none", color: c.text, fontFamily: "inherit", fontSize: "0.88rem", outline: "none", width: "100%", padding: 0 }}
           aria-label="Search library"
@@ -98,7 +134,7 @@ export function SearchBox() {
             <div key={type}>
               <p style={{ ...eyebrow, padding: "0.65rem 0.85rem 0.2rem", margin: 0 }}>{typeLabel(type)}</p>
               {list.slice(0, 5).map((it) => (
-                <a key={it.workId} href={`#/work?id=${it.workId}`} onClick={() => setOpen(false)}
+                <a key={it.workId} href={`#/work?id=${it.workId}`} onClick={dismiss}
                   className="row-hit"
                   style={{ display: "flex", gap: "0.7rem", alignItems: "center", padding: "0.5rem 0.85rem", textDecoration: "none", color: c.text, minHeight: "44px" }}>
                   <span style={{ width: "2.1rem", flexShrink: 0 }}><Cover has={it.hasCover} id={it.workId} title={it.title} progress={it.percent || undefined} ratio={coverRatio(type)} /></span>
@@ -127,15 +163,20 @@ export function SearchPage(props: { q: string }) {
   const [retry, setRetry] = useState(0);
 
   useEffect(() => {
+    let alive = true;
+    const controller = new AbortController();
     setDone(false);
     setFailed(false);
-    api(`/search?q=${encodeURIComponent(props.q)}`)
+    setItems([]);
+    apiWithDeadline(`/search?q=${encodeURIComponent(props.q)}`, { signal: controller.signal })
       .then((d) => {
+        if (!alive) return;
         if (d && d.error) { setItems([]); setFailed(true); setDone(true); return; }
-        setItems(d.results || []);
+        setItems(Array.isArray(d?.results) ? d.results : []);
         setDone(true);
       })
-      .catch(() => { setItems([]); setFailed(true); setDone(true); });
+      .catch(() => { if (alive) { setItems([]); setFailed(true); setDone(true); } });
+    return () => { alive = false; controller.abort(); };
   }, [props.q, retry]);
 
   return (

@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "preact/hooks";
-import type { Book, Contents, NavItem, Rendition } from "epubjs";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
+import type { Book, NavItem, Rendition } from "epubjs";
 import { media } from "../api";
 import { c } from "../styles";
+import { readBoundedBody } from "./resources";
 import {
   drawerItem, drawerPanel, IconClose, IconContents, IconMinus, IconPlus,
   isTypingTarget, PagePill, ReaderMessage, readerOverlay, readerStage, TopBar, TapZones, toolBtn, toolBtnActive, toolBtnCls,
@@ -61,13 +62,20 @@ function sameChapter(a: string, b: string): boolean {
   return xb !== "" && xb === yb;
 }
 
-export function EpubReader(props: { editionId: number; title: string; progress: ReadingProgress | null; onBack: () => void }) {
+type EpubReaderProps = { editionId: number; title: string; progress: ReadingProgress | null; onBack: () => void };
+
+export function EpubReader(props: EpubReaderProps) {
+  return <EpubSession key={props.editionId} {...props} />;
+}
+
+function EpubSession(props: EpubReaderProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const bookRef = useRef<Book | null>(null);
   const renditionRef = useRef<Rendition | null>(null);
   const locsReadyRef = useRef(false);
   const [phase, setPhase] = useState<"loading" | "indexing" | "ready" | "error">("loading");
   const [error, setError] = useState("");
+  const [warning, setWarning] = useState("");
   const [toc, setToc] = useState<TocEntry[]>([]);
   const [tocOpen, setTocOpen] = useState(false);
   const [fontSize, setFontSize] = useState(100);
@@ -77,6 +85,16 @@ export function EpubReader(props: { editionId: number; title: string; progress: 
     page: props.progress?.page, percent: props.progress?.percent,
   });
   const keyHandler = useRef<(e: KeyboardEvent) => void>(() => {});
+  const navigate = useCallback((action: (rendition: Rendition) => Promise<unknown>) => {
+    const rendition = renditionRef.current;
+    if (!rendition) return;
+    setWarning("");
+    void Promise.resolve().then(() => {
+      if (renditionRef.current === rendition) return action(rendition);
+    }).catch(() => {
+      if (renditionRef.current === rendition) setWarning("Could not change pages. Try again.");
+    });
+  }, []);
 
   useEffect(() => {
     let destroyed = false;
@@ -98,40 +116,42 @@ export function EpubReader(props: { editionId: number; title: string; progress: 
 
     let book: Book | null = null;
     let rendition: Rendition | null = null;
-    let keyDoc: Document | null = null;
     let locKey: string | null = null;
-    const onDocKey = (e: Event) => keyHandler.current(e as KeyboardEvent);
+    const onDocKey = (e: KeyboardEvent) => { if (!destroyed) keyHandler.current(e); };
+    const release = () => {
+      rendition?.off("keydown", onDocKey);
+      try { rendition?.destroy(); } catch {}
+      try { book?.destroy(); } catch {}
+      if (renditionRef.current === rendition) renditionRef.current = null;
+      if (bookRef.current === book) bookRef.current = null;
+    };
     (async () => {
       try {
         const res = await fetch(media(`/editions/${props.editionId}/download`), { signal: controller.signal });
-        if (!res.ok) throw new Error(`Download failed (${res.status})`);
-        const length = Number(res.headers.get("Content-Length"));
-        if (Number.isFinite(length) && length > EPUB_MAX_BYTES) throw new Error("Book too large");
-        const data = await res.arrayBuffer();
-        if (data.byteLength > EPUB_MAX_BYTES) throw new Error("Book too large");
+        const data = await readBoundedBody(res, EPUB_MAX_BYTES, controller.signal);
         if (destroyed) return;
         locKey = await epubLocationKey(props.editionId, data, LOC_CHUNK);
+        if (destroyed) return;
         try { localStorage.removeItem(`libteca-epub-loc-${props.editionId}`); } catch { /* storage unavailable */ }
         const epubjs = await import("epubjs");
+        if (destroyed) return;
         book = new epubjs.Book();
         await book.open(data);
-        if (destroyed) { try { book?.destroy(); } catch { /* already gone */ } return; }
+        if (destroyed) { release(); return; }
         bookRef.current = book;
 
         rendition = new epubjs.Rendition(book, { width: "100%", height: "100%", spread: "auto", flow: "paginated" });
         renditionRef.current = rendition;
         await rendition.attachTo(host);
-        rendition.on("rendered", (_section: unknown, contents: Contents) => {
-          keyDoc?.removeEventListener("keydown", onDocKey);
-          keyDoc = contents?.document || null;
-          keyDoc?.addEventListener("keydown", onDocKey);
-        });
+        if (destroyed) { release(); return; }
+        rendition.on("keydown", onDocKey);
         rendition.themes.default({ body: { color: c.text, background: c.bg } });
         rendition.themes.override("color", c.text, true);
         rendition.themes.override("background", c.bg, true);
         rendition.themes.fontSize("100%");
 
         rendition.on("relocated", (loc: { start?: { cfi?: string }; atEnd?: boolean }) => {
+          if (destroyed) return;
           const cfi = loc?.start?.cfi;
           if (!cfi) return;
           let pct: number | null = null;
@@ -147,11 +167,11 @@ export function EpubReader(props: { editionId: number; title: string; progress: 
         });
 
         rendition.on("relocated", (loc: { start?: { href?: string } }) => {
-          setSectionHref(loc?.start?.href || "");
+          if (!destroyed) setSectionHref(loc?.start?.href || "");
         });
 
         const nav = await book.loaded.navigation.catch(() => null);
-        if (destroyed) { try { book?.destroy(); } catch { /* already gone */ } return; }
+        if (destroyed) { release(); return; }
         const flat: TocEntry[] = [];
         const walk = (items: NavItem[], depth: number) => {
           for (const it of items) {
@@ -175,9 +195,6 @@ export function EpubReader(props: { editionId: number; title: string; progress: 
         }
         locsReadyRef.current = haveLocations;
 
-        // Only location GENERATION depends on the cache being absent: with
-        // a cached index present, percentage resume used to be skipped
-        // entirely and the book opened at the beginning.
         let target: string | undefined;
         const p = props.progress;
         if (p && !p.isFinished && p.locator && p.locator.startsWith("epubcfi(")) {
@@ -187,7 +204,7 @@ export function EpubReader(props: { editionId: number; title: string; progress: 
           if (!haveLocations) {
             setPhase("indexing");
             await book.locations.generate(LOC_CHUNK);
-            if (destroyed) { try { book?.destroy(); } catch { /* already gone */ } return; }
+            if (destroyed) { release(); return; }
             haveLocations = true;
             locsReadyRef.current = true;
             persistLocations(book);
@@ -197,24 +214,32 @@ export function EpubReader(props: { editionId: number; title: string; progress: 
         try {
           await rendition.display(target);
         } catch {
+          if (destroyed) return;
           await rendition.display();
         }
-        if (destroyed) { try { book?.destroy(); } catch { /* already gone */ } return; }
+        if (destroyed) { release(); return; }
         setPhase("ready");
 
         if (!haveLocations) {
-          await book.locations.generate(LOC_CHUNK);
-          if (destroyed) { try { book?.destroy(); } catch { /* already gone */ } return; }
+          try { await book.locations.generate(LOC_CHUNK); } catch {
+            if (!destroyed) setWarning("Progress indexing failed. Reopen the book to retry.");
+            return;
+          }
+          if (destroyed) { release(); return; }
           locsReadyRef.current = true;
           persistLocations(book);
           const cur = rendition.currentLocation() as { start?: { cfi?: string } } | null;
           if (cur?.start?.cfi) {
             const v = book.locations.percentageFromCfi(cur.start.cfi);
-            if (typeof v === "number" && isFinite(v)) setPercent(v);
+            if (typeof v === "number" && isFinite(v)) {
+              setPercent(v);
+              saver.save({ locator: cur.start.cfi, percent: v });
+            }
           }
         }
       } catch (err) {
         if (!destroyed && !controller.signal.aborted) {
+          release();
           setError(String((err as Error)?.message || err));
           setPhase("error");
         }
@@ -224,11 +249,7 @@ export function EpubReader(props: { editionId: number; title: string; progress: 
     return () => {
       destroyed = true;
       controller.abort();
-      renditionRef.current = null;
-      bookRef.current = null;
-      keyDoc?.removeEventListener("keydown", onDocKey);
-      try { rendition?.destroy(); } catch { /* already gone */ }
-      try { book?.destroy(); } catch { /* already gone */ }
+      release();
     };
   }, [props.editionId]);
 
@@ -240,14 +261,14 @@ export function EpubReader(props: { editionId: number; title: string; progress: 
     const onKey = (e: KeyboardEvent) => {
       if (isTypingTarget(e)) return;
       const r = renditionRef.current;
-      if (e.key === "ArrowRight" && r) { e.preventDefault(); void r.next(); }
-      else if (e.key === "ArrowLeft" && r) { e.preventDefault(); void r.prev(); }
+      if (e.key === "ArrowRight" && r) { e.preventDefault(); navigate((current) => current.next()); }
+      else if (e.key === "ArrowLeft" && r) { e.preventDefault(); navigate((current) => current.prev()); }
       else if (e.key === "Escape") { if (tocOpen) setTocOpen(false); else props.onBack(); }
     };
     keyHandler.current = onKey;
     addEventListener("keydown", onKey);
     return () => removeEventListener("keydown", onKey);
-  }, [tocOpen, props.onBack]);
+  }, [tocOpen, props.onBack, navigate]);
 
   const chapter = chapterLabel(toc, sectionHref);
   const pillText = [percent != null ? `${Math.round(percent * 100)}%` : "", chapter].filter(Boolean).join(" · ");
@@ -263,7 +284,8 @@ export function EpubReader(props: { editionId: number; title: string; progress: 
       <div style={readerStage}>
         <div ref={hostRef} style={{ position: "absolute", inset: 0 }} />
         {phase !== "ready" && <ReaderMessage text={phase === "error" ? error || "Could not open this EPUB." : phase === "indexing" ? "Indexing book for progress…" : "Loading book…"} onBack={props.onBack} />}
-        {phase === "ready" && <TapZones onLeft={() => void renditionRef.current?.prev()} onRight={() => void renditionRef.current?.next()} />}
+        {phase === "ready" && <TapZones onLeft={() => navigate((rendition) => rendition.prev())} onRight={() => navigate((rendition) => rendition.next())} />}
+        {warning && phase === "ready" && <div role="status" style={{ position: "absolute", left: "1rem", right: "1rem", bottom: "3.5rem", zIndex: 12, padding: "0.6rem", background: c.bgRaised, color: c.textDim, fontSize: "0.8rem", textAlign: "center" }}>{warning}</div>}
         <PagePill text={pillText} watch={`${percent ?? ""}|${sectionHref}`} />
         {tocOpen && (
           <div>
@@ -278,7 +300,7 @@ export function EpubReader(props: { editionId: number; title: string; progress: 
                 {toc.map((t, i) => {
                   const active = sameChapter(t.href, sectionHref);
                   return (
-                    <button key={`${t.href}-${i}`} className="row-hit" style={{ ...drawerItem, position: "relative", paddingLeft: `${1 + t.depth * 0.7}rem`, ...(active ? { color: c.text, background: c.accentSoft } : {}) }} onClick={() => { setTocOpen(false); void renditionRef.current?.display(t.href); }}>
+                    <button key={`${t.href}-${i}`} className="row-hit" style={{ ...drawerItem, position: "relative", paddingLeft: `${1 + t.depth * 0.7}rem`, ...(active ? { color: c.text, background: c.accentSoft } : {}) }} onClick={() => { setTocOpen(false); navigate((rendition) => rendition.display(t.href)); }}>
                       {active && <span style={{ position: "absolute", left: 0, top: "0.5rem", bottom: "0.5rem", width: "3px", borderRadius: "999px", background: c.accent }} />}
                       {t.label}
                     </button>

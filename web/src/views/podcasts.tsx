@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "preact/hooks";
+import { OPMLImport } from "../opml";
+import { SessionAudio } from "../players/sessionAudio";
 import { api, getToken, media } from "../api";
 import { EmptyState, QuietLoad } from "../components/rail";
 import { IconCheck, IconChevronLeft, IconPause, IconPlay, IconPodcast, IconScan } from "../components/svg";
@@ -54,18 +56,21 @@ export function PodcastsView() {
   const [loadErr, setLoadErr] = useState(false);
   const [selected, setSelected] = useState<number | null>(null);
   const [feedUrl, setFeedUrl] = useState("");
-  const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
 
   const refresh = () => api("/podcasts")
-    .then((r: Podcast[]) => { setPods(Array.isArray(r) ? r : []); setLoadErr(false); })
+    .then((r: Podcast[]) => {
+      if (!Array.isArray(r)) throw new Error("Invalid podcast list");
+      setPods(r);
+      setLoadErr(false);
+    })
     .catch(() => setLoadErr(true));
   useEffect(() => { refresh(); }, []);
 
   const subscribe = async (e: Event) => {
     e.preventDefault();
-    setErr(""); setMsg("");
+    setErr("");
     let parsed: URL;
     try {
       parsed = new URL(feedUrl.trim());
@@ -97,25 +102,9 @@ export function PodcastsView() {
     }
   };
 
-  const importOPML = async (file: File) => {
-    setErr(""); setMsg("Importing…");
-    try {
-      const opml = await file.text();
-      const res: { subscribed: number; exists: number; failed: number; error?: string } =
-        await api("/podcasts/import-opml", { method: "POST", body: JSON.stringify({ opml }) });
-      if (res.error) { setErr(res.error); setMsg(""); toast(res.error, "error"); return; }
-      setMsg(`Imported ${res.subscribed} new, ${res.exists} already subscribed, ${res.failed} failed`);
-      toast(`OPML imported — ${res.subscribed} subscribed, ${res.exists} already there`, res.failed > 0 ? "default" : "success");
-      refresh();
-    } catch {
-      setErr("Import failed — couldn't reach the server.");
-      setMsg("");
-      toast("Import failed — couldn't reach the server.", "error");
-    }
-  };
 
   if (selected != null) {
-    return <PodcastShow id={selected} onBack={() => setSelected(null)} onChanged={refresh} />;
+    return <PodcastShow key={selected} id={selected} onBack={() => { setSelected(null); refresh(); }} onChanged={refresh} />;
   }
 
   return (
@@ -149,22 +138,7 @@ export function PodcastsView() {
       </form>
       {err && <p style={errStyle}>{err}</p>}
 
-      <div style={{ display: "flex", gap: "0.6rem", alignItems: "center", marginTop: "1.2rem", flexWrap: "wrap" }}>
-        <label style={{ ...ghostBtn, cursor: "pointer" }}>
-          Import OPML
-          <input
-            type="file" accept=".opml,application/xml,text/xml,text/x-opml"
-            style={{ display: "none" }}
-            onChange={(e) => {
-              const f = (e.target as HTMLInputElement).files?.[0];
-              if (f) importOPML(f);
-              (e.target as HTMLInputElement).value = "";
-            }}
-          />
-        </label>
-        <a style={{ ...ghostBtn, textDecoration: "none" }} href={media("/podcasts/export-opml")} download="libteca-podcasts.opml">Export OPML</a>
-        {msg && <span style={muted}>{msg}</span>}
-      </div>
+      <OPMLImport onDone={refresh} />
     </div>
   );
 }
@@ -182,43 +156,18 @@ function PodcastShow(props: { id: number; onBack: () => void; onChanged: () => v
   const [duration, setDuration] = useState(0);
   const [maxEp, setMaxEp] = useState("");
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const seekRef = useRef(0);
-  const lastPostRef = useRef(0);
-  const playingRef = useRef<number | null>(null);
-  playingRef.current = playing;
+  const [playback, setPlayback] = useState(0);
+  const positions = useRef(new Map<number, { position: number; duration: number; finished: boolean }>());
 
   const load = () => api(`/podcasts/${props.id}`)
-    .then((r: PodcastDetailBody) => { setPod(r); setMaxEp(String(r.maxEpisodes)); setLoadErr(false); })
+    .then((r: PodcastDetailBody) => {
+      if (!r || !Array.isArray(r.episodes) || typeof r.title !== "string") throw new Error("Invalid podcast detail");
+      setPod(r);
+      setMaxEp(String(r.maxEpisodes));
+      setLoadErr(false);
+    })
     .catch(() => { setPod(null); setLoadErr(true); });
   useEffect(() => { setPlaying(null); load(); }, [props.id]);
-
-  const saveProgress = (epId: number, pos: number, finished = false) => {
-    if (playingRef.current !== epId) return;
-    const a = audioRef.current;
-    const ep = (pod?.episodes || []).find((x) => x.id === epId);
-    const dur = a && isFinite(a.duration) && a.duration > 0 ? a.duration : (ep?.durationSecs || 0);
-    if (pos <= 1 && !finished) return;
-    lastPostRef.current = Date.now();
-    api(`/podcasts/episodes/${epId}/progress`, { method: "POST", body: JSON.stringify({ position: pos, duration: dur, finished }) }).catch(() => {});
-  };
-
-  useEffect(() => {
-    const onUnload = () => {
-      const a = audioRef.current;
-      const epId = playingRef.current;
-      if (!a || epId == null || a.currentTime <= 1 || a.ended) return;
-      fetch(`/api/core/podcasts/episodes/${epId}/progress`, {
-        method: "POST", keepalive: true,
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${getToken()}` },
-        body: JSON.stringify({ position: a.currentTime, duration: isFinite(a.duration) ? a.duration : 0, finished: false }),
-      }).catch(() => {});
-    };
-    addEventListener("pagehide", onUnload);
-    return () => {
-      removeEventListener("pagehide", onUnload);
-      onUnload();
-    };
-  }, []);
 
   const refreshFeed = async () => {
     setErr(""); setMsg(""); setBusy(true);
@@ -267,21 +216,22 @@ function PodcastShow(props: { id: number; onBack: () => void; onChanged: () => v
   };
 
   const play = (ep: Episode) => {
-    const a = audioRef.current;
-    if (!a || !ep.streamUrl) return;
-    if (playing === ep.id) {
-      if (a.paused) a.play().catch(() => {});
-      else a.pause();
+    if (!ep.streamUrl) return;
+    const element = audioRef.current;
+    if (playing === ep.id && element && !element.ended) {
+      if (element.paused) element.play().catch(() => {});
+      else element.pause();
       return;
     }
-    if (playing != null) saveProgress(playing, a.currentTime);
     setPlaying(ep.id);
-    a.src = media(ep.streamUrl);
-    seekRef.current = ep.positionSecs && ep.positionSecs > 0 && !ep.isFinished ? ep.positionSecs : 0;
-    a.play().catch(() => setPaused(true));
+    setPlayback((value) => value + 1);
   };
 
-  const eps = pod?.episodes || [];
+  const eps = (pod?.episodes || []).map((episode) => {
+    const local = positions.current.get(episode.id);
+    return local ? { ...episode, positionSecs: local.position, isFinished: local.finished, percent: local.duration > 0 ? local.position / local.duration : episode.percent } : episode;
+  });
+  const currentEpisode = eps.find((episode) => episode.id === playing);
   const resumeEp = eps.find((e) => e.hasFile && e.positionSecs && e.positionSecs > 0 && !e.isFinished);
 
   return (
@@ -346,36 +296,21 @@ function PodcastShow(props: { id: number; onBack: () => void; onChanged: () => v
         <QuietLoad />
       )}
 
-      <audio
-        ref={audioRef} preload="none"
-        style={{ display: "none" }}
-        onLoadedMetadata={() => {
-          const a = audioRef.current;
-          if (!a) return;
-          if (seekRef.current > 0) { a.currentTime = seekRef.current; seekRef.current = 0; }
-          if (isFinite(a.duration) && a.duration > 0) setDuration(a.duration);
-        }}
-        onPlay={() => setPaused(false)}
-        onPause={() => {
-          setPaused(true);
-          const a = audioRef.current;
-          if (a && playingRef.current != null && !a.ended) saveProgress(playingRef.current, a.currentTime);
-        }}
-        onTimeUpdate={() => {
-          const a = audioRef.current;
-          if (!a || playingRef.current == null) return;
-          setElapsed(a.currentTime);
-          if (isFinite(a.duration) && a.duration > 0) setDuration(a.duration);
-          if (Date.now() - lastPostRef.current >= 15000) saveProgress(playingRef.current, a.currentTime);
-        }}
+      {currentEpisode?.streamUrl && <SessionAudio
+        key={`${currentEpisode.id}:${playback}`}
+        src={media(currentEpisode.streamUrl)}
+        progressPath={`/podcasts/episodes/${currentEpisode.id}/progress`}
+        duration={currentEpisode.durationSecs || 0}
+        position={currentEpisode.isFinished ? 0 : currentEpisode.positionSecs}
+        audioRef={audioRef}
+        onPlaying={(value) => setPaused(!value)}
+        onTime={(position, total) => { setElapsed(position); setDuration(total); }}
+        onProgress={(position, total, finished) => positions.current.set(currentEpisode.id, { position, duration: total, finished })}
         onEnded={() => {
-          setPaused(true);
-          if (playingRef.current == null) return;
-          const epId = playingRef.current;
-          saveProgress(epId, audioRef.current?.currentTime || 0, true);
-          setPod((p) => p ? { ...p, episodes: p.episodes.map((e) => e.id === epId ? { ...e, isFinished: true, percent: 1 } : e) } : p);
+          const epId = currentEpisode.id;
+          setPod((value) => value ? { ...value, episodes: value.episodes.map((episode) => episode.id === epId ? { ...episode, isFinished: true, percent: 1 } : episode) } : value);
         }}
-      />
+      />}
 
       <div style={{ marginTop: "1.2rem" }}>
         {eps.map((ep) => {

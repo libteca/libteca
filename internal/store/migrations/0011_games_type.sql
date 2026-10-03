@@ -50,10 +50,13 @@ PRAGMA foreign_keys = ON;
 -- +goose Down
 -- +goose StatementBegin
 PRAGMA foreign_keys = OFF;
-DELETE FROM progress WHERE edition_id IN (SELECT id FROM editions WHERE format LIKE 'game-%');
-DELETE FROM playback_sessions WHERE edition_id IN (SELECT id FROM editions WHERE format LIKE 'game-%');
-DELETE FROM files WHERE edition_id IN (SELECT id FROM editions WHERE format LIKE 'game-%');
-DELETE FROM editions WHERE format LIKE 'game-%';
+DELETE FROM playlist_items WHERE edition_id IN (SELECT id FROM editions WHERE format LIKE 'game-%' OR work_id IN (SELECT id FROM works WHERE library_id IN (SELECT id FROM libraries WHERE type = 'games')));
+DELETE FROM progress WHERE edition_id IN (SELECT id FROM editions WHERE format LIKE 'game-%' OR work_id IN (SELECT id FROM works WHERE library_id IN (SELECT id FROM libraries WHERE type = 'games')));
+DELETE FROM playback_sessions WHERE edition_id IN (SELECT id FROM editions WHERE format LIKE 'game-%' OR work_id IN (SELECT id FROM works WHERE library_id IN (SELECT id FROM libraries WHERE type = 'games')));
+DELETE FROM files WHERE edition_id IN (SELECT id FROM editions WHERE format LIKE 'game-%' OR work_id IN (SELECT id FROM works WHERE library_id IN (SELECT id FROM libraries WHERE type = 'games')));
+DELETE FROM editions WHERE format LIKE 'game-%' OR work_id IN (SELECT id FROM works WHERE library_id IN (SELECT id FROM libraries WHERE type = 'games'));
+DELETE FROM works WHERE library_id IN (SELECT id FROM libraries WHERE type = 'games');
+DELETE FROM scan_jobs WHERE library_id IN (SELECT id FROM libraries WHERE type = 'games');
 
 CREATE TABLE editions_old (
   id INTEGER PRIMARY KEY,

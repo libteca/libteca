@@ -185,7 +185,7 @@ func (d *DB) musicAlbumsProgress(order string, userID int64, limit, offset int) 
 		FROM works w
 		JOIN libraries l ON l.id = w.library_id
 		JOIN editions e ON e.work_id = w.id
-		JOIN progress p ON p.edition_id = e.id AND p.user_id = ?
+		JOIN progress p ON p.edition_id = e.id AND p.user_id = ? AND p.deleted = 0
 		WHERE l.type = 'music'
 		GROUP BY w.id`+order, userID, limit, offset)
 	if err != nil {

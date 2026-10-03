@@ -581,3 +581,66 @@ backup = `libteca backup` (15g); neutron-go published (17).
     content-addressed assets with snapshot pinning (the right long-term
     shape, but a layout migration of every existing install for a window
     measured in seconds).
+45. **Progress, discovery, and source-root reliability (2026-10-02).**
+    Durable reader recovery merges full pending states, retains the winning
+    positional tuple, and publishes its replacement before removing unchanged
+    source records. Normal and lifecycle delivery use the same reconciliation;
+    lifecycle delivery includes in-flight work and preserves its conditional
+    base. Conflict acknowledgements advance the queue base even when no local
+    position survives. Video playback has keyed per-edition/file sessions and
+    serialized per-session progress; unacknowledged completion is retained for
+    retry. Discovery treats reset tombstones as absent while baseline reads
+    retain them for revision checks. Work browsing uses explicit 200-item pages
+    with bounded child queries and stable ties. Cross-library linking is
+    rejected inside the store transaction until physical source identity is
+    independent of logical work grouping; the media confinement model stays.
+    The proposal is in docs/source-identity-proposal.md. Clean-checkout make test
+    and the Go CI job build real embedded web assets first. Validation limits are recorded
+    in AUDIT_OPEN.md; implementation is not a release/production verification.
+
+46. **Audio and background-job session isolation (2026-10-02).** Ordered
+    audio file IDs define the player's session boundary; keyed replacement
+    preserves the old save callback while preventing media-source reuse and
+    late detached completion. Metadata-only changes do not restart playback.
+    OPML follows the server's asynchronous status contract; scan monitoring
+    follows the accepted job ID rather than whichever job is newest later.
+    Generation guards isolate superseded observers, and deadline-bounded
+    serial status requests retry transient failures without overlapping. No
+    scanner/source-identity schema or import-job persistence redesign is part
+    of this repair.
+
+47. **Bounded systematic correctness repairs (2026-10-02).** Audiobook
+    ordering uses positive disc/track tags before natural paths. Legacy order
+    markers trigger one re-probe; repair preserves existing editions/manual
+    metadata, updates complete-group file sequences, and rebases valid persisted
+    file-relative resume positions in the same transaction. It does not repair
+    collapsed source groups or make a live client's old timeline current.
+    Imported unnumbered podcasts use ordinary edition identity rather than a
+    fabricated S0E0; file imports are atomic per batch, not per whole migration.
+    Cancelled podcast work remains retryable. Readers cap streamed bytes before
+    retaining more output; decoded-memory/EPUB-dependency budgets remain separate.
+    Secondary audio views use keyed media elements and serialize writes to the
+    same endpoint across replacement sessions within a tab. This preserves
+    completion/revisit ordering without claiming a durable offline media queue.
+    The complete issue register and acceptance boundaries are in
+    docs/systematic-issue-register.md. The Work -> Editions model, Go/SQLite
+    architecture, first-party priority and explicit source-ownership migration
+    proposal remain unchanged.
+
+48. **Whole-import rollback and in-tab media reliability (2026-10-02).**
+    ABS and Kavita complete destination application in one store transaction,
+    including users, libraries, works, editions, files, progress and playlists.
+    Discovery stays read-only before application; this does not promise a
+    snapshot of a changing foreign server. This supersedes decision 47's
+    file-batch-only atomicity limit. Primary and playlist audio serialize
+    deadline-bound writes by login and endpoint, check failed responses, and
+    retain failed completion in memory for retry. Explicit restart supersedes
+    older queued/retry work. Playlist audio uses ordered file IDs and cumulative
+    offsets, and completion belongs to the last physical file. These are
+    in-tab guarantees, not durable media storage or cross-device conflict
+    resolution. CBR child processes inherit scan cancellation and deadlines,
+    are reaped, reject failed partial output, and clean temporary extraction.
+    Physical-source repair, durable intent-aware media replay, multipart video
+    and measured resource quotas retain explicit contracts and acceptance gates
+    in docs/media-consistency-proposal.md. No schema migration, production
+    mutation, publication or restricted review is implied.

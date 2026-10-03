@@ -23,6 +23,9 @@ import (
 // downloadPending downloads pending episodes newest-first, up to
 // maxEpisodes this round; the remainder are marked seen (handled, not kept)
 func (s *Service) downloadPending(ctx context.Context, p *store.Podcast) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	pending, err := s.DB.PendingEpisodes(p.ID)
 	if err != nil {
 		return err
@@ -52,6 +55,9 @@ const maxEpisodeReadTime = 2 * time.Hour
 // full-file xxhash for audio), links a files row (edition_id NULL — podcast
 // episodes are not editions) and marks the episode downloaded.
 func (s *Service) downloadEpisode(ctx context.Context, p *store.Podcast, ep *store.PodcastEpisode) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	dir := filepath.Join(s.DataDir, "podcasts", strconv.FormatInt(p.ID, 10))
 	if err := mkdir(dir); err != nil {
 		return err
@@ -137,6 +143,9 @@ func (s *Service) downloadEpisode(ctx context.Context, p *store.Podcast, ep *sto
 		err = fmt.Errorf("empty enclosure body")
 	}
 	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if cerr := readCtx.Err(); cerr != nil {
 		err = cerr
 	}
 	if err != nil {

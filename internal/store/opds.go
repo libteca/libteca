@@ -100,9 +100,9 @@ func (d *DB) OPDSNewestEditions(limit, offset int) ([]OPDSEdition, int, error) {
 // (page or percent set, is_finished = 0), most recently touched first.
 func (d *DB) OPDSEditionsInProgress(userID int64, limit, offset int) ([]OPDSEdition, int, error) {
 	const where = ` AND EXISTS (SELECT 1 FROM progress p WHERE p.edition_id = e.id AND p.user_id = ?
-		AND p.is_finished = 0 AND (p.page IS NOT NULL OR p.percent IS NOT NULL))`
+		AND p.deleted = 0 AND p.is_finished = 0 AND (p.page IS NOT NULL OR p.percent IS NOT NULL))`
 	order := ` ORDER BY (SELECT p.updated_at FROM progress p WHERE p.edition_id = e.id AND p.user_id = ?
-		AND p.is_finished = 0 AND (p.page IS NOT NULL OR p.percent IS NOT NULL)) DESC, e.id DESC`
+		AND p.deleted = 0 AND p.is_finished = 0 AND (p.page IS NOT NULL OR p.percent IS NOT NULL)) DESC, e.id DESC`
 	total, err := d.opdsCount(where, userID)
 	if err != nil {
 		return nil, 0, err

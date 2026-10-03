@@ -41,8 +41,16 @@ const playlistCols = `p.id, p.user_id, p.name, u.name, p.created_at, p.updated_a
 	(SELECT coalesce(sum(` + playlistItemDur + `), 0) FROM playlist_items pi JOIN editions e ON e.id = pi.edition_id WHERE pi.playlist_id = p.id)`
 
 func (d *DB) CreatePlaylist(userID int64, name string) (int64, error) {
+	return createPlaylist(d, userID, name)
+}
+
+func (t *Tx) CreatePlaylist(userID int64, name string) (int64, error) {
+	return createPlaylist(t, userID, name)
+}
+
+func createPlaylist(q dbtx, userID int64, name string) (int64, error) {
 	now := nowMilli()
-	res, err := d.Exec(`INSERT INTO playlists (user_id, name, created_at, updated_at) VALUES (?,?,?,?)`,
+	res, err := q.Exec(`INSERT INTO playlists (user_id, name, created_at, updated_at) VALUES (?,?,?,?)`,
 		userID, name, now, now)
 	if err != nil {
 		return 0, err
@@ -164,7 +172,15 @@ func (d *DB) Playlist(id int64) (*Playlist, error) {
 
 // ListPlaylists lists playlists; userID 0 means all users.
 func (d *DB) ListPlaylists(userID int64) ([]Playlist, error) {
-	rows, err := d.Query(`SELECT `+playlistCols+` FROM playlists p JOIN users u ON u.id = p.user_id
+	return listPlaylists(d, userID)
+}
+
+func (t *Tx) ListPlaylists(userID int64) ([]Playlist, error) {
+	return listPlaylists(t, userID)
+}
+
+func listPlaylists(q dbtx, userID int64) ([]Playlist, error) {
+	rows, err := q.Query(`SELECT `+playlistCols+` FROM playlists p JOIN users u ON u.id = p.user_id
 		WHERE (? = 0 OR p.user_id = ?) ORDER BY p.id`, userID, userID)
 	if err != nil {
 		return nil, err
@@ -243,29 +259,35 @@ func (d *DB) DeletePlaylist(id int64) error {
 // a row was inserted. Adding an edition already present is a no-op that
 // returns added=false (UNIQUE(playlist_id, edition_id)).
 func (d *DB) AddPlaylistItem(playlistID, editionID int64) (bool, error) {
-	added := false
+	var added bool
 	err := d.Update(func(tx *Tx) error {
-		var one int
-		if err := tx.QueryRow(`SELECT 1 FROM editions WHERE id = ?`, editionID).Scan(&one); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return ErrNotFound
-			}
-			return err
-		}
-		res, err := tx.Exec(`INSERT INTO playlist_items (playlist_id, edition_id, position, added_at)
-			VALUES (?,?,coalesce((SELECT max(position) + 1 FROM playlist_items WHERE playlist_id = ?), 1), ?)
-			ON CONFLICT(playlist_id, edition_id) DO NOTHING`,
-			playlistID, editionID, playlistID, nowMilli())
-		if err != nil {
-			return err
-		}
-		n, _ := res.RowsAffected()
-		added = n > 0
-		if added {
-			_, err = tx.Exec(`UPDATE playlists SET updated_at = ? WHERE id = ?`, nowMilli(), playlistID)
-		}
+		var err error
+		added, err = tx.AddPlaylistItem(playlistID, editionID)
 		return err
 	})
+	return added, err
+}
+
+func (t *Tx) AddPlaylistItem(playlistID, editionID int64) (bool, error) {
+	var one int
+	if err := t.QueryRow(`SELECT 1 FROM editions WHERE id = ?`, editionID).Scan(&one); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, ErrNotFound
+		}
+		return false, err
+	}
+	res, err := t.Exec(`INSERT INTO playlist_items (playlist_id, edition_id, position, added_at)
+		VALUES (?,?,coalesce((SELECT max(position) + 1 FROM playlist_items WHERE playlist_id = ?), 1), ?)
+		ON CONFLICT(playlist_id, edition_id) DO NOTHING`,
+		playlistID, editionID, playlistID, nowMilli())
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	added := n > 0
+	if added {
+		_, err = t.Exec(`UPDATE playlists SET updated_at = ? WHERE id = ?`, nowMilli(), playlistID)
+	}
 	return added, err
 }
 

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import type { ComponentChildren, CSSProperties } from "preact";
 import { APIError, fetchWithDeadline, getToken, media, normalizeAPIResponse, RequestTimeoutError } from "../api";
 import {
-  mergeServerProgress, parseStoredProgress, ProgressQueue,
+  createProgressStorage, mergeServerProgress, ProgressQueue,
   type ProgressPatch as QueuePatch, type ServerProgress,
 } from "../progressQueue";
 import { currentUser } from "../user";
@@ -156,60 +156,21 @@ export function useProgressSaver(editionId: number, baseRevision?: number, initi
     const scopeUser = userId;
     const prefix = `libteca-progress-v2-u${scopeUser}-e${editionId}-`;
     const ownKey = `${prefix}${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-    const queueStorage = {
-      load: (): { baseRevision: number; patch: QueuePatch } | null => {
-        try { localStorage.removeItem(`libteca-progress-queue-${editionId}`); } catch { /* storage unavailable */ }
-        const foreignKeys: string[] = [];
-        const records: { baseRevision: number; patch: QueuePatch }[] = [];
-        try {
-          for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i);
-            if (!key || !key.startsWith(prefix) || key === ownKey) continue;
-            const raw = localStorage.getItem(key);
-            if (raw === null) continue;
-            try {
-              records.push(parseStoredProgress(JSON.parse(raw)));
-              foreignKeys.push(key);
-            } catch {
-              try { localStorage.removeItem(key); } catch { /* storage unavailable */ }
-            }
-          }
-        } catch { return null; }
-        if (foreignKeys.length === 0) return null;
-        let merged: QueuePatch = {};
-        let base = Number.MAX_SAFE_INTEGER;
-        let finished: boolean | undefined;
-        for (const record of records) {
-          merged = mergeServerProgress(merged as ServerProgress, record.patch);
-          if (record.patch.finished !== undefined) finished = record.patch.finished;
-          base = Math.min(base, record.baseRevision);
-        }
-        if (finished !== undefined && merged.finished === undefined) merged.finished = finished;
-        try {
-          if (Object.keys(merged).length > 0) {
-            localStorage.setItem(ownKey, JSON.stringify({ baseRevision: base, patch: merged }));
-          }
-          for (const key of foreignKeys) localStorage.removeItem(key);
-        } catch { /* storage unavailable */ }
-        return Object.keys(merged).length > 0 ? { baseRevision: base, patch: merged } : null;
-      },
-      save: (patch: QueuePatch, base: number): void => {
-        try {
-          if (Object.keys(patch).length === 0) localStorage.removeItem(ownKey);
-          else localStorage.setItem(ownKey, JSON.stringify({ baseRevision: base, patch }));
-        } catch { /* storage unavailable */ }
-      },
-    };
+    let queueStorage;
+    try {
+      localStorage.removeItem(`libteca-progress-queue-${editionId}`);
+      queueStorage = createProgressStorage(localStorage, prefix, ownKey);
+    } catch {}
     const remote: ServerProgress = { ...(initialRemote ?? {}) };
     const send = async (patch: QueuePatch, base: number): Promise<number | void> => {
       if (currentUser() !== scopeUser) throw new AccountPausedError();
       setState("saving");
-      let current = mergeServerProgress(remote, patch);
+      let current = { ...patch };
       let revision = base;
       if (Object.keys(current).length === 0) {
         setState("saved");
         window.setTimeout(() => setState((s) => (s === "saved" ? "idle" : s)), 1600);
-        return;
+        return revision;
       }
       for (let attempt = 0; ; attempt++) {
         const headers = new Headers({ "Content-Type": "application/json" });
@@ -234,13 +195,18 @@ export function useProgressSaver(editionId: number, baseRevision?: number, initi
             if (Object.keys(current).length === 0) {
               setState("saved");
               window.setTimeout(() => setState((s) => (s === "saved" ? "idle" : s)), 1600);
-              return;
+              return revision;
             }
             continue;
           }
           throw new APIError(res.error, response.status);
         }
         if (typeof res.revision === "number") revision = res.revision;
+        for (const key of ["page", "percent", "locator"] as const) {
+          if (current[key] !== undefined) (remote as Record<string, unknown>)[key] = current[key];
+        }
+        if (current.finished !== undefined) remote.isFinished = current.finished;
+        remote.revision = revision;
         setState("saved");
         window.setTimeout(() => setState((s) => (s === "saved" ? "idle" : s)), 1600);
         return revision;
@@ -253,12 +219,14 @@ export function useProgressSaver(editionId: number, baseRevision?: number, initi
         storage: queueStorage,
         initialBaseRevision: baseRevision ?? 0,
         send,
+        prepare: (patch) => mergeServerProgress(remote, patch),
         onError: () => setState("error"),
         shouldRetry: progressRetryable,
       }),
     };
   }
   const queue = queueRef.current?.queue;
+  const queueUser = queueRef.current?.user;
   if (!queue) {
     const noop = () => {};
     return { save: noop, flush: noop, state: "idle" as SaveState };
@@ -293,10 +261,11 @@ export function useProgressSaver(editionId: number, baseRevision?: number, initi
 
   const flush = useCallback(() => {
     if (timer.current !== undefined) { clearTimeout(timer.current); timer.current = undefined; }
-    const pending = queue.snapshot();
-    if (Object.keys(pending).length === 0) return;
-    void postBeacon({ ...pending as ProgressPost, revision: queue.base() });
-  }, [postBeacon, queue]);
+    if (currentUser() !== queueUser) return;
+    const operation = queue.operation();
+    if (Object.keys(operation.patch).length === 0) return;
+    void postBeacon({ ...operation.patch as ProgressPost, revision: operation.baseRevision });
+  }, [postBeacon, queue, queueUser]);
 
   useEffect(() => {
     if (Object.keys(queue.snapshot()).length > 0) deliver();

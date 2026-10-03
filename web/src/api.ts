@@ -81,6 +81,30 @@ export const api = async (path: string, opts: RequestInit = {}) => {
 
 export class RequestTimeoutError extends Error {}
 
+export async function apiWithDeadline(path: string, opts: RequestInit = {}, timeoutMs = 15000) {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let relay: (() => void) | undefined;
+  const canceled = new Promise<never>((_, reject) => {
+    relay = () => {
+      controller.abort(opts.signal?.reason);
+      reject(opts.signal?.reason ?? new DOMException("Request aborted", "AbortError"));
+    };
+    if (opts.signal?.aborted) relay();
+    else opts.signal?.addEventListener("abort", relay, { once: true });
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new RequestTimeoutError("Request timed out"));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([api(path, { ...opts, signal: controller.signal }), canceled]);
+  } finally {
+    clearTimeout(timer);
+    if (relay) opts.signal?.removeEventListener("abort", relay);
+  }
+}
+
 // fetch with a hard deadline covering headers and body consumption. A
 // request that never resolves must not wedge the single-flight progress
 // queue forever; parent signals (reader teardown) are honored alongside the

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { api, apiChecked, media, type EditionDetail, type PlaybackInfo, type WorkDetail } from "../api";
 import { fmtClock } from "../util";
+import { VideoProgressSaver } from "./videoProgress";
 import { c, ghostBtn, muted } from "../styles";
 import {
   IconBack30, IconCC, IconChevronLeft, IconChevronRight, IconFwd30, IconFullscreen,
@@ -45,19 +46,26 @@ function IconExitFullscreen(p: { size?: number }) {
   );
 }
 
-export function VideoPlayer(props: {
+type VideoPlayerProps = {
   w: WorkDetail;
   editionId: number;
   onClose: () => void;
   onSelectEdition: (id: number) => void;
-}) {
+};
+
+export function VideoPlayer(props: VideoPlayerProps) {
+  const fileId = props.w.editions.find((edition) => edition.id === props.editionId)?.files[0]?.id ?? 0;
+  return <VideoPlayerSession key={`${props.editionId}:${fileId}`} {...props} />;
+}
+
+function VideoPlayerSession(props: VideoPlayerProps) {
   const found = props.w.editions.find((e) => e.id === props.editionId);
   const ed: EditionDetail = found ?? { id: props.editionId, format: "video", title: props.w.title, duration: 0, files: [], chapters: [] };
   const ref = useRef<HTMLVideoElement | null>(null);
   const saved = useRef(0);
   const edRef = useRef(ed);
   edRef.current = ed;
-  const lastSave = useRef({ pos: 0, fin: false });
+  const progressRef = useRef<{ key: string; saver: VideoProgressSaver } | null>(null);
   const hlsRef = useRef<{ destroy: () => void } | null>(null);
   const hideT = useRef<number | undefined>(undefined);
   const clickT = useRef<number | undefined>(undefined);
@@ -86,6 +94,25 @@ export function VideoPlayer(props: {
   const [fsOn, setFsOn] = useState(false);
   const pipOK = typeof document !== "undefined" && document.pictureInPictureEnabled;
   const fileId = ed.files[0]?.id ?? 0;
+  const progressKey = `${ed.id}:${fileId}:${bootKey}`;
+  if (progressRef.current?.key !== progressKey) {
+    const editionId = ed.id;
+    progressRef.current = {
+      key: progressKey,
+      saver: new VideoProgressSaver(ed.duration, async (patch) => {
+        const controller = new AbortController();
+        const timer = window.setTimeout(() => controller.abort(), 15000);
+        try {
+          await apiChecked(`/progress/${editionId}`, {
+            method: "POST", body: JSON.stringify(patch), signal: controller.signal,
+          });
+        } finally {
+          clearTimeout(timer);
+        }
+      }),
+    };
+  }
+
 
   const total = dur || ed.duration || 0;
   const chapters = (ed.chapters || []).filter((ch) => ch.end > ch.start && ch.start < total);
@@ -97,7 +124,6 @@ export function VideoPlayer(props: {
     setActive(false);
     setFatal("");
     saved.current = 0;
-    lastSave.current = { pos: 0, fin: false };
     // The HLS resource is the FULL edition: the old &start= parameter asked
     // the server to truncate the timeline at the resume point, and the
     // browser then saved currentTime as if it were absolute - resuming at
@@ -229,18 +255,7 @@ export function VideoPlayer(props: {
     };
   }, []);
 
-  const save = async (pos: number, finished = false) => {
-    if (pos <= 0 && !finished) return;
-    if (lastSave.current.fin && !finished) return;
-    if (lastSave.current.fin === finished && Math.abs(lastSave.current.pos - pos) < 0.5) return;
-    const cur = edRef.current;
-    try {
-      await apiChecked(`/progress/${cur.id}`, { method: "POST", body: JSON.stringify({ position: pos, duration: cur.duration, finished }) });
-      // The deduplication watermark only advances after the server
-      // acknowledged the write; on failure a same-position retry stays due.
-      lastSave.current = { pos, fin: finished };
-    } catch { /* offline; the watermark is kept so the retry re-sends */ }
-  };
+  const save = (pos: number, finished = false) => progressRef.current!.saver.save(pos, finished);
 
   const showUI = () => {
     setUiVis(true);

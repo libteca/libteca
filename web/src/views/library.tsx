@@ -1,5 +1,6 @@
-import { useEffect, useState } from "preact/hooks";
-import { api, type Library, type Work } from "../api";
+import { useEffect, useLayoutEffect, useState } from "preact/hooks";
+import { api, type Library } from "../api";
+import { useLibraryPagination, type LibraryPage } from "../libraryPagination";
 import { useScan } from "../scan";
 import { useRefreshMeta } from "../refresh-meta";
 import { Cover } from "../components/cover";
@@ -30,30 +31,18 @@ const FILTERS = [
 export function LibraryView(props: { lib?: number; type?: string }) {
   const [libs, setLibs] = useState<Library[]>([]);
   const [lib, setLib] = useState<number>(props.lib ?? 0);
-  const [works, setWorks] = useState<Work[]>([]);
   const [sort, setSort] = useState("title");
   const [dir, setDir] = useState("asc");
   const [filter, setFilter] = useState("all");
-  const [loaded, setLoaded] = useState(false);
-  const [loadErr, setLoadErr] = useState(false);
+  const [refresh, setRefresh] = useState(0);
+  const page = useLibraryPagination({ lib, sort, dir, filter }, refresh);
+  const refreshWorks = () => setRefresh((value) => value + 1);
 
-  const scan = useScan(() => { refreshWorks(); });
-  const meta = useRefreshMeta(() => { refreshWorks(); });
-
-  const refreshWorks = () => {
-    if (!lib) {
-      setWorks([]);
-      setLoaded(true);
-      return;
-    }
-    api(`/libraries/${lib}/works?sort=${sort}&dir=${dir}&filter=${filter}`)
-      .then((d) => { setWorks(Array.isArray(d) ? d : []); setLoadErr(!Array.isArray(d)); })
-      .catch(() => { setWorks([]); setLoadErr(true); })
-      .finally(() => setLoaded(true));
-  };
+  const scan = useScan(refreshWorks);
+  const meta = useRefreshMeta(refreshWorks);
 
   useEffect(() => { api("/libraries").then((r) => { if (Array.isArray(r)) setLibs(r); }).catch(() => setLibs([])); }, [props.lib]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!libs.length || lib) return;
     for (const t of TYPE_ORDER) {
       const found = libs.find((l) => l.type === t);
@@ -61,19 +50,17 @@ export function LibraryView(props: { lib?: number; type?: string }) {
     }
     setLib(libs[0].id);
   }, [libs]);
-  useEffect(() => { if (props.lib) setLib(props.lib); }, [props.lib]);
-  useEffect(() => {
+  useLayoutEffect(() => { if (props.lib) setLib(props.lib); }, [props.lib]);
+  useLayoutEffect(() => {
     if (!props.type || !libs.length) return;
     const m = libs.find((l) => l.type === props.type);
     if (m && m.id !== lib) setLib(m.id);
   }, [props.type, libs]);
-  useEffect(refreshWorks, [lib, sort, dir, filter]);
 
   const activeLib = libs.find((l) => l.id === lib);
   const types = TYPE_ORDER.filter((t) => libs.some((l) => l.type === t));
   const typeLibs = libs.filter((l) => l.type === activeLib?.type);
   const unread = activeLib?.type === "books" || activeLib?.type === "comics";
-  const ratio = coverRatio(activeLib?.type);
   const scanLine = scan.event && (scan.scanning
     ? `Scanning ${scan.event.filesSeen} files${scan.event.worksChanged ? ` · ${scan.event.worksChanged} changed` : ""}`
     : scan.event.status === "error" ? `Scan failed${scan.event.error ? `: ${scan.event.error}` : ""}`
@@ -160,17 +147,28 @@ export function LibraryView(props: { lib?: number; type?: string }) {
           {meta.event?.status === "done" && <> · <a href="#/matching" style={{ color: c.accent }}>review inbox</a></>}
         </p>
       )}
+      <LibraryWorks page={page} type={activeLib?.type} filter={filter} loadMore={page.loadMore} />
+    </div>
+  );
+}
+
+export function LibraryWorks(props: { page: LibraryPage; type?: string; filter: string; loadMore: () => void }) {
+  const { works, loaded, loading, hasMore, error: loadErr } = props.page;
+  const { filter, loadMore } = props;
+  const ratio = coverRatio(props.type);
+  return (
+    <div aria-busy={loading}>
       {works.length === 0
         ? loadErr && loaded
           ? <EmptyState title="Couldn't reach the server" hint="The library failed to load.">
-              <button className="press" style={ghostBtn} onClick={refreshWorks}>Retry</button>
+              <button className="press" style={ghostBtn} onClick={loadMore}>Retry</button>
             </EmptyState>
-          : loaded
+          : loaded && !loading
             ? <EmptyState title={filter === "all" ? "No works yet" : "Nothing matches this filter"}
-                icon={<TypeIcon type={activeLib?.type || ""} size={22} />}
+                icon={<TypeIcon type={props.type || ""} size={22} />}
                 hint={filter === "all" ? "Add a library in Admin and scan." : "Try a different filter."} />
             : <SkeletonGrid square={ratio === "square"} />
-        : <div style={gridFor(activeLib?.type)} className="cover-grid">
+        : <div style={gridFor(props.type)} className="cover-grid">
             {works.map((w) => {
               const meta = w.author || w.subtitle;
               return (
@@ -186,6 +184,17 @@ export function LibraryView(props: { lib?: number; type?: string }) {
               );
             })}
           </div>}
+      {works.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "0.6rem", marginTop: "1.5rem" }}>
+          <p style={{ ...muted, margin: 0 }} role="status">
+            Showing {works.length} {works.length === 1 ? "work" : "works"}{!hasMore && " · All loaded"}
+          </p>
+          {loadErr && <p style={{ ...muted, margin: 0 }} role="alert">Couldn't load more works. Try again.</p>}
+          {hasMore && <button className="press" style={ghostBtn} disabled={loading} onClick={loadMore}>
+            {loading ? "Loading…" : loadErr ? "Retry load more" : "Load more"}
+          </button>}
+        </div>
+      )}
     </div>
   );
 }

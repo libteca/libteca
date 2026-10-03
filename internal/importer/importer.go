@@ -177,10 +177,15 @@ type foreignUser struct {
 	IsAdmin bool
 }
 
+type userStore interface {
+	UserByName(string) (*store.User, error)
+	CreateUser(string, string, bool) (int64, error)
+}
+
 // applyUsers maps foreign users onto ours by (case-insensitive) name. New
 // users get a temp password on commit — foreign bcrypt hashes cannot be
 // migrated into our argon2id scheme; the admin resets them after first login.
-func applyUsers(db *store.DB, users []foreignUser, plan *Plan, commit bool) (map[int64]int64, error) {
+func applyUsers(db userStore, users []foreignUser, plan *Plan, commit bool) (map[int64]int64, error) {
 	ids := map[int64]int64{}
 	for _, u := range users {
 		up := UserPlan{Name: u.Name, IsAdmin: u.IsAdmin}
@@ -204,10 +209,15 @@ func applyUsers(db *store.DB, users []foreignUser, plan *Plan, commit bool) (map
 	return ids, nil
 }
 
+type libraryStore interface {
+	Libraries() ([]store.Library, error)
+	AddLibrary(string, string, string) (int64, error)
+}
+
 // ensureLibrary matches one of our libraries by name and type, creating it on
 // commit when missing. Foreign servers do not always record a usable path;
 // the placeholder keeps the row valid and the admin fixes it before scanning.
-func ensureLibrary(db *store.DB, name, typ, fallbackPath string, plan *Plan, libIndex int, commit bool) (int64, error) {
+func ensureLibrary(db libraryStore, name, typ, fallbackPath string, plan *Plan, libIndex int, commit bool) (int64, error) {
 	libs, err := db.Libraries()
 	if err != nil {
 		return 0, err
@@ -232,13 +242,22 @@ func ensureLibrary(db *store.DB, name, typ, fallbackPath string, plan *Plan, lib
 // applyFiles stats each resolved file and upserts it under the edition.
 func applyFiles(db *store.DB, editionID int64, files []fileSpec) ([]int64, error) {
 	var ids []int64
+	err := db.Update(func(tx *store.Tx) error {
+		var err error
+		ids, err = applyFilesTx(tx, editionID, files)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
+func applyFilesTx(tx *store.Tx, editionID int64, files []fileSpec) ([]int64, error) {
+	var ids []int64
 	for i, f := range files {
 		fi, err := os.Stat(f.Path)
 		if err != nil {
-			// A planned file vanishing mid-import must fail the whole
-			// import: silently skipping it desynchronized the file slice
-			// from the returned id slice, mis-linking progress and
-			// panicking on the index past the compaction.
 			return nil, fmt.Errorf("planned file vanished during import: %s: %w", f.Path, err)
 		}
 		if !fi.Mode().IsRegular() {
@@ -249,7 +268,7 @@ func applyFiles(db *store.DB, editionID int64, files []fileSpec) ([]int64, error
 			SizeBytes: fi.Size(), MtimeSecs: fi.ModTime().Unix(), MtimeNS: fi.ModTime().UnixNano(),
 			DurationSecs: f.Duration, Chapters: "[]",
 		}
-		if err := db.UpsertFile(fr); err != nil {
+		if err := tx.UpsertFile(fr); err != nil {
 			return nil, err
 		}
 		ids = append(ids, fr.ID)

@@ -55,7 +55,7 @@ func (d *DB) NextUp(userID, seriesID int64, includeUnstarted bool) ([]NextUpEpis
 		FROM works w
 		JOIN libraries l ON l.id = w.library_id AND l.type = 'tv'
 		JOIN editions e ON e.work_id = w.id AND e.season_num IS NOT NULL AND e.episode_num IS NOT NULL
-		LEFT JOIN progress p ON p.edition_id = e.id AND p.user_id = ?`
+		LEFT JOIN progress p ON p.edition_id = e.id AND p.user_id = ? AND p.deleted = 0`
 	args := []any{userID}
 	q += ` WHERE 1=1`
 	if seriesID > 0 {
@@ -63,10 +63,10 @@ func (d *DB) NextUp(userID, seriesID int64, includeUnstarted bool) ([]NextUpEpis
 		args = append(args, seriesID)
 	} else if !includeUnstarted {
 		q += ` AND EXISTS (SELECT 1 FROM progress p3 JOIN editions e3 ON e3.id = p3.edition_id
-			WHERE e3.work_id = w.id AND p3.user_id = ?)`
+			WHERE e3.work_id = w.id AND p3.user_id = ? AND p3.deleted = 0)`
 		args = append(args, userID)
 	}
-	q += ` ORDER BY w.id, e.season_num, e.episode_num`
+	q += ` ORDER BY w.id, e.season_num, e.episode_num, e.id`
 
 	rows, err := d.Query(q, args...)
 	if err != nil {
@@ -132,7 +132,7 @@ func (d *DB) NextUp(userID, seriesID int64, includeUnstarted bool) ([]NextUpEpis
 		rows2, err := d.Query(`SELECT id, title, season_num, episode_num FROM editions
 			WHERE work_id = ? AND season_num IS NOT NULL AND episode_num IS NOT NULL
 			  AND (season_num > ? OR (season_num = ? AND episode_num > ?))
-			ORDER BY season_num, episode_num LIMIT 1`,
+			ORDER BY season_num, episode_num, id LIMIT 1`,
 			st.workID, st.finSeason, st.finSeason, st.finEpisode)
 		if err != nil {
 			return nil, err
@@ -158,7 +158,10 @@ func (d *DB) NextUp(userID, seriesID int64, includeUnstarted bool) ([]NextUpEpis
 		if out[i].LastUpdate != out[j].LastUpdate {
 			return out[i].LastUpdate > out[j].LastUpdate
 		}
-		return states[out[i].WorkID].title < states[out[j].WorkID].title
+		if out[i].Title != out[j].Title {
+			return out[i].Title < out[j].Title
+		}
+		return out[i].WorkID < out[j].WorkID
 	})
 	return out, nil
 }

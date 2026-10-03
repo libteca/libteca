@@ -163,6 +163,9 @@ func (s *Service) Subscribe(ctx context.Context, feedURL string, autoDownload bo
 	if err != nil {
 		return nil, err
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	// Row publication and the single-flight acquisition are atomic against
 	// library deletion (which holds the same gate): outside it, a subscribe
 	// landing between a deletion's ID snapshot and its transaction was
@@ -219,8 +222,14 @@ func (s *Service) RefreshPodcast(ctx context.Context, id int64) (p *store.Podcas
 }
 
 func (s *Service) refresh(ctx context.Context, p *store.Podcast) (*store.Podcast, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return p, false, err
+	}
 	etag, lastMod := derefStr(p.ETag), derefStr(p.LastModified)
 	feed, changed, newETag, newMod, err := s.fetcher.FetchFeed(ctx, p.FeedURL, etag, lastMod)
+	if cerr := ctx.Err(); cerr != nil {
+		return p, false, cerr
+	}
 	if err != nil {
 		if ferr := s.DB.UpdatePodcastFetch(p.ID, p.ETag, p.LastModified, nowMs()); ferr != nil {
 			return p, false, ferr
@@ -233,6 +242,9 @@ func (s *Service) refresh(ctx context.Context, p *store.Podcast) (*store.Podcast
 			if err := s.downloadPending(ctx, p); err != nil {
 				errs = append(errs, err)
 			}
+		}
+		if err := ctx.Err(); err != nil {
+			return p, false, errors.Join(append(errs, err)...)
 		}
 		if err := s.enforceRetention(p); err != nil {
 			errs = append(errs, err)
@@ -268,7 +280,13 @@ func (s *Service) refresh(ctx context.Context, p *store.Podcast) (*store.Podcast
 // downloads the newest pending episodes up to maxEpisodes — the rest are
 // marked seen so the back catalog is not re-chewed every refresh — and
 func (s *Service) applyFeed(ctx context.Context, p *store.Podcast, feed *Feed) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	for i := range feed.Episodes {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		ep := &feed.Episodes[i]
 		_, err := s.DB.UpsertPodcastEpisode(&store.PodcastEpisode{
 			PodcastID: p.ID, GUID: ep.GUID,
@@ -285,6 +303,9 @@ func (s *Service) applyFeed(ctx context.Context, p *store.Podcast, feed *Feed) e
 		if err := s.downloadPending(ctx, p); err != nil {
 			errs = append(errs, err)
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return errors.Join(append(errs, err)...)
 	}
 	if err := s.enforceRetention(p); err != nil {
 		errs = append(errs, err)

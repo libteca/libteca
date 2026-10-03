@@ -1,9 +1,9 @@
 FROM node:22-alpine AS web
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
-RUN npm install --no-fund --no-audit
+RUN npm ci --no-fund --no-audit
 COPY web/ ./
-RUN npm run build
+RUN npx tsc --noEmit && npm run build
 
 FROM golang:1.26-alpine AS build
 WORKDIR /src

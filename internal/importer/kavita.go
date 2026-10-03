@@ -257,82 +257,88 @@ func Kavita(dbPath string, db *store.DB, dryRun bool) (*Plan, error) {
 		return plan, nil
 	}
 
-	userMap, err := applyUsers(db, users, plan, true)
+	err = db.Update(func(tx *store.Tx) error {
+		userMap, err := applyUsers(tx, users, plan, true)
+		if err != nil {
+			return err
+		}
+
+		libIDs := map[int64]int64{}
+		for _, lib := range libs {
+			idx, ok := libIndex[lib.id]
+			if !ok {
+				continue
+			}
+			id, err := ensureLibrary(tx, lib.name, libType[lib.id], filepath.Join(filepath.Dir(dbPath), "imported-kavita", lib.name), plan, idx, true)
+			if err != nil {
+				return err
+			}
+			libIDs[lib.id] = id
+		}
+
+		edIDs := map[int64]int64{}
+		edPages := map[int64]int{}
+		for _, rs := range series {
+			w := &store.Work{
+				LibraryID:   libIDs[rs.s.libID],
+				Title:       rs.s.name,
+				Author:      strPtr(rs.s.author),
+				Description: strPtr(seriesSummary[rs.s.id]),
+			}
+			wid, err := tx.UpsertWork(w)
+			if err != nil {
+				return err
+			}
+			for _, re := range rs.editions {
+				pages := re.ch.pages
+				e := &store.EditionPages{
+					Edition:   store.Edition{WorkID: wid, Format: re.format, Title: re.ch.title, DurationSecs: nil},
+					PageCount: &pages,
+				}
+				eid, err := tx.UpsertEditionPages(e)
+				if err != nil {
+					return err
+				}
+				if _, err := applyFilesTx(tx, eid, re.files); err != nil {
+					return err
+				}
+				edIDs[re.ch.id] = eid
+				edPages[eid] = pages
+			}
+		}
+
+		for _, p := range progress {
+			uid, ok := userMap[p.userID]
+			if !ok {
+				continue
+			}
+			eid, ok := edIDs[p.chapterID]
+			if !ok {
+				continue
+			}
+			pct := 0.0
+			if pages := edPages[eid]; pages > 0 {
+				pct = float64(p.pagesRead) / float64(pages)
+				if pct > 1 {
+					pct = 1
+				}
+			}
+			rp := &store.ReadingProgress{
+				Progress: store.Progress{UserID: uid, EditionID: eid, IsFinished: pct >= 1, Device: strPtr("kavita-import")},
+				Percent:  &pct,
+			}
+			if p.pagesRead > 0 {
+				page := int64(p.pagesRead)
+				rp.Page = &page
+			}
+			if err := tx.SetReadingProgress(rp); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
-	}
-
-	libIDs := map[int64]int64{}
-	for _, lib := range libs {
-		idx, ok := libIndex[lib.id]
-		if !ok {
-			continue
-		}
-		id, err := ensureLibrary(db, lib.name, libType[lib.id], filepath.Join(filepath.Dir(dbPath), "imported-kavita", lib.name), plan, idx, true)
-		if err != nil {
-			return nil, err
-		}
-		libIDs[lib.id] = id
-	}
-
-	edIDs := map[int64]int64{}
-	edPages := map[int64]int{}
-	for _, rs := range series {
-		w := &store.Work{
-			LibraryID:   libIDs[rs.s.libID],
-			Title:       rs.s.name,
-			Author:      strPtr(rs.s.author),
-			Description: strPtr(seriesSummary[rs.s.id]),
-		}
-		wid, err := db.UpsertWork(w)
-		if err != nil {
-			return nil, err
-		}
-		for _, re := range rs.editions {
-			pages := re.ch.pages
-			e := &store.EditionPages{
-				Edition:   store.Edition{WorkID: wid, Format: re.format, Title: re.ch.title, DurationSecs: nil},
-				PageCount: &pages,
-			}
-			eid, err := db.UpsertEditionPages(e)
-			if err != nil {
-				return nil, err
-			}
-			if _, err := applyFiles(db, eid, re.files); err != nil {
-				return nil, err
-			}
-			edIDs[re.ch.id] = eid
-			edPages[eid] = pages
-		}
-	}
-
-	for _, p := range progress {
-		uid, ok := userMap[p.userID]
-		if !ok {
-			continue
-		}
-		eid, ok := edIDs[p.chapterID]
-		if !ok {
-			continue
-		}
-		pct := 0.0
-		if pages := edPages[eid]; pages > 0 {
-			pct = float64(p.pagesRead) / float64(pages)
-			if pct > 1 {
-				pct = 1
-			}
-		}
-		rp := &store.ReadingProgress{
-			Progress: store.Progress{UserID: uid, EditionID: eid, IsFinished: pct >= 1, Device: strPtr("kavita-import")},
-			Percent:  &pct,
-		}
-		if p.pagesRead > 0 {
-			page := int64(p.pagesRead)
-			rp.Page = &page
-		}
-		if err := db.SetReadingProgress(rp); err != nil {
-			return nil, err
-		}
 	}
 
 	return plan, nil

@@ -28,8 +28,16 @@ func TokenDigest(value string) string {
 }
 
 func (d *DB) CreateUser(name, passwordHash string, isAdmin bool) (int64, error) {
+	return createUser(d, name, passwordHash, isAdmin)
+}
+
+func (t *Tx) CreateUser(name, passwordHash string, isAdmin bool) (int64, error) {
+	return createUser(t, name, passwordHash, isAdmin)
+}
+
+func createUser(q dbtx, name, passwordHash string, isAdmin bool) (int64, error) {
 	now := nowMilli()
-	res, err := d.Exec(`INSERT INTO users (name, password_hash, is_admin, created_at, updated_at) VALUES (?,?,?,?,?)`,
+	res, err := q.Exec(`INSERT INTO users (name, password_hash, is_admin, created_at, updated_at) VALUES (?,?,?,?,?)`,
 		name, passwordHash, isAdmin, now, now)
 	if err != nil {
 		return 0, err

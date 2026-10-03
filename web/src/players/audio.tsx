@@ -12,20 +12,31 @@ export type AudioController = { playAt: (index: number, offset: number) => void 
 const SPEEDS = [1, 1.25, 1.5, 1.75, 2, 0.75];
 const SLEEPS = [0, 5, 15, 30, 60];
 
-export function AudioPlayer(props: {
+type AudioPlayerProps = {
   files: PlayerFile[];
   header: string;
   sub?: string;
   artwork?: string;
   controllerRef?: { current: AudioController | null };
   onPos?: (abs: number) => void;
+  onFilePos?: (index: number, offset: number) => void;
+  onSeek?: (index: number, offset: number) => void;
   onIndexChange?: (index: number) => void;
   onFileEnded?: (index: number) => void;
   onQueueEnded?: () => void;
-}) {
+};
+
+export function AudioPlayer(props: AudioPlayerProps) {
+  const key = props.files.map((file) => file.id).join(",");
+  return <AudioQueuePlayer key={key} {...props} />;
+}
+
+function AudioQueuePlayer(props: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const active = useRef(true);
   const curIdx = useRef(0);
   const pendingOffset = useRef(0);
+  const loading = useRef(true);
   const [playing, setPlaying] = useState(false);
   const [abs, setAbs] = useState(0);
   const [rate, setRate] = useState(() => {
@@ -53,18 +64,28 @@ export function AudioPlayer(props: {
   const chWrap = useRef<HTMLDivElement | null>(null);
   const onPosRef = useRef(props.onPos);
   onPosRef.current = props.onPos;
+  const onFilePosRef = useRef(props.onFilePos);
+  onFilePosRef.current = props.onFilePos;
 
   const total = props.files.reduce((a, f) => a + f.duration, 0);
   const cumBefore = (i: number) => props.files.slice(0, i).reduce((a, f) => a + f.duration, 0);
 
-  const load = (i: number, offset: number, autoplay = true) => {
+  const reportPosition = (index: number, offset: number) => {
+    onPosRef.current?.(cumBefore(index) + offset);
+    onFilePosRef.current?.(index, offset);
+  };
+
+  const load = (i: number, offset: number, autoplay = true, explicit = false) => {
     const a = audioRef.current;
-    if (!a || !props.files[i]) return;
+    if (!active.current || !a || !props.files[i]) return;
+    if (curIdx.current !== i && a.src && !loading.current && !queueEnded.current) reportPosition(curIdx.current, a.currentTime);
+    if (explicit) { queueEnded.current = false; props.onSeek?.(i, offset); }
     if (curIdx.current !== i || !a.src) {
       curIdx.current = i;
       setIdxV(i);
       props.onIndexChange?.(i);
       pendingOffset.current = offset;
+      loading.current = true;
       a.src = media(`/stream/${props.files[i].id}`);
       if (autoplay) a.play().catch(() => {});
     } else if (a.readyState === 0) {
@@ -77,7 +98,7 @@ export function AudioPlayer(props: {
   };
 
   useEffect(() => {
-    props.controllerRef && (props.controllerRef.current = { playAt: (i, off) => load(i, off) });
+    props.controllerRef && (props.controllerRef.current = { playAt: (i, off) => load(i, off, true, true) });
     return () => { if (props.controllerRef) props.controllerRef.current = null; };
   });
 
@@ -95,6 +116,11 @@ export function AudioPlayer(props: {
   }, [sleepMin]);
 
   useEffect(() => {
+    const audio = audioRef.current;
+    const onLeave = () => {
+      if (active.current && audio && !loading.current && !queueEnded.current) reportPosition(curIdx.current, audio.currentTime);
+    };
+    addEventListener("pagehide", onLeave);
     const t = window.setInterval(() => {
       if (!sleepAt.current) return;
       const left = sleepAt.current - Date.now();
@@ -106,9 +132,11 @@ export function AudioPlayer(props: {
       } else setSleepLeft(left);
     }, 500);
     return () => {
-      audioRef.current?.pause();
+      removeEventListener("pagehide", onLeave);
+      active.current = false;
+      audio?.pause();
       clearInterval(t);
-      if (absRef.current > 1 && !queueEnded.current) onPosRef.current?.(absRef.current);
+      if (audio && !loading.current && !queueEnded.current) reportPosition(curIdx.current, audio.currentTime);
     };
   }, []);
 
@@ -126,7 +154,7 @@ export function AudioPlayer(props: {
     let cum = 0;
     for (let i = 0; i < props.files.length; i++) {
       if (cum + props.files[i].duration > target || i === props.files.length - 1) {
-        load(i, Math.max(0, target - cum));
+        load(i, Math.max(0, target - cum), true, true);
         return;
       }
       cum += props.files[i].duration;
@@ -143,7 +171,10 @@ export function AudioPlayer(props: {
   const toggle = () => {
     const a = audioRef.current;
     if (!a) return;
-    if (a.paused) a.play().catch(() => {}); else a.pause();
+    if (a.paused) {
+      if (queueEnded.current) load(curIdx.current, 0, true, true);
+      else a.play().catch(() => {});
+    } else a.pause();
   };
 
   useEffect(() => {
@@ -167,7 +198,10 @@ export function AudioPlayer(props: {
       artist: props.header,
       artwork: props.artwork ? [{ src: props.artwork, sizes: "512x512", type: "image/jpeg" }] : [],
     });
-    ms.setActionHandler("play", () => { audioRef.current?.play().catch(() => {}); });
+    ms.setActionHandler("play", () => {
+      if (queueEnded.current) load(curIdx.current, 0, true, true);
+      else audioRef.current?.play().catch(() => {});
+    });
     ms.setActionHandler("pause", () => { audioRef.current?.pause(); });
     ms.setActionHandler("seekbackward", () => nudge(-30));
     ms.setActionHandler("seekforward", () => nudge(30));
@@ -221,8 +255,12 @@ export function AudioPlayer(props: {
         preload="metadata"
         onLoadedMetadata={() => {
           const a = audioRef.current;
-          if (a && pendingOffset.current > 0) { a.currentTime = pendingOffset.current; }
+          if (!active.current || !a) return;
+          a.currentTime = pendingOffset.current;
+          absRef.current = cumBefore(curIdx.current) + pendingOffset.current;
+          setAbs(absRef.current);
           pendingOffset.current = 0;
+          loading.current = false;
         }}
         onProgress={() => {
           const a = audioRef.current;
@@ -235,33 +273,37 @@ export function AudioPlayer(props: {
             }
           } catch { /* noop */ }
         }}
-        onPlay={() => { queueEnded.current = false; setPlaying(true); if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "playing"; }}
-        onError={() => { setPlaying(false); toast("Playback failed — the audio could not be loaded", "error"); }}
+        onPlay={() => { if (!active.current) return; queueEnded.current = false; setPlaying(true); if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "playing"; }}
+        onError={() => { if (!active.current) return; setPlaying(false); toast("Playback failed — the audio could not be loaded", "error"); }}
         onPause={() => {
+          if (!active.current) return;
           setPlaying(false);
           if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "paused";
           const a = audioRef.current;
-          if (a && props.onPos && a.currentTime > 1) props.onPos(cumBefore(curIdx.current) + a.currentTime);
+          if (a && !loading.current && !queueEnded.current) reportPosition(curIdx.current, a.currentTime);
         }}
         onSeeked={() => {
           const a = audioRef.current;
-          if (!a || !onPosRef.current) return;
+          if (!active.current || !a || loading.current) return;
+          absRef.current = cumBefore(curIdx.current) + a.currentTime;
+          setAbs(absRef.current);
           lastSentAt.current = performance.now();
-          onPosRef.current(cumBefore(curIdx.current) + a.currentTime);
+          reportPosition(curIdx.current, a.currentTime);
         }}
         onTimeUpdate={() => {
           const a = audioRef.current;
-          if (!a) return;
+          if (!active.current || !a || loading.current) return;
           const pos = cumBefore(curIdx.current) + a.currentTime;
           absRef.current = pos;
           setAbs(pos);
           const now = performance.now();
-          if (onPosRef.current && now - lastSentAt.current >= 10_000) { lastSentAt.current = now; onPosRef.current(pos); }
+          if (now - lastSentAt.current >= 10_000) { lastSentAt.current = now; reportPosition(curIdx.current, a.currentTime); }
           if ("mediaSession" in navigator && navigator.mediaSession.setPositionState && total > 0) {
             try { navigator.mediaSession.setPositionState({ duration: total, playbackRate: rate, position: Math.min(pos, total) }); } catch { /* invalid state */ }
           }
         }}
         onEnded={() => {
+          if (!active.current || loading.current || queueEnded.current) return;
           const i = curIdx.current;
           props.onFileEnded?.(i);
           if (i < props.files.length - 1) load(i + 1, 0);

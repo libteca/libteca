@@ -688,3 +688,169 @@ Verification: go vet ./... clean; gofmt -l cmd internal clean; go test
 ./... -count=1 -timeout 600s green (22 pkgs); go test -race on
 store/core/scan/podcast/transcode/auth green; web npm run test (vitest,
 22 tests) + npx tsc --noEmit + npm run build clean (2026-09-19).
+
+## Reliability repair follow-up (2026-10-02)
+
+Implemented locally against fbf2f20, with regression tests; not deployed:
+
+- Reader recovery no longer uses a reconciliation delta as the accumulated
+  durable state. Equal/lower pending positions retain the complete winner;
+  failed replacement persistence keeps the original records; changed foreign
+  records are not deleted after recovery.
+- Close/hide and ordinary saves share high-water reconciliation and conditional
+  bases. Close includes unresolved in-flight state. Successful saves update
+  the high-water mark; a conflict discarded as already covered still advances
+  the revision baseline.
+- Video episode/file sessions are keyed, keeping old media events and delayed
+  acknowledgements with their original edition. Writes are serialized with a
+  request deadline, and failed completion stays due rather than being changed
+  to unfinished by teardown.
+- Reset tombstones are excluded from resume, library filters, search/percent,
+  Next Up, OPDS in-progress, and Subsonic recent/frequent queries. Baseline
+  progress reads retain tombstones and their revision. Store/HTTP regressions
+  cover ABS reset through core discovery and preservation of another user.
+- Library browsing now exposes 200-item pages, load-more/retry, and honest
+  loaded counts. Generation/cancellation guards discard old requests after
+  library/filter/sort changes. Child rows and percent queries are restricted
+  to the selected IDs, with stable order ties. Offset paging is not a snapshot
+  during concurrent scans or deletions; refresh remains necessary then.
+- Cross-library edition moves and work merges fail inside their transaction.
+  New-title creation and reparenting are atomic. Same-library moves remain
+  supported, and regression tests assert source streaming survives rejection.
+  Existing wrong-root/collapsed records are not repaired. The standing source
+  identity migration remains deferred; see docs/source-identity-proposal.md.
+- The Go CI job builds real webdist before vet/test; make test depends on the
+  locked frontend build. The dependency audit gate is retained unchanged.
+
+Validation: 65 frontend tests, TypeScript, and make web pass locally. Eight
+reader-hook regressions all fail against the untouched baseline and pass on
+this patch. Exact source SQL passes against all 15 migrations, including a
+10,000-work paging fixture with indexed child-query plans. Go regression tests,
+go vet, gofmt, and race tests remain unrun: this environment lacks the required
+Go 1.26.6 compiler. No full browser, real-client, production-library, or complete
+security verification is claimed.
+
+Still open:
+
+- Dependency compatibility: npm audit --omit=dev --audit-level=high still fails
+  on the existing epubjs/xmldom and devalue dependency paths. Do not force the
+  suggested breaking EPUB upgrade; validate restore/CFI/navigation against a
+  representative EPUB corpus before changing that reader dependency.
+- Audio queue replacement is resolved in the continuation below, including
+  identity-scoped media-event and detached-node coverage.
+- Pass-9 F17 archive resource limits are partial: post-allocation page-size
+  rejection does not bound decompression memory, and EPUB body buffering needs
+  a true incremental bound. The prior blanket closure is not sufficient.
+
+
+## Reliability continuation (2026-10-02)
+
+Local fixes on the same fbf2f20 baseline, integrated with the preceding repair:
+
+- Audio queue identity: a change to ordered file IDs creates a fresh media
+  session even at the same index. Teardown pauses the original element and
+  saves its position through its original callback. Detached elements cannot
+  report completion, play, pause, or errors into the replacement session.
+  Metadata-only rerenders retain playback and controller behavior.
+- OPML import: the UI follows the asynchronous server status instead of reading
+  nonexistent synchronous counts. It reports completion only at `done`, derives
+  existing subscriptions from the terminal totals, prevents duplicate starts,
+  resumes a running import on reopening, and refreshes subscriptions after
+  returning from a podcast detail. Lost server status is an explicit incomplete
+  result rather than success.
+- Scan monitoring: rejected/unconfirmed starts surface an error; 409 responses
+  with a job ID follow that job. Idle closes observation. Generation guards
+  discard old start, SSE, and polling responses; fallback polling stays pinned
+  to the accepted job ID and uses serial requests.
+- Both new status pollers retry network failures and HTTP 408/429/5xx. Requests
+  have a 15-second headers-and-body deadline and abort their fetch on timeout;
+  permanent status errors terminate observation without reporting success.
+
+Validation: 99 combined frontend tests pass (65 preceding + 34 new), TypeScript
+and make web pass, and the prior source-SQL/CI-order checks pass against this
+combined tree. Twenty initial continuation regressions were run on untouched
+source: 18 fail and two compatibility controls pass. Independent review found
+and verified fixes for detached audio completion, transient HTTP retry, detail
+navigation refresh, and stalled polling. The new jsdom dependency is test-only.
+
+Coverage is bounded to audio queue replacement and the OPML/scan UI lifecycle.
+No Go source changed in this continuation. Go compilation/tests/race checks,
+real browser media behavior, real-device playback, importer data conversion,
+scanner identity design, archive resource bounds, and full security review
+remain unverified or deferred as described above. No production or remote
+repository changes were made.
+
+## Systematic correctness and executable validation (2026-10-02)
+
+The expanded local review is recorded in docs/systematic-issue-register.md
+and its JSON companion, with scope in docs/review-source-inventory.md and
+validation in docs/review-validation.md. These records supersede the earlier
+compiler-unavailable status for this working patch; historical audit claims
+above retain their original dates and scope.
+
+New repairs cover tagged audiobook order and exact persisted resume during
+legacy order repair; warm audio cover ownership; ABS optional-schema, media-ID,
+duration-map and unnumbered-episode conversion; transactional import file
+batches; podcast cancellation; incremental reader byte caps; CBZ viewport,
+spread and async lifecycle; EPUB iframe keyboard handling and indexing errors;
+PDF resume/metadata state; search cancellation; playlist/podcast keyed media,
+within-tab endpoint write ordering and revisit resume; error-shaped load
+responses; downgrade referential integrity; and locked/complete build gates.
+
+The specific pass-9 F17 CBZ post-allocation and EPUB body-buffering gaps are
+fixed with stream limits. The broader archive resource family remains partial:
+EPUB dependency decompression/DOM expansion, image-pixel decoding, aggregate
+cache memory, ZIP directory parsing and extraction disk quotas are not bounded
+by these byte-stream repairs. No dependency upgrade was forced.
+
+Legacy audiobook order repair preserves file/edition identity and file-relative
+progress, recalculates changed cumulative positions transactionally, and bumps
+only their revisions without changing user activity timestamps. Pause/reopen
+playback around an order-changing scan: live clients can retain the old queue.
+Historical playback sessions and arbitrary retag/source regrouping are not
+rewritten. Complete imports remain non-atomic across stages despite file-batch
+rollback. Audio/video durable offline progress and multipart timelines remain
+open, as do the physical-source migration and existing-data repair proposal.
+
+The focused authentication/security review remains excluded by the prior
+platform restriction and was not retried. Ordinary pre-existing automated tests
+are not a substitute for that assessment. Gate W, real browsers/devices,
+representative media/EPUB and live compatibility-client corpus acceptance are
+not inferred from synthetic/component tests. No production data or remote
+repository was changed.
+
+The final independent reconstruction run exposed a timing-dependent watcher
+regression fixture, not a confirmed lost-ingest defect. Runtime-library
+registration now uses a complete archive fixture and explicitly waits for
+watch registration. A separate regression forces an initial partial-archive
+scan failure, completes that same file, and requires a later successful
+ingestion with one present file plus clean shutdown. Both watcher regressions
+passed 20 race-enabled repetitions. See LT-119 and the final validation logs.
+
+## Whole-import and media reliability follow-through (2026-10-02)
+
+LT-120 closes the earlier whole-import atomicity limit: ABS and Kavita apply
+all destination stages in one transaction, including existing-row revisions
+and playlists. Failure-injection, deferred commit failure, read-only source,
+dry-run, repeat import, and concurrent import fixtures cover the boundary.
+The foreign source itself is not snapshotted by this change; real schema and
+large-import lock-duration acceptance remain open.
+
+LT-121 repairs primary-audio save ordering, login fencing, zero-position seeks,
+failed completion retention and deadline-bounded in-tab retry. LT-122 adds
+ordered multi-file playlist audio with cumulative resume/seeks and final-file
+completion. LT-124 prevents a slow old work response from replacing a newer
+route. These do not close durable offline media, generation-aware playback,
+ambiguous network/cross-device conflicts, or multipart video/HLS.
+
+LT-123 passes cancellation through CBR listing/extraction, reaps the launched
+extractor, rejects failed partial bytes, checks cancellation before storing,
+and cleans temporary output. Synthetic fake-extractor fixtures cover these
+conditions and existing byte limits. This does not establish real unrar/unar
+compatibility, process-tree quotas, or ongoing extraction-disk bounds.
+
+The remaining implementation contracts and safe next steps are recorded in
+docs/media-consistency-proposal.md. The prior security-review restriction,
+real-library/browser/client/container/hardware acceptance and publication
+boundaries remain unchanged. Existing dependency update pull requests should
+be coordinated rather than duplicated or blindly included in this patch.

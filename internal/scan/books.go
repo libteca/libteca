@@ -116,6 +116,9 @@ func scanBooksLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 			continue
 		}
 		tr.probed()
+		if cerr := ctx.Err(); cerr != nil {
+			return count, cerr
+		}
 		if serr := storeBook(db, lib, d, coversDir, tr); serr != nil {
 			return count, serr
 		}
@@ -402,7 +405,7 @@ func probeCBR(ctx context.Context, p, tool string) (int, []byte, error) {
 	if len(pages) == 0 {
 		return 0, nil, nil
 	}
-	cover, err := cbrExtract(tool, p, pages[0])
+	cover, err := cbrExtract(ctx, tool, p, pages[0])
 	if err != nil {
 		return 0, nil, err
 	}
@@ -422,6 +425,8 @@ func cbrList(ctx context.Context, p, tool string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	stopClose := context.AfterFunc(ctx, func() { _ = stdout.Close() })
+	defer stopClose()
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
@@ -434,14 +439,14 @@ func cbrList(ctx context.Context, p, tool string) ([]string, error) {
 		}
 	}
 	werr := cmd.Wait()
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	if oversized {
 		return nil, fmt.Errorf("archive listing exceeds %d bytes", limit)
 	}
 	if rerr != nil {
 		return nil, rerr
-	}
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
 	}
 	if werr != nil {
 		return nil, werr
@@ -478,54 +483,80 @@ func cbrPageNames(names []string) []string {
 	return out
 }
 
-func cbrExtract(tool, archive, name string) ([]byte, error) {
+func cbrExtract(ctx context.Context, tool, archive, name string) ([]byte, error) {
 	// The cap is enforced WHILE READING and REJECTED when exceeded: the
 	// previous shape buffered the full page (Output / ReadFile) first, and
 	// truncating at exactly the cap silently produced corrupt covers.
 	// max+1 is read so oversize is detectable; an unrar child blocked
 	// writing past the limit is killed rather than deadlocking Wait.
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	var data []byte
 	if tool == "unrar" {
-		cmd := exec.Command(tool, "p", "-inul", archive, name)
+		cmd := exec.CommandContext(ctx, tool, "p", "-inul", archive, name)
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
 			return nil, err
 		}
+		stopClose := context.AfterFunc(ctx, func() { _ = stdout.Close() })
+		defer stopClose()
 		if err := cmd.Start(); err != nil {
 			return nil, err
 		}
 		buf, rerr := io.ReadAll(io.LimitReader(stdout, cbrMaxCoverBytes+1))
-		if rerr == nil && len(buf) > cbrMaxCoverBytes {
+		oversized := len(buf) > cbrMaxCoverBytes
+		if oversized || rerr != nil {
 			if cmd.Process != nil {
 				_ = cmd.Process.Kill()
 			}
-			_ = cmd.Wait()
+		}
+		waitErr := cmd.Wait()
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if oversized {
 			return nil, fmt.Errorf("cbr page %s decompresses past the %d MB cap", name, cbrMaxCoverBytes>>20)
 		}
-		data = buf
-		if waitErr := cmd.Wait(); rerr == nil && waitErr != nil && len(data) == 0 {
+		if rerr != nil {
+			return nil, rerr
+		}
+		if waitErr != nil {
 			return nil, waitErr
 		}
+		data = buf
 	} else {
 		dir, err := os.MkdirTemp("", "libteca-cbr-")
 		if err != nil {
 			return nil, err
 		}
 		defer os.RemoveAll(dir)
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-		if err := exec.CommandContext(ctx, tool, "-q", "-f", "-o", dir, archive, name).Run(); err != nil {
+		err = exec.CommandContext(ctx, tool, "-q", "-f", "-o", dir, archive, name).Run()
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if err != nil {
 			return nil, err
 		}
 		var tooBig bool
 		var extractedTotal int64
-		filepath.WalkDir(dir, func(p string, e os.DirEntry, err error) error {
-			if err != nil || e.IsDir() {
+		err = filepath.WalkDir(dir, func(p string, e os.DirEntry, err error) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err != nil {
+				return err
+			}
+			if e.IsDir() {
 				return nil
 			}
-			if fi, serr := e.Info(); serr == nil {
-				extractedTotal += fi.Size()
+			fi, serr := e.Info()
+			if serr != nil {
+				return serr
 			}
+			extractedTotal += fi.Size()
 			// unar has no streaming mode; the on-disk stat is the earliest
 			// signal, and the running total bounds multi-file spills.
 			if extractedTotal > cbrMaxCoverBytes {
@@ -541,22 +572,31 @@ func cbrExtract(tool, archive, name string) ([]byte, error) {
 			}
 			f, ferr := os.Open(p)
 			if ferr != nil {
-				return nil
+				return ferr
 			}
 			defer f.Close()
-			data, _ = io.ReadAll(io.LimitReader(f, cbrMaxCoverBytes+1))
+			data, ferr = io.ReadAll(io.LimitReader(f, cbrMaxCoverBytes+1))
+			if ferr != nil {
+				return ferr
+			}
 			if len(data) > cbrMaxCoverBytes {
 				tooBig = true
 				data = nil
 			}
 			return nil
 		})
+		if err != nil {
+			return nil, err
+		}
 		if tooBig {
 			return nil, fmt.Errorf("cbr page %s exceeds the %d MB cap", name, cbrMaxCoverBytes>>20)
 		}
 		if data == nil {
 			return nil, fmt.Errorf("unar extracted nothing for %s", name)
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	return data, nil
 }

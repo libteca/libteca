@@ -1,0 +1,75 @@
+import { describe, expect, it } from "vitest";
+import { createProgressStorage, mergeStoredProgress, type StoredProgress } from "../src/progressQueue";
+
+function memoryStorage(entries: Record<string, string> = {}): Storage {
+  const data = new Map(Object.entries(entries));
+  return {
+    get length() { return data.size; },
+    key: (index) => [...data.keys()][index] ?? null,
+    getItem: (key) => data.get(key) ?? null,
+    setItem: (key, value) => { data.set(key, value); },
+    removeItem: (key) => { data.delete(key); },
+    clear: () => data.clear(),
+  };
+}
+
+const high: StoredProgress = { baseRevision: 3, patch: { page: 80, percent: 0.8, locator: "high" } };
+const low: StoredProgress = { baseRevision: 1, patch: { page: 20, percent: 0.2, locator: "low" } };
+
+describe("durable progress recovery", () => {
+  it.each([[high, low], [low, high], [high, high]])("keeps the full winning position for %j then %j", (a, b) => {
+    expect(mergeStoredProgress([a, b])).toEqual({ baseRevision: Math.min(a.baseRevision, b.baseRevision), patch: high.patch });
+  });
+
+  it("keeps completion-only intent without losing the position", () => {
+    expect(mergeStoredProgress([high, { baseRevision: 4, patch: { finished: false } }]))
+      .toEqual({ baseRevision: 3, patch: { ...high.patch, finished: false } });
+    expect(mergeStoredProgress([{ baseRevision: 4, patch: { finished: true } }, high]))
+      .toEqual({ baseRevision: 3, patch: { ...high.patch, finished: true } });
+  });
+
+  it("never borrows a losing locator or percent", () => {
+    expect(mergeStoredProgress([low, { baseRevision: 3, patch: { page: 80 } }]))
+      .toEqual({ baseRevision: 1, patch: { page: 80 } });
+    expect(mergeStoredProgress([high, { baseRevision: 3, patch: { locator: "unknown" } }]))
+      .toEqual(high);
+  });
+
+  it("publishes recovered state before removing original records", () => {
+    const storage = memoryStorage({ "scope-a": JSON.stringify(high), "scope-b": JSON.stringify(low), "other-user": "keep" });
+    const remove = storage.removeItem;
+    storage.removeItem = (key) => {
+      expect(storage.getItem("scope-own")).toBe(JSON.stringify({ baseRevision: 1, patch: high.patch }));
+      remove(key);
+    };
+    expect(createProgressStorage(storage, "scope-", "scope-own").load())
+      .toEqual({ baseRevision: 1, patch: high.patch });
+    expect(storage.length).toBe(2);
+    expect(storage.getItem("other-user")).toBe("keep");
+  });
+
+  it("preserves originals when replacement storage fails", () => {
+    const storage = memoryStorage({ "scope-a": JSON.stringify(high), "scope-b": JSON.stringify(low) });
+    storage.setItem = () => { throw new Error("quota"); };
+    expect(createProgressStorage(storage, "scope-", "scope-own").load())
+      .toEqual({ baseRevision: 1, patch: high.patch });
+    expect(storage.getItem("scope-a")).toBe(JSON.stringify(high));
+    expect(storage.getItem("scope-b")).toBe(JSON.stringify(low));
+  });
+
+  it("does not remove a record updated after it was read", () => {
+    const storage = memoryStorage({ "scope-a": JSON.stringify(low) });
+    const set = storage.setItem;
+    storage.setItem = (key, value) => {
+      set(key, value);
+      if (key === "scope-own") set("scope-a", JSON.stringify(high));
+    };
+    createProgressStorage(storage, "scope-", "scope-own").load();
+    expect(storage.getItem("scope-a")).toBe(JSON.stringify(high));
+  });
+
+  it("does not skip a valid record after quarantining malformed storage", () => {
+    const storage = memoryStorage({ "scope-bad": "broken", "scope-good": JSON.stringify(high) });
+    expect(createProgressStorage(storage, "scope-", "scope-own").load()).toEqual(high);
+  });
+});
