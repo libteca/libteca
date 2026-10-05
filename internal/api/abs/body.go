@@ -7,19 +7,27 @@ import (
 	"net/http"
 )
 
-var errTrailingJSON = errors.New("trailing json")
+var (
+	errTrailingJSON = errors.New("trailing json")
+	errEmptyJSON    = errors.New("empty json body")
+)
 
 // decodeBody enforces the bounded, single-document JSON contract for ABS
-// request bodies. An empty body stays a valid zero value (clients that POST
-// play/close without a payload relied on it); anything malformed, trailing,
-// or over max is rejected instead of falling through as zero-value fields.
-func decodeBody(w http.ResponseWriter, r *http.Request, max int64, dst any) error {
+// request bodies. allowEmpty keeps the play/close compatibility behavior
+// (an absent payload stays a valid zero value); handlers whose protocol
+// requires a body pass false so an empty request is rejected instead of
+// decoding as a zero-valued mutation. Anything malformed, trailing, or over
+// max is rejected instead of falling through as zero-value fields.
+func decodeBody(w http.ResponseWriter, r *http.Request, max int64, allowEmpty bool, dst any) error {
 	r.Body = http.MaxBytesReader(w, r.Body, max)
 	dec := json.NewDecoder(r.Body)
 	err := dec.Decode(dst)
 	if err != nil {
 		if errors.Is(err, io.EOF) {
-			return nil
+			if allowEmpty {
+				return nil
+			}
+			return errEmptyJSON
 		}
 		return err
 	}

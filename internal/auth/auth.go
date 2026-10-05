@@ -271,17 +271,18 @@ func MiddlewareWithMediaCookie(db *store.DB, mediaRoute func(*http.Request) bool
 
 const MediaCookieName = "libteca-media"
 
-func SetMediaCookie(w http.ResponseWriter, value string) {
+func SetMediaCookie(w http.ResponseWriter, value string, secure bool) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     MediaCookieName,
 		Value:    value,
 		Path:     "/api/core",
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
+		Secure:   secure,
 	})
 }
 
-func ClearMediaCookie(w http.ResponseWriter) {
+func ClearMediaCookie(w http.ResponseWriter, secure bool) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     MediaCookieName,
 		Value:    "",
@@ -289,6 +290,7 @@ func ClearMediaCookie(w http.ResponseWriter) {
 		MaxAge:   -1,
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
+		Secure:   secure,
 	})
 }
 

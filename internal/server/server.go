@@ -18,10 +18,11 @@ import (
 )
 
 type Server struct {
-	DB      *store.DB
-	Dir     string
-	HWAccel string
-	Core    *core.API
+	DB            *store.DB
+	Dir           string
+	HWAccel       string
+	SecureCookies bool
+	Core          *core.API
 
 	tm          *transcode.Manager
 	jf          *jellyfin.API
@@ -76,6 +77,7 @@ func (s *Server) buildHandler() http.Handler {
 	c := s.Core
 	c.TC = tm
 	c.LoginLimiter = loginLimiter
+	c.SecureCookies = s.SecureCookies
 	coreBodyLimit := neutron.BodyLimit(4 << 20)
 	c.MountPublic(r.Group("/api/core", coreBodyLimit))
 	c.Mount(r.Group("/api/core", coreBodyLimit, auth.MiddlewareWithMediaCookie(s.DB, core.MediaRequest)))

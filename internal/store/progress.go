@@ -71,6 +71,10 @@ func (t *Tx) SetProgress(p *Progress) error {
 }
 
 func setProgress(q dbtx, p *Progress) error {
+	return setProgressAt(q, p, nowMilli())
+}
+
+func setProgressAt(q dbtx, p *Progress, now int64) error {
 	_, err := q.Exec(`INSERT INTO progress (user_id, edition_id, file_id, file_offset_secs, edition_position_secs, duration_secs, is_finished, device, updated_at, revision)
 		VALUES (?,?,?,?,?,?,?,?,?,1)
 		ON CONFLICT(user_id, edition_id) DO UPDATE SET
@@ -83,7 +87,7 @@ func setProgress(q dbtx, p *Progress) error {
 			updated_at = excluded.updated_at,
 			deleted = 0,
 			revision = progress.revision + 1`,
-		p.UserID, p.EditionID, p.FileID, p.FileOffsetSecs, p.EditionPositionSecs, p.DurationSecs, p.IsFinished, p.Device, nowMilli())
+		p.UserID, p.EditionID, p.FileID, p.FileOffsetSecs, p.EditionPositionSecs, p.DurationSecs, p.IsFinished, p.Device, now)
 	return err
 }
 
@@ -147,12 +151,6 @@ func (d *DB) Session(id string) (*Session, error) {
 	return &s, err
 }
 
-func (d *DB) UpdateSession(id string, position, listened float64) error {
-	_, err := d.Exec(`UPDATE playback_sessions SET position_secs = ?, time_listened_secs = time_listened_secs + ?, updated_at = ? WHERE id = ? AND closed_at IS NULL`,
-		position, listened, nowMilli(), id)
-	return err
-}
-
 func (d *DB) CloseSession(id string, position, listened float64) error {
 	_, err := d.Exec(`UPDATE playback_sessions SET position_secs = ?, time_listened_secs = time_listened_secs + ?, updated_at = ?, closed_at = ? WHERE id = ? AND closed_at IS NULL`,
 		position, listened, nowMilli(), nowMilli(), id)
@@ -178,23 +176,52 @@ func (d *DB) CloseSessionWithProgress(s *Session, p *Progress, listenedDelta flo
 			return ErrNotFound
 		}
 		now := nowMilli()
-		if _, err := tx.Exec(`INSERT INTO progress (user_id, edition_id, file_id, file_offset_secs, edition_position_secs, duration_secs, is_finished, device, updated_at, revision)
-			VALUES (?,?,?,?,?,?,?,?,?,1)
-			ON CONFLICT(user_id, edition_id) DO UPDATE SET
-				file_id = excluded.file_id,
-				file_offset_secs = excluded.file_offset_secs,
-				edition_position_secs = excluded.edition_position_secs,
-				duration_secs = excluded.duration_secs,
-				is_finished = excluded.is_finished,
-				device = excluded.device,
-				updated_at = excluded.updated_at,
-				deleted = 0,
-				revision = progress.revision + 1`,
-			p.UserID, p.EditionID, p.FileID, p.FileOffsetSecs, p.EditionPositionSecs, p.DurationSecs, p.IsFinished, p.Device, now); err != nil {
+		if err := setProgressAt(tx, p, now); err != nil {
 			return err
 		}
 		_, err = tx.Exec(`UPDATE playback_sessions SET closed_at = ?, updated_at = ?, position_secs = ?, time_listened_secs = time_listened_secs + ? WHERE id = ? AND closed_at IS NULL`,
 			now, now, p.EditionPositionSecs, listenedDelta, s.ID)
 		return err
+	})
+}
+
+// UpdateSessionWithProgress commits a live sync's progress write and session
+// advancement in one transaction, mirroring CloseSessionWithProgress: a
+// failure on either side leaves both rows untouched, so a client retry can
+// never double-count listened time.
+func (d *DB) UpdateSessionWithProgress(s *Session, p *Progress, listenedDelta float64) error {
+	return d.Update(func(tx *Tx) error {
+		var owner, edition int64
+		var closed sql.NullInt64
+		err := tx.QueryRow(`SELECT user_id, edition_id, closed_at FROM playback_sessions WHERE id = ?`, s.ID).
+			Scan(&owner, &edition, &closed)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if closed.Valid || owner != s.UserID || p.UserID != owner || p.EditionID != edition {
+			return ErrNotFound
+		}
+		now := nowMilli()
+		if err := setProgressAt(tx, p, now); err != nil {
+			return err
+		}
+		res, err := tx.Exec(`UPDATE playback_sessions
+			SET position_secs = ?, time_listened_secs = time_listened_secs + ?, updated_at = ?
+			WHERE id = ? AND closed_at IS NULL`,
+			p.EditionPositionSecs, listenedDelta, now, s.ID)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return ErrNotFound
+		}
+		return nil
 	})
 }

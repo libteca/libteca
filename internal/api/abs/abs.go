@@ -445,7 +445,6 @@ func (a *API) getProgress(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) postProgress(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	ctx, err := a.resolveItem(r.PathValue("itemId"))
 	if err != nil {
 		fail(w, 404, "Item not found")
@@ -458,8 +457,9 @@ func (a *API) postProgress(w http.ResponseWriter, r *http.Request) {
 		Progress     float64 `json:"progress"`
 		IsFinished   bool    `json:"isFinished"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		fail(w, 400, "Invalid body")
+	if err := decodeBody(w, r, 1<<20, false, &body); err != nil {
+		status, msg := bodyErrorStatus(err)
+		fail(w, status, msg)
 		return
 	}
 	position := body.CurrentTime
@@ -534,7 +534,7 @@ func (a *API) play(w http.ResponseWriter, r *http.Request) {
 		SupportedMimeTypes []string       `json:"supportedMimeTypes"`
 		ForceDirectPlay    bool           `json:"forceDirectPlay"`
 	}
-	if err := decodeBody(w, r, 1<<20, &body); err != nil {
+	if err := decodeBody(w, r, 1<<20, true, &body); err != nil {
 		status, msg := bodyErrorStatus(err)
 		fail(w, status, msg)
 		return
@@ -656,14 +656,14 @@ func (a *API) serveEditionFile(w http.ResponseWriter, r *http.Request, f *store.
 }
 
 func (a *API) sessionSync(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var body struct {
 		CurrentTime  float64 `json:"currentTime"`
 		TimeListened float64 `json:"timeListened"`
 		Duration     float64 `json:"duration"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		fail(w, 400, "Invalid body")
+	if err := decodeBody(w, r, 1<<20, false, &body); err != nil {
+		status, msg := bodyErrorStatus(err)
+		fail(w, status, msg)
 		return
 	}
 	s, err := a.DB.Session(r.PathValue("id"))
@@ -679,27 +679,33 @@ func (a *API) sessionSync(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "invalid timeListened")
 		return
 	}
-	if err := a.DB.UpdateSession(s.ID, body.CurrentTime, body.TimeListened); err != nil {
-		serverError(w, r, err)
+	ed, err := a.DB.EditionByID(s.EditionID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			fail(w, 404, "Session not found")
+		} else {
+			serverError(w, r, err)
+		}
 		return
 	}
-	ed, err := a.DB.EditionByID(s.EditionID)
-	if err == nil {
-		fileID, offset := ed.Locate(body.CurrentTime)
-		dur := body.Duration
-		if dur == 0 {
-			dur = ed.TotalDuration()
-		}
-		device := "abs-app"
-		p := &store.Progress{
-			UserID: s.UserID, EditionID: s.EditionID, FileID: &fileID, FileOffsetSecs: offset,
-			EditionPositionSecs: body.CurrentTime, DurationSecs: &dur, Device: &device,
-			IsFinished: dur > 0 && body.CurrentTime >= dur-5,
-		}
-		if err := a.DB.SetProgress(p); err != nil {
+	fileID, offset := ed.Locate(body.CurrentTime)
+	dur := body.Duration
+	if dur == 0 {
+		dur = ed.TotalDuration()
+	}
+	device := "abs-app"
+	p := &store.Progress{
+		UserID: s.UserID, EditionID: s.EditionID, FileID: &fileID, FileOffsetSecs: offset,
+		EditionPositionSecs: body.CurrentTime, DurationSecs: &dur, Device: &device,
+		IsFinished: dur > 0 && body.CurrentTime >= dur-5,
+	}
+	if err := a.DB.UpdateSessionWithProgress(s, p, body.TimeListened); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			fail(w, 404, "Session not found")
+		} else {
 			serverError(w, r, err)
-			return
 		}
+		return
 	}
 	write(w, 200, map[string]any{"success": true})
 }
@@ -711,7 +717,7 @@ func (a *API) sessionClose(w http.ResponseWriter, r *http.Request) {
 		TimeListened float64 `json:"timeListened"`
 		Duration     float64 `json:"duration"`
 	}
-	if err := decodeBody(w, r, 1<<20, &body); err != nil {
+	if err := decodeBody(w, r, 1<<20, true, &body); err != nil {
 		status, msg := bodyErrorStatus(err)
 		fail(w, status, msg)
 		return

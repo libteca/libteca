@@ -137,12 +137,14 @@ func audioPathsIn(dir string) ([]string, error) {
 	return out, nil
 }
 
-func tempPassword() string {
-	b := make([]byte, 6)
-	if _, err := rand.Read(b); err != nil {
-		panic(err)
+var readRandom = rand.Read
+
+func tempPassword() (string, error) {
+	var b [16]byte
+	if _, err := readRandom(b[:]); err != nil {
+		return "", err
 	}
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(b[:]), nil
 }
 
 // plainAuthor tolerates foreign author columns that store either plain text
@@ -194,7 +196,10 @@ func applyUsers(db userStore, users []foreignUser, plan *Plan, commit bool) (map
 			up.Exists = true
 			ids[u.ID] = existing.ID
 		} else if errors.Is(err, store.ErrNotFound) && commit {
-			pw := tempPassword()
+			pw, err := tempPassword()
+			if err != nil {
+				return nil, fmt.Errorf("create user %s temporary password: %w", u.Name, err)
+			}
 			hash, err := auth.Hash(pw)
 			if err != nil {
 				return nil, fmt.Errorf("create user %s: %w", u.Name, err)

@@ -178,3 +178,119 @@ func TestSessionCloseMalformedBodyKeepsSessionOpen(t *testing.T) {
 		t.Fatal("valid close must record progress")
 	}
 }
+
+func (s *bodyTestStack) createSession(t *testing.T, id string) {
+	t.Helper()
+	now := time.Now().UnixMilli()
+	sess := &store.Session{ID: id, UserID: 1, EditionID: s.edID, StartedAt: now, UpdatedAt: now, DeviceInfo: "{}"}
+	if err := s.db.CreateSession(sess); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (s *bodyTestStack) sessionState(t *testing.T, id string) (float64, float64) {
+	t.Helper()
+	var position, listened float64
+	if err := s.db.QueryRow(`SELECT position_secs, time_listened_secs FROM playback_sessions WHERE id = ?`, id).Scan(&position, &listened); err != nil {
+		t.Fatal(err)
+	}
+	return position, listened
+}
+
+func (s *bodyTestStack) progressCount(t *testing.T) int {
+	t.Helper()
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM progress WHERE user_id = 1 AND edition_id = ?`, s.edID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func TestSessionSyncBodyContract(t *testing.T) {
+	big := `{"currentTime":1,"duration":60,"pad":"` + strings.Repeat("a", 1<<20) + `"}`
+	cases := []struct {
+		name string
+		body string
+		code int
+	}{
+		{"malformed", `{"currentTime":12`, 400},
+		{"empty", "", 400},
+		{"trailing document", `{"currentTime":30,"timeListened":5,"duration":60}{"currentTime":40}`, 400},
+		{"oversized", big, 413},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newBodyTestStack(t)
+			s.createSession(t, "sid-sync-body")
+			code, body := s.post(t, "/api/session/sid-sync-body/sync", "application/json", tc.body)
+			if code != tc.code {
+				t.Fatalf("sync %s = %d %s, want %d", tc.name, code, body, tc.code)
+			}
+			position, listened := s.sessionState(t, "sid-sync-body")
+			if position != 0 || listened != 0 {
+				t.Fatalf("rejected sync mutated session: position %v listened %v", position, listened)
+			}
+			if n := s.progressCount(t); n != 0 {
+				t.Fatalf("rejected sync wrote %d progress rows", n)
+			}
+		})
+	}
+}
+
+func TestPostProgressBodyContract(t *testing.T) {
+	big := `{"currentTime":1,"duration":60,"pad":"` + strings.Repeat("a", 1<<20) + `"}`
+	cases := []struct {
+		name string
+		body string
+		code int
+	}{
+		{"malformed", `{"currentTime":12`, 400},
+		{"empty", "", 400},
+		{"trailing document", `{"currentTime":30,"duration":60}{"currentTime":40}`, 400},
+		{"oversized", big, 413},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newBodyTestStack(t)
+			code, body := s.post(t, fmt.Sprintf("/api/me/progress/%d", s.edID), "application/json", tc.body)
+			if code != tc.code {
+				t.Fatalf("progress %s = %d %s, want %d", tc.name, code, body, tc.code)
+			}
+			if n := s.progressCount(t); n != 0 {
+				t.Fatalf("rejected progress wrote %d rows", n)
+			}
+		})
+	}
+}
+
+func TestSessionSyncValidBodyStillMutates(t *testing.T) {
+	s := newBodyTestStack(t)
+	s.createSession(t, "sid-sync-ok")
+	code, body := s.post(t, "/api/session/sid-sync-ok/sync", "application/json", `{"currentTime":30,"timeListened":10,"duration":60}`)
+	if code != 200 {
+		t.Fatalf("valid sync = %d %s, want 200", code, body)
+	}
+	position, listened := s.sessionState(t, "sid-sync-ok")
+	if position != 30 || listened != 10 {
+		t.Fatalf("valid sync left position %v listened %v, want 30/10", position, listened)
+	}
+	if n := s.progressCount(t); n != 1 {
+		t.Fatalf("valid sync progress rows = %d, want 1", n)
+	}
+}
+
+func TestSessionCloseEmptyBodyStillAccepted(t *testing.T) {
+	s := newBodyTestStack(t)
+	s.createSession(t, "sid-close-empty")
+	code, body := s.post(t, "/api/session/sid-close-empty/close", "application/json", "")
+	if code != 200 {
+		t.Fatalf("empty close body = %d %s, want 200 (client compatibility)", code, body)
+	}
+	got, err := s.db.Session("sid-close-empty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ClosedAt == nil {
+		t.Fatal("empty close must still close the session")
+	}
+}

@@ -132,3 +132,90 @@ func TestInternalErrorsDoNotLeakErrText(t *testing.T) {
 		t.Fatalf("body = %s, want static message", body)
 	}
 }
+
+func sessionRow(t *testing.T, db *store.DB, id string) (float64, float64) {
+	t.Helper()
+	var position, listened float64
+	if err := db.QueryRow(`SELECT position_secs, time_listened_secs FROM playback_sessions WHERE id = ?`, id).Scan(&position, &listened); err != nil {
+		t.Fatal(err)
+	}
+	return position, listened
+}
+
+func progressRows(t *testing.T, db *store.DB) int {
+	t.Helper()
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM progress`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func TestSessionSyncProgressFailureLeavesSessionUntouched(t *testing.T) {
+	db, post := newSessionEnv(t)
+	if _, err := db.Exec(`CREATE TRIGGER fail_progress_ins BEFORE INSERT ON progress BEGIN SELECT RAISE(ABORT, 'boom'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if code, body := post("POST", "/api/session/sess-open/sync"); code != 500 {
+		t.Fatalf("sync with progress failure = %d %s, want 500", code, body)
+	}
+	position, listened := sessionRow(t, db, "sess-open")
+	if position != 0 || listened != 0 {
+		t.Fatalf("failed sync advanced session: position %v listened %v, want 0/0", position, listened)
+	}
+}
+
+func TestSessionSyncUpdateFailureLeavesProgressUntouched(t *testing.T) {
+	db, post := newSessionEnv(t)
+	if _, err := db.Exec(`CREATE TRIGGER fail_sync_upd BEFORE UPDATE ON playback_sessions BEGIN SELECT RAISE(ABORT, 'boom'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if code, body := post("POST", "/api/session/sess-open/sync"); code != 500 {
+		t.Fatalf("sync with session-update failure = %d %s, want 500", code, body)
+	}
+	if n := progressRows(t, db); n != 0 {
+		t.Fatalf("failed sync committed %d progress rows", n)
+	}
+	position, listened := sessionRow(t, db, "sess-open")
+	if position != 0 || listened != 0 {
+		t.Fatalf("failed sync advanced session: position %v listened %v", position, listened)
+	}
+}
+
+func TestSessionSyncEditionFailureIsServerError(t *testing.T) {
+	db, post := newSessionEnv(t)
+	if _, err := db.Exec(`ALTER TABLE editions RENAME TO editions_gone`); err != nil {
+		t.Fatal(err)
+	}
+	code, body := post("POST", "/api/session/sess-open/sync")
+	if code != 500 {
+		t.Fatalf("sync with edition-read failure = %d %s, want 500 (not silent 200)", code, body)
+	}
+	position, listened := sessionRow(t, db, "sess-open")
+	if position != 0 || listened != 0 {
+		t.Fatalf("failed sync advanced session: position %v listened %v", position, listened)
+	}
+}
+
+func TestSessionSyncRetryDoesNotDoubleCount(t *testing.T) {
+	db, post := newSessionEnv(t)
+	if _, err := db.Exec(`CREATE TRIGGER fail_progress_ins2 BEFORE INSERT ON progress BEGIN SELECT RAISE(ABORT, 'boom'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := post("POST", "/api/session/sess-open/sync"); code != 500 {
+		t.Fatalf("injected sync failure = %d, want 500", code)
+	}
+	if _, err := db.Exec(`DROP TRIGGER fail_progress_ins2`); err != nil {
+		t.Fatal(err)
+	}
+	if code, body := post("POST", "/api/session/sess-open/sync"); code != 200 {
+		t.Fatalf("retry after failure = %d %s, want 200", code, body)
+	}
+	position, listened := sessionRow(t, db, "sess-open")
+	if position != 120 || listened != 120 {
+		t.Fatalf("retried sync position/listened = %v/%v, want 120/120 (no double count)", position, listened)
+	}
+	if n := progressRows(t, db); n != 1 {
+		t.Fatalf("retried sync progress rows = %d, want 1", n)
+	}
+}

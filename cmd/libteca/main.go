@@ -49,6 +49,7 @@ func main() {
 	showVersion := flag.Bool("version", false, "print version and exit")
 	watchEnabled := flag.Bool("watch", true, "watch libraries for changes and rescan (env LIBTECA_WATCH=false disables; LIBTECA_SWEEP=<seconds> sets the sweep interval, 0 disables)")
 	hwaccel := flag.String("hwaccel", "", "video hwaccel: auto|none|videotoolbox|vaapi|nvenc|qsv (default: $LIBTECA_HWACCEL)")
+	secureCookie := flag.Bool("secure-cookie", false, "mark the media cookie Secure (enable when the user-facing origin is HTTPS; env LIBTECA_SECURE_COOKIE)")
 	flag.Parse()
 
 	if *showVersion {
@@ -58,12 +59,15 @@ func main() {
 
 	watchWasSet := false
 	hwaccelWasSet := false
+	secureCookieWasSet := false
 	flag.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "watch":
 			watchWasSet = true
 		case "hwaccel":
 			hwaccelWasSet = true
+		case "secure-cookie":
+			secureCookieWasSet = true
 		}
 	})
 	if !watchWasSet {
@@ -73,6 +77,15 @@ func main() {
 				fatal(fmt.Errorf("LIBTECA_WATCH: %w", err))
 			}
 			*watchEnabled = parsed
+		}
+	}
+	if !secureCookieWasSet {
+		if raw, ok := os.LookupEnv("LIBTECA_SECURE_COOKIE"); ok {
+			parsed, err := strconv.ParseBool(raw)
+			if err != nil {
+				fatal(fmt.Errorf("LIBTECA_SECURE_COOKIE: %w", err))
+			}
+			*secureCookie = parsed
 		}
 	}
 	if *port < 1 || *port > 65535 {
@@ -138,6 +151,7 @@ func main() {
 
 	srv := server.New(db, abs)
 	srv.HWAccel = *hwaccel
+	srv.SecureCookies = *secureCookie
 
 	podcasts := podcast.New(db, abs)
 	srv.Core.Podcasts = podcasts

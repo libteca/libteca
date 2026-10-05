@@ -208,6 +208,9 @@ func TestMediaCookieLifecycle(t *testing.T) {
 	if c.Path != "/api/core" || !c.HttpOnly || c.SameSite != http.SameSiteStrictMode {
 		t.Fatalf("media cookie attributes = path %q httpOnly %v sameSite %v", c.Path, c.HttpOnly, c.SameSite)
 	}
+	if c.Secure {
+		t.Fatal("media cookie must not be Secure in default direct-HTTP mode")
+	}
 	token := c.Value
 
 	req, _ := http.NewRequest("GET", srv.URL+"/api/core/me", nil)
@@ -256,5 +259,70 @@ func TestMediaCookieLifecycle(t *testing.T) {
 	after.Body.Close()
 	if after.StatusCode != 401 {
 		t.Fatalf("revoked token = %d, want 401", after.StatusCode)
+	}
+}
+
+func TestMediaCookieSecureMode(t *testing.T) {
+	dir := t.TempDir()
+	db, err := store.Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	a := New(db, dir)
+	a.SecureCookies = true
+	app := neutron.New()
+	a.MountPublic(app.Router().Group("/api/core"))
+	a.Mount(app.Router().Group("/api/core", auth.MiddlewareWithMediaCookie(db, MediaRequest)))
+	srv := httptest.NewServer(app.Handler())
+	t.Cleanup(srv.Close)
+
+	hash, err := auth.Hash("password123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO users (name, password_hash, is_admin, created_at, updated_at) VALUES ('admin',?,1,0,0)`, hash); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := http.Post(srv.URL+"/api/core/login", "application/json", strings.NewReader(`{"username":"admin","password":"password123"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("login = %d %s", resp.StatusCode, body)
+	}
+	var token string
+	secureSet := false
+	for _, c := range resp.Cookies() {
+		if c.Name == auth.MediaCookieName {
+			token = c.Value
+			secureSet = c.Secure
+		}
+	}
+	if token == "" || !secureSet {
+		t.Fatalf("secure mode login cookie: token set %t secure %t", token != "", secureSet)
+	}
+
+	req, _ := http.NewRequest("POST", srv.URL+"/api/core/logout", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	out, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out.Body.Close()
+	if out.StatusCode != 204 {
+		t.Fatalf("logout = %d, want 204", out.StatusCode)
+	}
+	clearedSecure := false
+	for _, c := range out.Cookies() {
+		if c.Name == auth.MediaCookieName && c.Value == "" && c.MaxAge < 0 && c.Secure {
+			clearedSecure = true
+		}
+	}
+	if !clearedSecure {
+		t.Fatal("logout must clear the media cookie with the Secure attribute")
 	}
 }

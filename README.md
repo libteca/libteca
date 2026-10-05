@@ -48,6 +48,11 @@ make build                                              # web UI into the binary
 `auto|none|videotoolbox|vaapi|nvenc|qsv`; empty defers to `$LIBTECA_HWACCEL`,
 then auto-detect. `--port` defaults to 8096.
 
+Behind HTTPS termination (reverse proxy, Tailscale HTTPS), enable
+`--secure-cookie` (`LIBTECA_SECURE_COOKIE=true`) so the media cookie carries
+the `Secure` attribute. Leave it off for direct-HTTP LAN/Tailscale-HTTP
+deployments — a Secure cookie is dropped by the browser on plain HTTP.
+
 Open http://localhost:8096, log in, add a library, and scan (web UI, or
 `./libteca --data ./data --scan` as a one-shot). Then point clients at it:
 

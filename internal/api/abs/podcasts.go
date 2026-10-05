@@ -1,7 +1,6 @@
 package abs
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
@@ -220,8 +219,9 @@ func (a *API) podcastEpisodeProgressPost(w http.ResponseWriter, r *http.Request)
 		Progress     float64 `json:"progress"`
 		IsFinished   bool    `json:"isFinished"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		fail(w, 400, "Invalid body")
+	if err := decodeBody(w, r, 1<<20, false, &body); err != nil {
+		status, msg := bodyErrorStatus(err)
+		fail(w, status, msg)
 		return
 	}
 	position := body.CurrentTime

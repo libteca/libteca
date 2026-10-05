@@ -1,8 +1,10 @@
 package core
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -31,7 +33,7 @@ func (a *API) logout(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]string{"error": "logout could not be completed"})
 		return
 	}
-	auth.ClearMediaCookie(w)
+	auth.ClearMediaCookie(w, a.SecureCookies)
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -67,6 +69,24 @@ func tokenJSON(t *store.Token) map[string]any {
 		"id": t.ID, "userId": t.UserID, "label": t.Label,
 		"createdAtMs": t.CreatedAt, "lastSeenAtMs": t.LastSeenAt, "revokedAtMs": t.RevokedAt,
 	}
+}
+
+var hashRequest = auth.HashRequest
+
+// writeHashError reserves 429 for real KDF capacity exhaustion; entropy and
+// other hash failures are internal errors, and a cancelled request needs no
+// response manufactured for it.
+func writeHashError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, auth.ErrKDFBusy) {
+		auth.WriteRetryAfter(w, time.Second)
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "server busy, try again later"})
+		return
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return
+	}
+	slog.Error("libteca: password hash failed", "path", r.URL.Path, "err", err)
+	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 }
 
 func (a *API) usersList(w http.ResponseWriter, r *http.Request) {
@@ -107,10 +127,9 @@ func (a *API) userCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 409, map[string]string{"error": "user exists"})
 		return
 	}
-	hash, err := auth.HashRequest(r.Context(), body.Password)
+	hash, err := hashRequest(r.Context(), body.Password)
 	if err != nil {
-		auth.WriteRetryAfter(w, time.Second)
-		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "server busy, try again later"})
+		writeHashError(w, r, err)
 		return
 	}
 	id, err := a.DB.CreateUser(name, hash, body.IsAdmin)
@@ -188,10 +207,9 @@ func (a *API) userSetPassword(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 404, map[string]string{"error": "user not found"})
 		return
 	}
-	hash, err := auth.HashRequest(r.Context(), body.Password)
+	hash, err := hashRequest(r.Context(), body.Password)
 	if err != nil {
-		auth.WriteRetryAfter(w, time.Second)
-		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "server busy, try again later"})
+		writeHashError(w, r, err)
 		return
 	}
 	var expected *string

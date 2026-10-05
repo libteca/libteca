@@ -922,3 +922,31 @@ Verification: gofmt clean over changed files; go vet ./... clean; go test
 ./... -count=1 green; go test -race on store/core/abs/auth/transcode/
 trickplay/server green; web npx tsc --noEmit + npm run test (324 tests) +
 npm run build clean (2026-10-04).
+
+## GPT audit follow-up pass (2026-10-04, AUDIT-CHATGPT-11.md) - 5 fixed
+
+Review of the audit10 delta at `a15c17f` plus adjacent ABS/auth/importer/
+session code. Register read first; standing deferrals not re-reported.
+
+- **A11-01 required-vs-optional body contract:** decodeBody now takes
+  allowEmpty; applied to sessionSync, postProgress and podcast episode
+  progress POST. Empty play/close stays 200 (audit10 client compat);
+  oversized bodies now 413 (was 400).
+- **A11-02 non-atomic ABS progress update:** new transactional
+  UpdateSessionWithProgress mirroring CloseSessionWithProgress, shared
+  setProgressAt UPSERT, edition loaded before mutation with surfaced
+  errors; dead non-atomic UpdateSession removed.
+- **A11-03 KDF-busy misclassification:** only ErrKDFBusy is 429 with
+  Retry-After; entropy/other errors are 500; cancellation sends no
+  response. hashRequest seam added for tests.
+- **A11-04 temp-password entropy:** tempPassword via readRandom seam, 16
+  bytes (32 hex, was 12); propagated through applyUsers; whole import
+  rolls back on failure.
+- **A11-05 cookie Secure flag:** explicit --secure-cookie /
+  LIBTECA_SECURE_COOKIE operator control threaded main->server->core
+  cookie set/clear; README deployment note added. No X-Forwarded-Proto
+  inference.
+
+Verification: gofmt clean; go vet ./... clean; go test ./... -count=1
+22 pkgs ok; go test -race on auth/importer/store/abs/core ok; web tsc +
+324 tests + build clean (2026-10-04).
