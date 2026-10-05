@@ -55,6 +55,7 @@ type FileRec struct {
 	MtimeSecs    int64
 	MtimeNS      int64
 	Hash         *string
+	SHA256       *string
 	Codec        *string
 	VideoCodec   *string
 	Width        *int

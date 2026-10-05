@@ -98,7 +98,7 @@ func newMediaAuthEnv(t *testing.T) *mediaAuthEnv {
 	a := New(db, dir)
 	app := neutron.New()
 	a.MountPublic(app.Router().Group("/api/core"))
-	a.Mount(app.Router().Group("/api/core", auth.MiddlewareWithMediaCookie(db, MediaRequest, MediaMutationRequest)))
+	a.Mount(app.Router().Group("/api/core", auth.MiddlewareWithMediaCookie(db, MediaRequest)))
 	srv := httptest.NewServer(app.Handler())
 	t.Cleanup(srv.Close)
 	return &mediaAuthEnv{db: db, srv: srv, token: token, fileID: fid, edID: ed}
@@ -190,49 +190,30 @@ func (e *mediaAuthEnv) beacon(t *testing.T, path, authz, cookie, body string, hd
 	return resp, string(data)
 }
 
-func TestMediaCookieProgressBeaconOriginPolicy(t *testing.T) {
+func TestProgressMutationRequiresBearer(t *testing.T) {
 	env := newMediaAuthEnv(t)
 	path := "/api/core/progress/" + strconv.FormatInt(env.edID, 10)
-	origin := env.srv.URL
 
-	resp, body := env.beacon(t, path, "", env.token, `{}`, map[string]string{"Sec-Fetch-Site": "same-origin"})
-	if resp.StatusCode != 200 {
-		t.Fatalf("same-origin beacon = %d %s, want 200", resp.StatusCode, body)
-	}
-	resp, body = env.beacon(t, path, "", env.token, `{}`, map[string]string{"Sec-Fetch-Site": "same-origin", "Origin": origin})
-	if resp.StatusCode != 200 {
-		t.Fatalf("beacon with matching Origin = %d %s, want 200", resp.StatusCode, body)
-	}
-	resp, body = env.beacon(t, path, "", env.token, `{}`, nil)
-	if resp.StatusCode != 200 {
-		t.Fatalf("beacon without origin markers (legacy same-origin UA) = %d %s, want 200", resp.StatusCode, body)
+	for _, hdr := range []map[string]string{
+		{"Sec-Fetch-Site": "same-origin"},
+		{"Sec-Fetch-Site": "same-origin", "Origin": env.srv.URL},
+		nil,
+		{"Sec-Fetch-Site": "cross-site", "Origin": "https://evil.example"},
+	} {
+		resp, _ := env.beacon(t, path, "", env.token, `{}`, hdr)
+		if resp.StatusCode != 401 {
+			t.Fatalf("cookie progress post with %v = %d, want 401 (cookie never authorizes writes)", hdr, resp.StatusCode)
+		}
 	}
 
-	resp, _ = env.beacon(t, path, "", env.token, `{}`, map[string]string{"Sec-Fetch-Site": "cross-site"})
+	resp, _ := env.beacon(t, path, "", "", `{}`, nil)
 	if resp.StatusCode != 401 {
-		t.Fatalf("cross-site beacon = %d, want 401", resp.StatusCode)
-	}
-	resp, _ = env.beacon(t, path, "", env.token, `{}`, map[string]string{"Sec-Fetch-Site": "same-site"})
-	if resp.StatusCode != 401 {
-		t.Fatalf("same-site sibling beacon = %d, want 401", resp.StatusCode)
-	}
-	resp, _ = env.beacon(t, path, "", env.token, `{}`, map[string]string{"Origin": "https://sibling.example"})
-	if resp.StatusCode != 401 {
-		t.Fatalf("mismatched Origin beacon = %d, want 401", resp.StatusCode)
-	}
-	resp, _ = env.beacon(t, path, "", env.token, `{}`, map[string]string{"Sec-Fetch-Site": "same-origin", "Origin": "https://evil.example"})
-	if resp.StatusCode != 401 {
-		t.Fatalf("beacon with spoofed Sec-Fetch-Site + foreign Origin = %d, want 401", resp.StatusCode)
+		t.Fatalf("credential-free progress post = %d, want 401", resp.StatusCode)
 	}
 
-	resp, body = env.beacon(t, path, env.token, "", `{}`, map[string]string{"Sec-Fetch-Site": "cross-site", "Origin": "https://evil.example"})
+	resp, body := env.beacon(t, path, env.token, "", `{}`, map[string]string{"Sec-Fetch-Site": "cross-site", "Origin": "https://evil.example"})
 	if resp.StatusCode != 200 {
-		t.Fatalf("bearer-header progress post = %d %s, want 200 (header auth is not cookie auth)", resp.StatusCode, body)
-	}
-
-	resp, _ = env.beacon(t, path+"?token="+env.token, "", "", `{}`, nil)
-	if resp.StatusCode != 401 {
-		t.Fatalf("query-token beacon = %d, want 401", resp.StatusCode)
+		t.Fatalf("bearer-header progress post = %d %s, want 200", resp.StatusCode, body)
 	}
 
 	resp, _ = env.do(t, "POST", "/api/core/libraries", "", env.token)
@@ -241,9 +222,9 @@ func TestMediaCookieProgressBeaconOriginPolicy(t *testing.T) {
 	}
 }
 
-func TestMediaCookieHlsStopOriginPolicy(t *testing.T) {
+func TestHlsStopRequiresBearer(t *testing.T) {
 	env := newMediaAuthEnv(t)
-	sameOrigin := func(t *testing.T, hdr map[string]string) int {
+	stop := func(t *testing.T, authz, cookie string, hdr map[string]string) int {
 		t.Helper()
 		req, err := http.NewRequest("DELETE", env.srv.URL+"/api/core/hls/web-1-none", nil)
 		if err != nil {
@@ -252,7 +233,12 @@ func TestMediaCookieHlsStopOriginPolicy(t *testing.T) {
 		for k, v := range hdr {
 			req.Header.Set(k, v)
 		}
-		req.AddCookie(&http.Cookie{Name: auth.MediaCookieName, Value: env.token})
+		if authz != "" {
+			req.Header.Set("Authorization", "Bearer "+authz)
+		}
+		if cookie != "" {
+			req.AddCookie(&http.Cookie{Name: auth.MediaCookieName, Value: cookie})
+		}
 		resp, err := env.srv.Client().Do(req)
 		if err != nil {
 			t.Fatal(err)
@@ -260,54 +246,37 @@ func TestMediaCookieHlsStopOriginPolicy(t *testing.T) {
 		defer resp.Body.Close()
 		return resp.StatusCode
 	}
-	if code := sameOrigin(t, map[string]string{"Sec-Fetch-Site": "same-origin", "Origin": env.srv.URL}); code == 401 {
-		t.Fatal("same-origin cookie HLS stop must pass authentication (handler outcome may be 404 for an unknown session)")
+	for _, hdr := range []map[string]string{
+		{"Sec-Fetch-Site": "same-origin", "Origin": env.srv.URL},
+		nil,
+		{"Sec-Fetch-Site": "same-site"},
+		{"Origin": "https://evil.example"},
+	} {
+		if code := stop(t, "", env.token, hdr); code != 401 {
+			t.Fatalf("cookie HLS stop with %v = %d, want 401 (cookie never authorizes writes)", hdr, code)
+		}
 	}
-	if code := sameOrigin(t, nil); code == 401 {
-		t.Fatal("cookie HLS stop without origin markers (legacy same-origin UA) must pass authentication")
-	}
-	if code := sameOrigin(t, map[string]string{"Sec-Fetch-Site": "same-site"}); code != 401 {
-		t.Fatalf("same-site sibling cookie HLS stop = %d, want 401", code)
-	}
-	if code := sameOrigin(t, map[string]string{"Origin": "https://evil.example"}); code != 401 {
-		t.Fatalf("mismatched Origin cookie HLS stop = %d, want 401", code)
+	if code := stop(t, env.token, "", map[string]string{"Sec-Fetch-Site": "cross-site", "Origin": "https://evil.example"}); code == 401 {
+		t.Fatal("bearer-header HLS stop must pass authentication (handler outcome may be 404 for an unknown session)")
 	}
 }
 
-func TestMediaMutationRequestClassification(t *testing.T) {
-	for _, m := range []string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch, http.MethodDelete} {
-		r := httptest.NewRequest(m, "/api/core/progress/5", nil)
-		if MediaMutationRequest(r) {
-			t.Fatalf("MediaMutationRequest(%s /progress/5) = true, want false", m)
-		}
-	}
-	r := httptest.NewRequest(http.MethodPost, "/api/core/progress/5", nil)
-	if !MediaMutationRequest(r) {
-		t.Fatal("MediaMutationRequest(POST /progress/5) = false, want true")
-	}
-	for _, m := range []string{http.MethodGet, http.MethodPost, http.MethodPut} {
-		r := httptest.NewRequest(m, "/api/core/hls/web-1-abc", nil)
-		if MediaMutationRequest(r) {
-			t.Fatalf("MediaMutationRequest(%s /hls/...) = true, want false", m)
-		}
-	}
-	r = httptest.NewRequest(http.MethodDelete, "/api/core/hls/web-1-abc", nil)
-	if !MediaMutationRequest(r) {
-		t.Fatal("MediaMutationRequest(DELETE /hls/{sid}) = false, want true")
-	}
-	for _, p := range []string{"/api/core/progress", "/api/core/progress/", "/api/core/progress/5/x", "/api/core/stream/5", "/api/core/libraries", "/api/core/hls", "/api/core/hls/a/b"} {
-		r := httptest.NewRequest(http.MethodPost, p, nil)
-		if MediaMutationRequest(r) {
-			t.Fatalf("MediaMutationRequest(POST %s) = true, want false", p)
-		}
-	}
-	r = httptest.NewRequest(http.MethodGet, "/api/core/progress/5", nil)
+func TestMediaRequestMethodGate(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/api/core/progress/5", nil)
 	if !MediaRequest(r) {
 		t.Fatal("MediaRequest(GET /progress/5) = false, want true (read-only cookie read stays allowed)")
 	}
 	r = httptest.NewRequest(http.MethodPost, "/api/core/progress/5", nil)
 	if MediaRequest(r) {
 		t.Fatal("MediaRequest(POST /progress/5) = true, want false (cookie is read-only for media routes)")
+	}
+	r = httptest.NewRequest(http.MethodDelete, "/api/core/hls/web-1-abc", nil)
+	if MediaRequest(r) {
+		t.Fatal("MediaRequest(DELETE /hls/{sid}) = true, want false (mutations require the bearer header)")
+	}
+	r = httptest.NewRequest(http.MethodGet, "/api/core/stream/5", nil)
+	if !MediaRequest(r) {
+		t.Fatal("MediaRequest(GET /stream/5) = false, want true")
 	}
 }
 
@@ -321,7 +290,7 @@ func TestMediaCookieLifecycle(t *testing.T) {
 	a := New(db, dir)
 	app := neutron.New()
 	a.MountPublic(app.Router().Group("/api/core"))
-	a.Mount(app.Router().Group("/api/core", auth.MiddlewareWithMediaCookie(db, MediaRequest, MediaMutationRequest)))
+	a.Mount(app.Router().Group("/api/core", auth.MiddlewareWithMediaCookie(db, MediaRequest)))
 	srv := httptest.NewServer(app.Handler())
 	t.Cleanup(srv.Close)
 
@@ -420,7 +389,7 @@ func TestMediaCookieSecureMode(t *testing.T) {
 	a.SecureCookies = true
 	app := neutron.New()
 	a.MountPublic(app.Router().Group("/api/core"))
-	a.Mount(app.Router().Group("/api/core", auth.MiddlewareWithMediaCookie(db, MediaRequest, MediaMutationRequest)))
+	a.Mount(app.Router().Group("/api/core", auth.MiddlewareWithMediaCookie(db, MediaRequest)))
 	srv := httptest.NewServer(app.Handler())
 	t.Cleanup(srv.Close)
 

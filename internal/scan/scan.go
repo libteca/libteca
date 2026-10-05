@@ -2,6 +2,7 @@ package scan
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -392,6 +393,27 @@ func hashFile(path string, size int64) string {
 		io.CopyBuffer(h, f, buf)
 	}
 	return fmt.Sprintf("%x-%d", h.Sum64(), size)
+}
+
+// SHA256File/SHA256Content are the full-content identity the games contract
+// exposes (the sampled xxhash above is move-relink identity, not content
+// identity). Empty string means "could not read"; callers leave the column
+// NULL so a later scan or the lazy payload backfill can retry.
+func SHA256File(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	return SHA256Content(f)
+}
+
+func SHA256Content(r io.Reader) string {
+	h := sha256.New()
+	if _, err := io.Copy(h, r); err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
 func metaGet(info *audio.Info, key string) string {

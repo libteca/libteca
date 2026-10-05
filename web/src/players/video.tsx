@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import { api, apiChecked, media, type EditionDetail, type PlaybackInfo, type WorkDetail } from "../api";
+import { api, apiChecked, getToken, media, type EditionDetail, type PlaybackInfo, type WorkDetail } from "../api";
 import { fmtClock } from "../util";
 import { VideoProgressSaver } from "./videoProgress";
 import { c, ghostBtn, muted } from "../styles";
@@ -191,7 +191,10 @@ function VideoPlayerSession(props: VideoPlayerProps) {
       hlsRef.current?.destroy();
       hlsRef.current = null;
       if (hlsSid) {
-        void fetch(media(`/hls/${hlsSid}`), { method: "DELETE", keepalive: true }).catch(() => {});
+        void fetch(media(`/hls/${hlsSid}`), {
+          method: "DELETE", keepalive: true,
+          headers: { Authorization: `Bearer ${getToken()}` },
+        }).catch(() => {});
       }
     };
   }, [props.editionId, fileId, bootKey]);

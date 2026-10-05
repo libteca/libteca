@@ -356,9 +356,9 @@ func upsertFile(q dbtx, f *FileRec) error {
 				return nil
 			}
 		}
-		res, ierr := q.Exec(`INSERT INTO files (edition_id, path, seq, size_bytes, mtime_secs, mtime_ns, hash, codec, video_codec, width, height, container, bitrate, channels, sample_rate, duration_secs, chapters, embedded_meta, missing, probed_at)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)`,
-			f.EditionID, f.Path, f.Seq, f.SizeBytes, f.MtimeSecs, f.MtimeNS, f.Hash, f.Codec, f.VideoCodec, f.Width, f.Height, f.Container, f.Bitrate, f.Channels, f.SampleRate, f.DurationSecs, f.Chapters, "{}", nowMilli())
+		res, ierr := q.Exec(`INSERT INTO files (edition_id, path, seq, size_bytes, mtime_secs, mtime_ns, hash, sha256, codec, video_codec, width, height, container, bitrate, channels, sample_rate, duration_secs, chapters, embedded_meta, missing, probed_at)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)`,
+			f.EditionID, f.Path, f.Seq, f.SizeBytes, f.MtimeSecs, f.MtimeNS, f.Hash, f.SHA256, f.Codec, f.VideoCodec, f.Width, f.Height, f.Container, f.Bitrate, f.Channels, f.SampleRate, f.DurationSecs, f.Chapters, "{}", nowMilli())
 		if ierr != nil {
 			return ierr
 		}
@@ -436,10 +436,17 @@ func relinkableFileID(q dbtx, hash string, f *FileRec) (int64, bool, error) {
 }
 
 func updateFileRow(q dbtx, id int64, f *FileRec) error {
-	_, err := q.Exec(`UPDATE files SET edition_id = ?, path = ?, seq = ?, size_bytes = ?, mtime_secs = ?, mtime_ns = ?, hash = ?, codec = ?, video_codec = ?, width = ?, height = ?, container = ?, bitrate = ?, channels = ?, sample_rate = ?, duration_secs = ?, chapters = ?, missing = 0, probed_at = ? WHERE id = ?`,
-		f.EditionID, f.Path, f.Seq, f.SizeBytes, f.MtimeSecs, f.MtimeNS, f.Hash, f.Codec, f.VideoCodec, f.Width, f.Height, f.Container, f.Bitrate, f.Channels, f.SampleRate, f.DurationSecs, f.Chapters, nowMilli(), id)
+	_, err := q.Exec(`UPDATE files SET edition_id = ?, path = ?, seq = ?, size_bytes = ?, mtime_secs = ?, mtime_ns = ?, hash = ?, sha256 = coalesce(?, sha256), codec = ?, video_codec = ?, width = ?, height = ?, container = ?, bitrate = ?, channels = ?, sample_rate = ?, duration_secs = ?, chapters = ?, missing = 0, probed_at = ? WHERE id = ?`,
+		f.EditionID, f.Path, f.Seq, f.SizeBytes, f.MtimeSecs, f.MtimeNS, f.Hash, f.SHA256, f.Codec, f.VideoCodec, f.Width, f.Height, f.Container, f.Bitrate, f.Channels, f.SampleRate, f.DurationSecs, f.Chapters, nowMilli(), id)
 	f.ID = id
 	f.Inserted = false
+	return err
+}
+
+// SetFileSHA256 persists the content hash the lazy backfill computed for a
+// pre-0016 row. The NULL guard keeps a concurrent scan-time value winning.
+func (d *DB) SetFileSHA256(id int64, sum string) error {
+	_, err := d.Exec(`UPDATE files SET sha256 = ? WHERE id = ? AND sha256 IS NULL`, sum, id)
 	return err
 }
 

@@ -973,3 +973,26 @@ Verification: gofmt/vet clean; go test ./... 23 pkgs ok; race on
 abs/core/auth/store ok; web tsc + 324 tests + build clean (2026-10-04).
 TLS-proxy deployments without --secure-cookie fail closed on beacons
 (covered by persisted-queue replay) - noted for operators.
+
+## Post-audit12 design decisions (2026-10-04) - cookie shrunk to read-only
+
+Two deliberate design changes superseding parts of the audit12 entry above:
+
+- **Media mutations went Bearer.** POST /progress and DELETE /hls now
+  require the Authorization header; the web reader beacon switched from
+  sendBeacon (cannot carry headers) to a keepalive fetch with Bearer, and
+  the HLS stop carries Bearer on its keepalive fetch. The audit12
+  MediaMutationRequest classification and origin-gating machinery is
+  DELETED as planned simplification: the cookie exists for technology that
+  cannot set headers (media elements, EventSource/SSE) and is now valid
+  only on GET/HEAD media routes and SSE. Consequence: ?token= query auth
+  follows the generic middleware fallback on the two mutation routes
+  (query refusal remains on media routes proper).
+- **Per-file sha256 exposed in the games payload** (migration 0016,
+  scan-time hash for new/changed files + on-demand persisted backfill for
+  legacy rows) per the omilator client contract update - omilator now
+  verifies downloads against it.
+
+Verification: gofmt/vet clean; go test ./... green (one pre-existing
+unar-availability flake in scan, green isolated + baseline-stashed);
+race on core/auth/store green; web tsc + 324 tests + build clean.

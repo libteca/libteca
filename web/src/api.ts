@@ -14,7 +14,7 @@ export type WorkDetail = {
 export type EditionDetail = {
   id: number; format: string; title: string; duration: number; position?: number; isFinished?: boolean;
   seasonNum?: number; episodeNum?: number; page?: number; percent?: number; pageCount?: number;
-  files: { id: number; seq: number; duration: number; size: number; videoCodec?: string; codec?: string; width?: number; height?: number }[];
+  files: { id: number; seq: number; duration: number; size: number; videoCodec?: string; codec?: string; width?: number; height?: number; sha256?: string }[];
   chapters: { title: string; start: number; end: number; fileId: number }[];
 };
 
@@ -179,10 +179,12 @@ export const apiChecked = async <T = unknown>(path: string, opts: RequestInit = 
   return value as T;
 };
 
-// Media elements (img/video/audio/track), EventSource and sendBeacon cannot
-// send Authorization headers. The server's auth middleware accepts the
-// HttpOnly libteca-media cookie on these routes (set at login and by /me),
-// so media URLs carry no credential at all (AUD-01).
+// Media elements (img/video/audio/track) and EventSource cannot send
+// Authorization headers. The server's auth middleware accepts the HttpOnly
+// libteca-media cookie on read-only media routes only (set at login and by
+// /me), so media URLs carry no credential at all (AUD-01). Mutations
+// (progress posts, the HLS stop) always go through api()/fetch with the
+// bearer header.
 export function media(path: string) {
   const p = path.startsWith("/api/core") ? path.slice("/api/core".length) : path;
   return `/api/core${p}`;

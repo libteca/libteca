@@ -2,6 +2,8 @@ package scan
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -121,5 +123,40 @@ func TestScanGamesLibrary(t *testing.T) {
 	}
 	if n != 0 {
 		t.Fatalf("rescan changed = %d, want 0", n)
+	}
+}
+
+func TestScanGamesStoresSHA256(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	root := t.TempDir()
+	rom := filepath.Join(root, "Mario Kart (USA).gba")
+	if err := os.WriteFile(rom, []byte("mk"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	covers := filepath.Join(t.TempDir(), "covers")
+	os.MkdirAll(covers, 0o755)
+	lib := &store.Library{ID: 1, Type: "games", Path: root}
+	if _, err := db.AddLibrary("Games", "games", root); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Library(context.Background(), db, lib, covers, nil); err != nil {
+		t.Fatal(err)
+	}
+	works, err := db.WorksInLibrary(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(works) != 1 || len(works[0].Editions) != 1 || len(works[0].Editions[0].Files) != 1 {
+		t.Fatalf("works = %+v, want one work/edition/file", works)
+	}
+	f := works[0].Editions[0].Files[0]
+	want := fmt.Sprintf("%x", sha256.Sum256([]byte("mk")))
+	if f.SHA256 == nil || *f.SHA256 != want {
+		t.Fatalf("file sha256 = %v, want %s", f.SHA256, want)
 	}
 }

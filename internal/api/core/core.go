@@ -805,6 +805,33 @@ func fileOK(p string) bool {
 	return err == nil && !fi.IsDir() && fi.Size() > 0
 }
 
+// backfillSHA256 computes the content hash for pre-0016 games files on
+// first view and persists it, so an existing ROM library migrates without
+// a startup bulk-hash pass. Each file is read at most once ever: after the
+// persisted value lands, the scan-time path owns updates.
+func backfillSHA256(db *store.DB, root string, editions []store.EditionView) {
+	for i := range editions {
+		for j := range editions[i].Files {
+			f := &editions[i].Files[j]
+			if f.SHA256 != nil {
+				continue
+			}
+			fh, err := mediafs.Open(root, f.Path)
+			if err != nil {
+				continue
+			}
+			sum := scan.SHA256Content(fh)
+			fh.Close()
+			if sum == "" {
+				continue
+			}
+			if err := db.SetFileSHA256(f.ID, sum); err == nil {
+				f.SHA256 = &sum
+			}
+		}
+	}
+}
+
 func (a *API) works(w http.ResponseWriter, r *http.Request) {
 	id := auth.Atoi64(r.PathValue("id"))
 	q := r.URL.Query()
@@ -885,6 +912,9 @@ func (a *API) work(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
+	if lib.Type == "games" {
+		backfillSHA256(a.DB, lib.Path, full.Editions)
+	}
 	progress, err := a.DB.UserProgressList(auth.UserID(r))
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": "internal error"})
@@ -922,6 +952,9 @@ func (a *API) work(w http.ResponseWriter, r *http.Request) {
 		for _, f := range ev.Files {
 			file := map[string]any{
 				"id": f.ID, "seq": f.Seq, "duration": f.DurationSecs, "size": f.SizeBytes,
+			}
+			if f.SHA256 != nil {
+				file["sha256"] = *f.SHA256
 			}
 			if f.VideoCodec != nil {
 				file["videoCodec"] = *f.VideoCodec

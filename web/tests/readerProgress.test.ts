@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useProgressSaver } from "../src/reader/shared";
-import { fetchWithDeadline } from "../src/api";
+import { fetchWithDeadline, setToken } from "../src/api";
 import { setCurrentUser } from "../src/user";
 
 const hooks = vi.hoisted(() => ({ effects: [] as (() => void | (() => void))[], refs: [] as { current: unknown }[], cursor: 0 }));
@@ -37,13 +37,14 @@ beforeEach(() => {
   hooks.cursor = 0;
   data = new Map();
   cleanups = [];
-  beacon = vi.fn(() => true);
+  beacon = vi.fn(() => Promise.resolve(new Response()));
   setCurrentUser(1);
+  setToken("reader-token");
   vi.stubGlobal("window", { setTimeout, clearTimeout });
   vi.stubGlobal("document", { visibilityState: "visible", addEventListener: vi.fn(), removeEventListener: vi.fn() });
   vi.stubGlobal("addEventListener", vi.fn());
   vi.stubGlobal("removeEventListener", vi.fn());
-  vi.stubGlobal("navigator", { sendBeacon: beacon });
+  vi.stubGlobal("fetch", beacon);
   vi.stubGlobal("localStorage", {
     get length() { return data.size; },
     key: (i: number) => [...data.keys()][i] ?? null,
@@ -58,6 +59,7 @@ afterEach(() => {
   for (const cleanup of cleanups) cleanup();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  setToken("");
   setCurrentUser(null);
 });
 
@@ -90,7 +92,8 @@ describe("reader progress transport integration", () => {
     saver.save({ page: 21, finished: false });
     saver.flush();
     expect(beacon).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(await (beacon.mock.calls[0][1] as Blob).text())).toEqual({ finished: false, revision: 10 });
+    expect(beacon.mock.calls[0][1].headers.Authorization).toBe("Bearer reader-token");
+    expect(JSON.parse(beacon.mock.calls[0][1].body as string)).toEqual({ finished: false, revision: 10 });
   });
 
   it("updates the high-water mark after successful forward delivery", async () => {
@@ -113,7 +116,7 @@ describe("reader progress transport integration", () => {
     await settle();
     saver.save({ page: 92, finished: false });
     saver.flush();
-    expect(JSON.parse(await (beacon.mock.calls[0][1] as Blob).text())).toEqual({ finished: false, revision: 20 });
+    expect(JSON.parse(beacon.mock.calls[0][1].body as string)).toEqual({ finished: false, revision: 20 });
   });
 
   it("includes an unresolved ordinary save in lifecycle delivery when storage is unavailable", async () => {
@@ -124,7 +127,7 @@ describe("reader progress transport integration", () => {
     await settle();
     expect(fetchWithDeadline).toHaveBeenCalledTimes(1);
     saver.flush();
-    expect(JSON.parse(await (beacon.mock.calls[0][1] as Blob).text()))
+    expect(JSON.parse(beacon.mock.calls[0][1].body as string))
       .toEqual({ page: 95, percent: 0.95, locator: "95", revision: 10 });
   });
 
@@ -135,7 +138,7 @@ describe("reader progress transport integration", () => {
     await settle();
     saver.save({ finished: true });
     saver.flush();
-    expect(JSON.parse(await (beacon.mock.calls[0][1] as Blob).text()))
+    expect(JSON.parse(beacon.mock.calls[0][1].body as string))
       .toEqual({ page: 95, percent: 0.95, locator: "95", finished: true, revision: 10 });
   });
 

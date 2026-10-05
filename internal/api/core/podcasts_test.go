@@ -111,7 +111,7 @@ func mountPodcastServer(t *testing.T, a *API, db *store.DB) *httptest.Server {
 		}(),
 	}
 	a.Podcasts = podcast.NewWithClient(db, a.DataDir, local, local)
-	a.MountPodcasts(r.Group("/api/core", auth.MiddlewareWithMediaCookie(db, MediaRequest, MediaMutationRequest)))
+	a.MountPodcasts(r.Group("/api/core", auth.MiddlewareWithMediaCookie(db, MediaRequest)))
 	srv := httptest.NewServer(app.Handler())
 	t.Cleanup(srv.Close)
 	return srv

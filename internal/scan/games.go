@@ -246,9 +246,13 @@ func storeGame(db *store.DB, lib *store.Library, d *gameDoc, coversDir string, t
 			return err
 		}
 		hash := hashFile(d.path, d.size)
+		var fileSHA *string
+		if sum := SHA256File(d.path); sum != "" {
+			fileSHA = &sum
+		}
 		fr := &store.FileRec{
 			EditionID: editionID, Path: d.path, Seq: int(seq),
-			SizeBytes: d.size, MtimeSecs: d.mtime, MtimeNS: d.mtimeNs, Hash: &hash,
+			SizeBytes: d.size, MtimeSecs: d.mtime, MtimeNS: d.mtimeNs, Hash: &hash, SHA256: fileSHA,
 			Container: &d.platform.Tag, DurationSecs: 0, Chapters: "[]",
 		}
 		if err := tx.UpsertFile(fr); err != nil {

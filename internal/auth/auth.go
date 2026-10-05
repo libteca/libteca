@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -259,19 +258,18 @@ func UserForToken(db *store.DB, value string) (*store.User, bool) {
 }
 
 func Middleware(db *store.DB) func(http.Handler) http.Handler {
-	return middleware(db, nil, nil)
+	return middleware(db, nil)
 }
 
-// MiddlewareWithMediaCookie additionally accepts the libteca-media cookie on
-// the caller-defined media routes and rejects query-token authentication
-// there: media element and EventSource URLs carry no credential at all, and
-// the cookie keeps the account bearer token out of URLs (AUD-01). Media
-// routes are read-only for the cookie; the separately classified mutation
-// routes are the only writes the cookie may authorize, and only after the
-// same-origin check, so SameSite=Strict is never the sole CSRF boundary
-// (A12-01).
-func MiddlewareWithMediaCookie(db *store.DB, mediaRoute, beaconRoute func(*http.Request) bool) func(http.Handler) http.Handler {
-	return middleware(db, mediaRoute, beaconRoute)
+// MiddlewareWithMediaCookie additionally accepts the libteca-media cookie
+// on the caller-defined media routes (read-only: the classifier is expected
+// to gate on GET/HEAD) and rejects query-token authentication there: media
+// element and EventSource URLs carry no credential at all, and the cookie
+// keeps the account bearer token out of URLs (AUD-01). The cookie never
+// authorizes a write; mutations require the Authorization header, which no
+// cross-site request can attach, so no origin checking is needed.
+func MiddlewareWithMediaCookie(db *store.DB, mediaRoute func(*http.Request) bool) func(http.Handler) http.Handler {
+	return middleware(db, mediaRoute)
 }
 
 const MediaCookieName = "libteca-media"
@@ -299,29 +297,7 @@ func ClearMediaCookie(w http.ResponseWriter, secure bool) {
 	})
 }
 
-// sameOrigin is the explicit request-origin defense for cookie-authenticated
-// mutations: Sec-Fetch-Site (when the browser sends it) must be same-origin
-// or none, and an Origin header (form posts and fetch beacons always carry
-// it) must resolve to the request's own host. The host comparison covers
-// same-site/cross-origin siblings that SameSite=Strict alone does not stop.
-// Forwarded headers are deliberately not consulted.
-func sameOrigin(r *http.Request) bool {
-	if site := r.Header.Get("Sec-Fetch-Site"); site != "" &&
-		site != "same-origin" && site != "none" {
-		return false
-	}
-	origin := r.Header.Get("Origin")
-	if origin == "" {
-		return true
-	}
-	u, err := url.Parse(origin)
-	if err != nil || u.Host == "" || u.Host != r.Host {
-		return false
-	}
-	return true
-}
-
-func middleware(db *store.DB, mediaRoute, beaconRoute func(*http.Request) bool) func(http.Handler) http.Handler {
+func middleware(db *store.DB, mediaRoute func(*http.Request) bool) func(http.Handler) http.Handler {
 	unauthorized := func(w http.ResponseWriter) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
@@ -332,16 +308,15 @@ func middleware(db *store.DB, mediaRoute, beaconRoute func(*http.Request) bool) 
 			value := r.Header.Get("Authorization")
 			value = strings.TrimPrefix(value, "Bearer ")
 			media := mediaRoute != nil && mediaRoute(r)
-			beacon := beaconRoute != nil && beaconRoute(r)
 			if value == "" {
 				query := r.URL.Query().Get("token")
-				if query != "" && (media || beacon) {
+				if query != "" && media {
 					unauthorized(w)
 					return
 				}
 				value = query
 			}
-			if value == "" && (media || (beacon && sameOrigin(r))) {
+			if value == "" && media {
 				if c, err := r.Cookie(MediaCookieName); err == nil {
 					value = c.Value
 				}

@@ -232,16 +232,19 @@ export function useProgressSaver(editionId: number, baseRevision?: number, initi
     return { save: noop, flush: noop, state: "idle" as SaveState };
   }
 
+  // sendBeacon cannot carry headers and the media cookie no longer
+  // authorizes writes, so the unload path is a keepalive fetch with the
+  // bearer token: it survives pagehide exactly like a beacon.
   const postBeacon = useCallback(async (body: ProgressPost & { revision?: number }) => {
     const url = media(`/progress/${editionId}`);
-    const payload = JSON.stringify(body);
-    let sent = false;
-    if (navigator.sendBeacon) {
-      try { sent = navigator.sendBeacon(url, new Blob([payload], { type: "application/json" })); } catch { sent = false; }
-    }
-    if (!sent) {
-      try { await fetch(url, { method: "POST", body: payload, headers: { "Content-Type": "application/json" }, keepalive: true }); } catch { /* best effort */ }
-    }
+    const token = getToken();
+    if (!token) return;
+    try {
+      await fetch(url, {
+        method: "POST", body: JSON.stringify(body), keepalive: true,
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      });
+    } catch { /* best effort */ }
   }, [editionId]);
 
   const deliver = useCallback(() => {
