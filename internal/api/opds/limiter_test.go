@@ -22,7 +22,7 @@ func newLimitEnv(t *testing.T) func(string, string) *httptest.ResponseRecorder {
 	t.Cleanup(func() { db.Close() })
 	now := time.Now().UnixMilli()
 	if _, err := db.Exec(`INSERT INTO users (name, password_hash, is_admin, created_at, updated_at) VALUES (?,?,1,?,?)`,
-		"limiter-user", auth.Hash("password123"), now, now); err != nil {
+		"limiter-user", auth.MustHash("password123"), now, now); err != nil {
 		t.Fatal(err)
 	}
 	r := neutron.New().Router()
@@ -77,7 +77,7 @@ func TestPasswordChangeInvalidatesCachedBasic(t *testing.T) {
 	t.Cleanup(func() { db.Close() })
 	now := time.Now().UnixMilli()
 	if _, err := db.Exec(`INSERT INTO users (name, password_hash, is_admin, created_at, updated_at) VALUES (?,?,1,?,?)`,
-		"cache-user", auth.Hash("oldpass123"), now, now); err != nil {
+		"cache-user", auth.MustHash("oldpass123"), now, now); err != nil {
 		t.Fatal(err)
 	}
 	r := neutron.New().Router()
@@ -102,7 +102,7 @@ func TestPasswordChangeInvalidatesCachedBasic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`UPDATE users SET password_hash = ? WHERE id = ?`, auth.Hash("newpass123"), u.ID); err != nil {
+	if _, err := db.Exec(`UPDATE users SET password_hash = ? WHERE id = ?`, auth.MustHash("newpass123"), u.ID); err != nil {
 		t.Fatal(err)
 	}
 	if code := get("cache-user", "oldpass123"); code != http.StatusUnauthorized {
@@ -121,7 +121,7 @@ func TestInternalErrorsDoNotLeakErrText(t *testing.T) {
 	t.Cleanup(func() { db.Close() })
 	now := time.Now().UnixMilli()
 	if _, err := db.Exec(`INSERT INTO users (name, password_hash, is_admin, created_at, updated_at) VALUES (?,?,1,?,?)`,
-		"leak-user", auth.Hash("password123"), now, now); err != nil {
+		"leak-user", auth.MustHash("password123"), now, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`DROP TABLE libraries`); err != nil {

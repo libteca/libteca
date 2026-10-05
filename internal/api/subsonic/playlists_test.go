@@ -14,7 +14,7 @@ func (e *env) addUser(t *testing.T, name, pass string) {
 	t.Helper()
 	now := time.Now().UnixMilli()
 	if _, err := e.db.Exec(`INSERT INTO users (name, password_hash, is_admin, created_at, updated_at) VALUES (?,?,0,?,?)`,
-		name, auth.Hash(pass), now, now); err != nil {
+		name, auth.MustHash(pass), now, now); err != nil {
 		t.Fatalf("seed user %s: %v", name, err)
 	}
 }

@@ -41,7 +41,7 @@ func newEnv(t *testing.T) *testEnv {
 	t.Cleanup(func() { db.Close() })
 	now := time.Now().UnixMilli()
 	res, err := db.Exec(`INSERT INTO users (name, password_hash, is_admin, created_at, updated_at) VALUES (?,?,1,?,?)`,
-		testUser, auth.Hash(testPass), now, now)
+		testUser, auth.MustHash(testPass), now, now)
 	if err != nil {
 		t.Fatalf("seed user: %v", err)
 	}

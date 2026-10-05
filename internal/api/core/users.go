@@ -31,6 +31,7 @@ func (a *API) logout(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]string{"error": "logout could not be completed"})
 		return
 	}
+	auth.ClearMediaCookie(w)
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusNoContent)
 }

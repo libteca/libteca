@@ -195,7 +195,11 @@ func applyUsers(db userStore, users []foreignUser, plan *Plan, commit bool) (map
 			ids[u.ID] = existing.ID
 		} else if errors.Is(err, store.ErrNotFound) && commit {
 			pw := tempPassword()
-			id, err := db.CreateUser(u.Name, auth.Hash(pw), u.IsAdmin)
+			hash, err := auth.Hash(pw)
+			if err != nil {
+				return nil, fmt.Errorf("create user %s: %w", u.Name, err)
+			}
+			id, err := db.CreateUser(u.Name, hash, u.IsAdmin)
 			if err != nil {
 				return nil, fmt.Errorf("create user %s: %w", u.Name, err)
 			}

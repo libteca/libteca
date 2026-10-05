@@ -411,9 +411,5 @@ func (a *API) hlsFile(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Touch()
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-	tok := r.URL.Query().Get("token")
-	if tok == "" {
-		tok = auth.Token(r)
-	}
-	w.Write(rewriteHLSPlaylist(data, sid, tok))
+	w.Write(rewriteHLSPlaylist(data, sid, ""))
 }

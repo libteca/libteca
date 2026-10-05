@@ -52,7 +52,7 @@ func newReadingEnv(t *testing.T) *readingEnv {
 	}
 	a := New(db, t.TempDir())
 	app := neutron.New()
-	g := app.Router().Group("/api/core", auth.Middleware(db))
+	g := app.Router().Group("/api/core", auth.MiddlewareWithMediaCookie(db, MediaRequest))
 	a.Mount(g) // Mount ends with a.MountReading(r): download route included
 	srv := httptest.NewServer(app.Handler())
 	t.Cleanup(srv.Close)
@@ -119,10 +119,21 @@ func TestEditionDownload(t *testing.T) {
 		t.Fatalf("body = %q", body)
 	}
 
-	// ?token= query auth (img/a-tag style) works without the header.
+	// Media-element URLs carry no credential: the media cookie authenticates
+	// them and query tokens are refused on media routes.
 	resp, _ = readingReq(t, env, "GET", fmt.Sprintf("%s/editions/%d/download?token=%s", env.base, epub, env.token), "", "")
-	if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "application/epub+zip" {
-		t.Fatalf("token query: status %d ct %q", resp.StatusCode, resp.Header.Get("Content-Type"))
+	if resp.StatusCode != 401 {
+		t.Fatalf("token query: status %d, want 401", resp.StatusCode)
+	}
+	req, _ := http.NewRequest("GET", fmt.Sprintf("%s/editions/%d/download", env.base, epub), nil)
+	req.AddCookie(&http.Cookie{Name: auth.MediaCookieName, Value: env.token})
+	cookied, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cookied.Body.Close() })
+	if cookied.StatusCode != 200 || cookied.Header.Get("Content-Type") != "application/epub+zip" {
+		t.Fatalf("media cookie: status %d ct %q", cookied.StatusCode, cookied.Header.Get("Content-Type"))
 	}
 
 	// Client-supplied paths are ignored; only the DB path is ever served.

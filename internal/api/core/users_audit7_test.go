@@ -67,10 +67,10 @@ func TestStaleSelfPasswordChangeRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	staleHash := alice.PasswordHash
-	if err := db.RotatePasswordChecked(aliceID, nil, auth.Hash("adminreset1")); err != nil {
+	if err := db.RotatePasswordChecked(aliceID, nil, auth.MustHash("adminreset1")); err != nil {
 		t.Fatal(err)
 	}
-	err = db.RotatePasswordChecked(aliceID, &staleHash, auth.Hash("stalechange1"))
+	err = db.RotatePasswordChecked(aliceID, &staleHash, auth.MustHash("stalechange1"))
 	if err == nil || err.Error() != "credentials changed; authenticate again" {
 		t.Fatalf("stale self-change = %v, want credentials-changed rejection", err)
 	}
@@ -109,7 +109,7 @@ func TestRotationDropsSubsonicSecretAndSessions(t *testing.T) {
 		VALUES ('s1', 1, ?, ?, ?, 0, 0, '{}')`, editionID, now, now); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.RotatePasswordChecked(1, nil, auth.Hash("newpassword1")); err != nil {
+	if err := db.RotatePasswordChecked(1, nil, auth.MustHash("newpassword1")); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := db.GetSetting("subsonic.pw.1"); ok {

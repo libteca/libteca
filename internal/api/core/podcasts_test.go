@@ -111,7 +111,7 @@ func mountPodcastServer(t *testing.T, a *API, db *store.DB) *httptest.Server {
 		}(),
 	}
 	a.Podcasts = podcast.NewWithClient(db, a.DataDir, local, local)
-	a.MountPodcasts(r.Group("/api/core", auth.Middleware(db)))
+	a.MountPodcasts(r.Group("/api/core", auth.MiddlewareWithMediaCookie(db, MediaRequest)))
 	srv := httptest.NewServer(app.Handler())
 	t.Cleanup(srv.Close)
 	return srv
@@ -142,6 +142,30 @@ func doPodcastReqBytes(t *testing.T, srv *httptest.Server, method, path, token s
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, raw
+}
+
+func doPodcastCookieReq(t *testing.T, srv *httptest.Server, method, path, token string, body any) (int, []byte) {
+	t.Helper()
+	var rd io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rd = bytes.NewReader(data)
+	}
+	req, err := http.NewRequest(method, srv.URL+path, rd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.AddCookie(&http.Cookie{Name: auth.MediaCookieName, Value: token})
 	resp, err := srv.Client().Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -200,8 +224,9 @@ func TestPodcastFullFlow(t *testing.T) {
 		t.Fatalf("list = %d %v", code, list)
 	}
 
-	// stream with Range
-	req, _ := http.NewRequest("GET", srv.URL+"/api/core/podcasts/episodes/"+epID+"/stream?token="+token, nil)
+	// stream with Range (media-element style: media cookie, no header)
+	req, _ := http.NewRequest("GET", srv.URL+"/api/core/podcasts/episodes/"+epID+"/stream", nil)
+	req.AddCookie(&http.Cookie{Name: auth.MediaCookieName, Value: token})
 	req.Header.Set("Range", "bytes=0-3")
 	resp, err := srv.Client().Do(req)
 	if err != nil {
@@ -303,7 +328,7 @@ func TestPodcastStreamNotDownloaded(t *testing.T) {
 				t.Fatal("undownloaded episode has streamUrl")
 			}
 			epID := strconv.FormatInt(int64(em["id"].(float64)), 10)
-			code, sbody := doPodcastReq(t, srv, "GET", "/api/core/podcasts/episodes/"+epID+"/stream?token="+token, "", nil)
+			code, sbody := doPodcastCookieReq(t, srv, "GET", "/api/core/podcasts/episodes/"+epID+"/stream", token, nil)
 			if code != 404 {
 				t.Fatalf("stream undownloaded = %d %v, want 404", code, sbody)
 			}

@@ -513,6 +513,14 @@ func (a *API) listeningSessions(w http.ResponseWriter, r *http.Request) {
 	write(w, 200, map[string]any{"results": []any{}, "total": 0, "page": 0, "limit": 20})
 }
 
+var newPlaySessionID = func() (string, error) {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(raw[:]), nil
+}
+
 func (a *API) play(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	ctx, err := a.resolveItem(r.PathValue("itemId"))
@@ -526,10 +534,16 @@ func (a *API) play(w http.ResponseWriter, r *http.Request) {
 		SupportedMimeTypes []string       `json:"supportedMimeTypes"`
 		ForceDirectPlay    bool           `json:"forceDirectPlay"`
 	}
-	json.NewDecoder(r.Body).Decode(&body)
-	raw := make([]byte, 16)
-	rand.Read(raw)
-	sid := hex.EncodeToString(raw)
+	if err := decodeBody(w, r, 1<<20, &body); err != nil {
+		status, msg := bodyErrorStatus(err)
+		fail(w, status, msg)
+		return
+	}
+	sid, err := newPlaySessionID()
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
 	deviceJSON, _ := json.Marshal(body.DeviceInfo)
 	if body.DeviceInfo == nil {
 		deviceJSON = []byte("{}")
@@ -697,7 +711,11 @@ func (a *API) sessionClose(w http.ResponseWriter, r *http.Request) {
 		TimeListened float64 `json:"timeListened"`
 		Duration     float64 `json:"duration"`
 	}
-	json.NewDecoder(r.Body).Decode(&body)
+	if err := decodeBody(w, r, 1<<20, &body); err != nil {
+		status, msg := bodyErrorStatus(err)
+		fail(w, status, msg)
+		return
+	}
 	s, err := a.DB.Session(r.PathValue("id"))
 	if err != nil || s.UserID != auth.UserID(r) {
 		fail(w, 404, "Session not found")

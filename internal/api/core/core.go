@@ -222,6 +222,7 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]string{"error": "token issue failed"})
 		return
 	}
+	auth.SetMediaCookie(w, token)
 	writeJSON(w, 200, map[string]any{"token": token, "user": map[string]any{"id": u.ID, "name": u.Name, "isAdmin": u.IsAdmin}})
 }
 
@@ -231,6 +232,7 @@ func (a *API) me(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 401, map[string]string{"error": "unauthorized"})
 		return
 	}
+	auth.SetMediaCookie(w, auth.Token(r))
 	list, err := a.DB.UserProgressList(u.ID)
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": "internal error"})

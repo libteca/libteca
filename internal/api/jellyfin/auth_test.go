@@ -21,7 +21,7 @@ func newAuthEnv(t *testing.T) (*testEnv, func(string, string) *httptest.Response
 	t.Cleanup(func() { db.Close() })
 	now := time.Now().UnixMilli()
 	if _, err := db.Exec(`INSERT INTO users (name, password_hash, is_admin, created_at, updated_at) VALUES (?,?,1,?,?)`,
-		"bob", auth.Hash("password123"), now, now); err != nil {
+		"bob", auth.MustHash("password123"), now, now); err != nil {
 		t.Fatal(err)
 	}
 	r := neutron.New().Router()

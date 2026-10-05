@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import { api, getToken } from "./api";
+import { api } from "./api";
 
 export type RefreshMetaEvent = {
   status: string;
@@ -52,7 +52,7 @@ export function useRefreshMeta(onDone?: (ev: RefreshMetaEvent) => void) {
       }, 1000);
     };
 
-    const es = new EventSource(`/api/core/libraries/${libId}/refresh-meta/events?token=${encodeURIComponent(getToken())}`);
+    const es = new EventSource(`/api/core/libraries/${libId}/refresh-meta/events`);
     esRef.current = es;
     es.addEventListener("progress", (msg) => {
       let ev: RefreshMetaEvent;

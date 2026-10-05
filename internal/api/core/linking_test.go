@@ -37,11 +37,11 @@ func newLinkingEnv(t *testing.T) *linkingEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	adminID, err := db.CreateUser("admin", auth.Hash("password1"), true)
+	adminID, err := db.CreateUser("admin", auth.MustHash("password1"), true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	userID, err := db.CreateUser("user", auth.Hash("password1"), false)
+	userID, err := db.CreateUser("user", auth.MustHash("password1"), false)
 	if err != nil {
 		t.Fatal(err)
 	}

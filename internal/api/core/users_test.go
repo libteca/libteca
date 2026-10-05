@@ -314,7 +314,7 @@ func TestCannotDeleteLastAdmin(t *testing.T) {
 func TestUserChangePasswordSelf(t *testing.T) {
 	e := newPlaylistsEnv(t)
 
-	if _, err := e.db.CreateUser("sally", auth.Hash("firstpass1"), false); err != nil {
+	if _, err := e.db.CreateUser("sally", auth.MustHash("firstpass1"), false); err != nil {
 		t.Fatal(err)
 	}
 	token := loginRequest(t, e.base, "sally", "firstpass1")

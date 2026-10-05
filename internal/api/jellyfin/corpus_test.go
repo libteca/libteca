@@ -33,7 +33,7 @@ func corpusStack(t *testing.T) (*httptest.Server, string, map[string]string) {
 
 	now := time.Now().UnixMilli()
 	res, err := db.Exec(`INSERT INTO users (name, password_hash, is_admin, created_at, updated_at) VALUES (?,?,1,?,?)`,
-		corpusUser, auth.Hash(corpusPassword), now, now)
+		corpusUser, auth.MustHash(corpusPassword), now, now)
 	if err != nil {
 		t.Fatal(err)
 	}

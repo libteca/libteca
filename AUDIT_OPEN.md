@@ -866,3 +866,59 @@ docs/multipart-video-contract.md and docs/resource-measurement.md. Current
 runtime behavior and all real-data/browser/client/platform acceptance gates
 remain unchanged. No production input, external publication or excluded
 focused authentication/security review was performed.
+
+## GPT audit pass (2026-10-04, AUDIT-CHATGPT-10.md) - 4 fixed, 7 confirmed-deferred
+
+AUD-01..AUD-11 verified against current source at 50fc978 before acting.
+
+Fixed:
+
+- **AUD-01 media URLs expose the general bearer credential (HIGH):** the
+  standing F29 deferral is narrowed to the compat faces. The core face now
+  authenticates media-element/EventSource/beacon traffic with an HttpOnly
+  SameSite=Strict cookie (Path=/api/core) set at login and re-established by
+  GET /me, cleared at logout; the auth middleware refuses query-token
+  authentication on media routes (core.MediaRequest classifies stream,
+  covers, subtitles, hls, thumbs, download, export-opml, episode stream,
+  progress, scan/refresh-meta SSE) so no credential rides in a first-party
+  URL; HLS playlist rewriting no longer embeds the caller's token in segment
+  URLs. The web media() helper and both EventSource builders carry no token.
+  The cookie value is still the account's general token - short-lived scoped
+  media tickets remain the deeper redesign, deferred with the F04/F09
+  credential-lifecycle family. ABS/Jellyfin/Subsonic/OPDS faces unchanged.
+- **AUD-07 ABS /play ignores malformed JSON + RNG failure:** shared bounded
+  decodeBody (empty body stays a valid zero value for client compat;
+  malformed 400; over-limit 413 via MaxBytesReader; trailing document
+  rejected); newPlaySessionID entropy failure is a 500 with no session row.
+- **AUD-08 ABS /session/{id}/close treats malformed JSON as zero-position
+  close:** same decoder; rejected closes leave the session open and progress
+  untouched.
+- **AUD-09 password hashing panics on entropy failure:** Hash returns an
+  error (readRandom seam), HashRequest/InitAdmin/importer propagate it, and
+  the dummy hash is a checked-in format-valid Argon2id constant (verifying
+  its published non-account password, which is the property that keeps the
+  unknown-user timing burn on the full KDF path).
+
+Confirmed against source, deferred (standing recorded families; see the
+deferral sections above and docs/source-identity-proposal.md /
+media-consistency-proposal.md):
+
+- **AUD-02 multipart first-file-only playback:** pass-8 F10/F12/F17 family;
+  decision 49 keeps the timeline contract test-isolated until generation
+  semantics land.
+- **AUD-03 trickplay cache has no content generation:** pass-8 F44 versioned
+  cache keys hang off the same generation model.
+- **AUD-04 physical source ownership via work.library_id:** decision 45/49;
+  migration proposal awaits the founder gate.
+- **AUD-05 durable media progress + podcast revision/CAS:** decisions 46-48
+  record the in-tab boundary; media-intent contract stays isolated (49).
+- **AUD-06 transcode/trickplay byte budgets:** decision 49 requires measured
+  representative workloads before any quota; pass-9 F33.
+- **AUD-10 subsonic plaintext password capture:** F04 family deferral
+  (client compat, dedicated app-secret migration is a founder decision).
+- **AUD-11 (library,title,author) work identity:** pass-7 F17 family.
+
+Verification: gofmt clean over changed files; go vet ./... clean; go test
+./... -count=1 green; go test -race on store/core/abs/auth/transcode/
+trickplay/server green; web npx tsc --noEmit + npm run test (324 tests) +
+npm run build clean (2026-10-04).

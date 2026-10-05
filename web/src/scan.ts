@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import { apiWithDeadline, getToken, type ScanEvent } from "./api";
+import { apiWithDeadline, type ScanEvent } from "./api";
 
 export type ScanState = {
   scanning: boolean;
@@ -75,7 +75,7 @@ export function useScan(onDone?: (ev: ScanEvent) => void) {
     };
 
     try {
-      const es = new EventSource(`/api/core/libraries/${libId}/scan/events?token=${encodeURIComponent(getToken())}`);
+      const es = new EventSource(`/api/core/libraries/${libId}/scan/events`);
       esRef.current = es;
       es.addEventListener("progress", (msg) => {
         if (!active()) return;

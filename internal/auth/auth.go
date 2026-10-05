@@ -61,13 +61,23 @@ func ValidateCredentials(name, password string) (string, error) {
 
 var kdfSlots = make(chan struct{}, 2)
 
-func Hash(password string) string {
+var readRandom = rand.Read
+
+func Hash(password string) (string, error) {
 	salt := make([]byte, 16)
-	if _, err := rand.Read(salt); err != nil {
-		panic(err)
+	if _, err := readRandom(salt); err != nil {
+		return "", err
 	}
 	key := argon2.IDKey([]byte(password), salt, 2, 64*1024, 1, 32)
-	return fmt.Sprintf("$argon2id$v=19$m=65536,t=2,p=1$%s$%s", hex.EncodeToString(salt), hex.EncodeToString(key))
+	return fmt.Sprintf("$argon2id$v=19$m=65536,t=2,p=1$%s$%s", hex.EncodeToString(salt), hex.EncodeToString(key)), nil
+}
+
+func MustHash(password string) string {
+	encoded, err := Hash(password)
+	if err != nil {
+		panic(err)
+	}
+	return encoded
 }
 
 func HashRequest(ctx context.Context, password string) (string, error) {
@@ -85,7 +95,7 @@ func HashRequest(ctx context.Context, password string) (string, error) {
 	default:
 		return "", ErrKDFBusy
 	}
-	return Hash(password), nil
+	return Hash(password)
 }
 
 func Verify(password, encoded string) bool {
@@ -127,7 +137,10 @@ func VerifyRequest(ctx context.Context, password, encoded string) (bool, error) 
 	return Verify(password, encoded), nil
 }
 
-var dummyHash = Hash("libteca-non-account-dummy-password")
+// Fixed Argon2id string for the timing-equalization burn on unknown users.
+// It verifies no real account: the password is a non-account constant and the
+// salt is checked in, which is all a dummy needs (it is not a credential).
+const dummyHash = "$argon2id$v=19$m=65536,t=2,p=1$30313233343536373839616263646566$ad2186370400ab3db07cb4cb49545647c6c93a728c6f80556ae93a34d7148753"
 
 func DummyHash() string { return dummyHash }
 
@@ -245,19 +258,68 @@ func UserForToken(db *store.DB, value string) (*store.User, bool) {
 }
 
 func Middleware(db *store.DB) func(http.Handler) http.Handler {
+	return middleware(db, nil)
+}
+
+// MiddlewareWithMediaCookie additionally accepts the libteca-media cookie on
+// the caller-defined media routes and rejects query-token authentication
+// there: media element and EventSource URLs carry no credential at all, and
+// the cookie keeps the account bearer token out of URLs (AUD-01).
+func MiddlewareWithMediaCookie(db *store.DB, mediaRoute func(*http.Request) bool) func(http.Handler) http.Handler {
+	return middleware(db, mediaRoute)
+}
+
+const MediaCookieName = "libteca-media"
+
+func SetMediaCookie(w http.ResponseWriter, value string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     MediaCookieName,
+		Value:    value,
+		Path:     "/api/core",
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+	})
+}
+
+func ClearMediaCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     MediaCookieName,
+		Value:    "",
+		Path:     "/api/core",
+		MaxAge:   -1,
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+	})
+}
+
+func middleware(db *store.DB, mediaRoute func(*http.Request) bool) func(http.Handler) http.Handler {
+	unauthorized := func(w http.ResponseWriter) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error":"unauthorized"}`))
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			value := r.Header.Get("Authorization")
 			value = strings.TrimPrefix(value, "Bearer ")
+			media := mediaRoute != nil && mediaRoute(r)
 			if value == "" {
-				value = r.URL.Query().Get("token")
+				query := r.URL.Query().Get("token")
+				if query != "" && media {
+					unauthorized(w)
+					return
+				}
+				value = query
+			}
+			if value == "" && media {
+				if c, err := r.Cookie(MediaCookieName); err == nil {
+					value = c.Value
+				}
 			}
 			user, err := LookupTokenUser(db, value)
 			if err != nil {
-				w.Header().Set("Content-Type", "application/json")
 				if errors.Is(err, store.ErrNotFound) {
-					w.WriteHeader(http.StatusUnauthorized)
-					w.Write([]byte(`{"error":"unauthorized"}`))
+					unauthorized(w)
 					return
 				}
 				slog.Error("libteca: token lookup failed", "err", err)
@@ -312,7 +374,10 @@ func InitAdmin(db *store.DB, name, password string) error {
 	if !errors.Is(err, store.ErrNotFound) {
 		return err
 	}
-	hash := Hash(password)
+	hash, err := Hash(password)
+	if err != nil {
+		return err
+	}
 	return db.Update(func(tx *store.Tx) error {
 		var count int
 		if err := tx.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&count); err != nil {

@@ -179,13 +179,13 @@ export const apiChecked = async <T = unknown>(path: string, opts: RequestInit = 
   return value as T;
 };
 
-// Media elements (img/video/audio/track) and EventSource cannot send
-// Authorization headers. The server's auth middleware falls back to a
-// `token` query parameter (see internal/auth/auth.go), so media URLs
-// authenticate exactly the way covers are expected to.
+// Media elements (img/video/audio/track), EventSource and sendBeacon cannot
+// send Authorization headers. The server's auth middleware accepts the
+// HttpOnly libteca-media cookie on these routes (set at login and by /me),
+// so media URLs carry no credential at all (AUD-01).
 export function media(path: string) {
   const p = path.startsWith("/api/core") ? path.slice("/api/core".length) : path;
-  return `/api/core${p}${p.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}`;
+  return `/api/core${p}`;
 }
 
 export function readStoredToken(): string {

@@ -40,7 +40,7 @@ func newEnv(t *testing.T) *env {
 	}
 	now := time.Now().UnixMilli()
 	res, err := db.Exec(`INSERT INTO users (name, password_hash, is_admin, created_at, updated_at) VALUES ('tyler', ?, 1, ?, ?)`,
-		auth.Hash("secret"), now, now)
+		auth.MustHash("secret"), now, now)
 	if err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
@@ -294,7 +294,7 @@ func TestTokenAuthRejectsStaleSecret(t *testing.T) {
 	if decode(t, rec)["status"] != "ok" {
 		t.Fatalf("token auth before password change failed: %s", rec.Body.String())
 	}
-	if _, err := e.db.Exec(`UPDATE users SET password_hash = ? WHERE id = ?`, auth.Hash("rotated"), e.user); err != nil {
+	if _, err := e.db.Exec(`UPDATE users SET password_hash = ? WHERE id = ?`, auth.MustHash("rotated"), e.user); err != nil {
 		t.Fatal(err)
 	}
 	rec = e.get(t, "/rest/ping.view?u=tyler&t="+oldToken+"&s="+salt+"&f=json")

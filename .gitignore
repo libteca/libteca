@@ -19,3 +19,6 @@ bench/results/
 # demo/test data (media + db)
 data/
 dist/
+
+# --- GPT-web audit working dir ---
+/_gpt-audit/

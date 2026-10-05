@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -93,7 +94,7 @@ func TestInitAdminExistingNonAdmin(t *testing.T) {
 }
 
 func TestVerifyStrictFormat(t *testing.T) {
-	encoded := Hash("password123")
+	encoded := MustHash("password123")
 	if !Verify("password123", encoded) {
 		t.Fatal("hash emitted by Hash must verify")
 	}
@@ -157,7 +158,7 @@ func TestRotationRevokesAndConditionalIssuance(t *testing.T) {
 	if _, err := IssueTokenForPassword(db, uid, "test", u.PasswordHash); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.RotatePassword(uid, Hash("newpass123")); err != nil {
+	if err := db.RotatePassword(uid, MustHash("newpass123")); err != nil {
 		t.Fatal(err)
 	}
 	var active int
@@ -179,7 +180,7 @@ func TestKDFBudgetExhaustion(t *testing.T) {
 			<-kdfSlots
 		}
 	}()
-	if _, err := VerifyRequest(t.Context(), "password123", Hash("password123")); err != ErrKDFBusy {
+	if _, err := VerifyRequest(t.Context(), "password123", MustHash("password123")); err != ErrKDFBusy {
 		t.Fatalf("VerifyRequest with full budget = %v, want ErrKDFBusy", err)
 	}
 	if _, err := HashRequest(t.Context(), "password123"); err != ErrKDFBusy {
@@ -205,5 +206,50 @@ func TestIssueTokenFromParentRevocation(t *testing.T) {
 	}
 	if _, err := IssueTokenFromParent(db, uid, "child", parent); err != ErrCredentialsChanged {
 		t.Fatalf("issuance from revoked parent = %v, want ErrCredentialsChanged", err)
+	}
+}
+
+func TestHashEntropyFailureReturnsError(t *testing.T) {
+	orig := readRandom
+	readRandom = func(b []byte) (int, error) { return 0, errors.New("entropy exhausted") }
+	defer func() { readRandom = orig }()
+	if _, err := Hash("password123"); err == nil {
+		t.Fatal("Hash must surface entropy failure")
+	}
+	if _, err := HashRequest(t.Context(), "password123"); err == nil {
+		t.Fatal("HashRequest must surface entropy failure")
+	}
+	if err := InitAdmin(openTestDB(t), "admin", "password123"); err == nil {
+		t.Fatal("InitAdmin must surface entropy failure")
+	}
+}
+
+func TestInitAdminEntropyFailureCreatesNoUser(t *testing.T) {
+	db := openTestDB(t)
+	orig := readRandom
+	readRandom = func(b []byte) (int, error) { return 0, errors.New("entropy exhausted") }
+	defer func() { readRandom = orig }()
+	if err := InitAdmin(db, "admin", "password123"); err == nil {
+		t.Fatal("expected entropy error")
+	}
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("users = %d, want 0", n)
+	}
+}
+
+func TestDummyHashBurnsArgon2ForUnknownUsers(t *testing.T) {
+	if !Verify("libteca-non-account-dummy-password", DummyHash()) {
+		t.Fatal("dummy hash must be format-valid and complete the full Argon2 path, or the unknown-user timing burn silently degrades to an early format rejection")
+	}
+	if Verify("any-other-password", DummyHash()) {
+		t.Fatal("dummy hash must not verify arbitrary passwords")
+	}
+	db := openTestDB(t)
+	if _, err := CheckPassword(t.Context(), db, "no-such-user", "whatever-password"); err != ErrBadCredentials {
+		t.Fatalf("unknown user = %v, want ErrBadCredentials", err)
 	}
 }
