@@ -80,7 +80,7 @@ func (s *Server) buildHandler() http.Handler {
 	c.SecureCookies = s.SecureCookies
 	coreBodyLimit := neutron.BodyLimit(4 << 20)
 	c.MountPublic(r.Group("/api/core", coreBodyLimit))
-	c.Mount(r.Group("/api/core", coreBodyLimit, auth.MiddlewareWithMediaCookie(s.DB, core.MediaRequest)))
+	c.Mount(r.Group("/api/core", coreBodyLimit, auth.MiddlewareWithMediaCookie(s.DB, core.MediaRequest, core.MediaMutationRequest)))
 
 	jf := jellyfin.New(s.DB, s.Dir, tm)
 	jf.LoginLimiter = loginLimiter

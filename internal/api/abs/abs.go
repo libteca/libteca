@@ -470,15 +470,12 @@ func (a *API) postProgress(w http.ResponseWriter, r *http.Request) {
 		}
 		position = body.Progress * body.Duration
 	}
-	dur := body.Duration
-	if dur == 0 {
-		dur = ctx.ed.TotalDuration()
-	}
+	dur := sessionDuration(ctx.ed, body.Duration)
 	if err := store.ValidPosition(position, dur); err != nil {
 		fail(w, 400, err.Error())
 		return
 	}
-	if err := store.ValidPosition(body.TimeListened, 0); err != nil && body.TimeListened < 0 {
+	if err := store.ValidPosition(body.TimeListened, 0); err != nil {
 		fail(w, 400, "invalid timeListened")
 		return
 	}
@@ -655,6 +652,17 @@ func (a *API) serveEditionFile(w http.ResponseWriter, r *http.Request, f *store.
 	return nil
 }
 
+// sessionDuration resolves the position-validation bound: the server-known
+// edition duration is authoritative whenever it exists; the client duration
+// is metadata and only bounds positions when the server does not know the
+// duration (A12-02, matches the core progress endpoint).
+func sessionDuration(ed *store.EditionView, client float64) float64 {
+	if d := ed.TotalDuration(); d > 0 {
+		return d
+	}
+	return client
+}
+
 func (a *API) sessionSync(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		CurrentTime  float64 `json:"currentTime"`
@@ -671,14 +679,6 @@ func (a *API) sessionSync(w http.ResponseWriter, r *http.Request) {
 		fail(w, 404, "Session not found")
 		return
 	}
-	if err := store.ValidPosition(body.CurrentTime, body.Duration); err != nil {
-		fail(w, 400, err.Error())
-		return
-	}
-	if body.TimeListened < 0 {
-		fail(w, 400, "invalid timeListened")
-		return
-	}
 	ed, err := a.DB.EditionByID(s.EditionID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -688,11 +688,16 @@ func (a *API) sessionSync(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	fileID, offset := ed.Locate(body.CurrentTime)
-	dur := body.Duration
-	if dur == 0 {
-		dur = ed.TotalDuration()
+	dur := sessionDuration(ed, body.Duration)
+	if err := store.ValidPosition(body.CurrentTime, dur); err != nil {
+		fail(w, 400, err.Error())
+		return
 	}
+	if err := store.ValidPosition(body.TimeListened, 0); err != nil {
+		fail(w, 400, "invalid timeListened")
+		return
+	}
+	fileID, offset := ed.Locate(body.CurrentTime)
 	device := "abs-app"
 	p := &store.Progress{
 		UserID: s.UserID, EditionID: s.EditionID, FileID: &fileID, FileOffsetSecs: offset,
@@ -736,20 +741,17 @@ func (a *API) sessionClose(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
-	if err := store.ValidPosition(body.CurrentTime, body.Duration); err != nil {
+	dur := sessionDuration(ed, body.Duration)
+	if err := store.ValidPosition(body.CurrentTime, dur); err != nil {
 		fail(w, 400, err.Error())
 		return
 	}
-	if body.TimeListened < 0 {
+	if err := store.ValidPosition(body.TimeListened, 0); err != nil {
 		fail(w, 400, "invalid timeListened")
 		return
 	}
 	if body.CurrentTime > 0 {
 		fileID, offset := ed.Locate(body.CurrentTime)
-		dur := body.Duration
-		if dur == 0 {
-			dur = ed.TotalDuration()
-		}
 		device := "abs-app"
 		p := &store.Progress{
 			UserID: s.UserID, EditionID: s.EditionID, FileID: &fileID, FileOffsetSecs: offset,

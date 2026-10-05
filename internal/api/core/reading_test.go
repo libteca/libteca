@@ -52,7 +52,7 @@ func newReadingEnv(t *testing.T) *readingEnv {
 	}
 	a := New(db, t.TempDir())
 	app := neutron.New()
-	g := app.Router().Group("/api/core", auth.MiddlewareWithMediaCookie(db, MediaRequest))
+	g := app.Router().Group("/api/core", auth.MiddlewareWithMediaCookie(db, MediaRequest, MediaMutationRequest))
 	a.Mount(g) // Mount ends with a.MountReading(r): download route included
 	srv := httptest.NewServer(app.Handler())
 	t.Cleanup(srv.Close)

@@ -950,3 +950,26 @@ session code. Register read first; standing deferrals not re-reported.
 Verification: gofmt clean; go vet ./... clean; go test ./... -count=1
 22 pkgs ok; go test -race on auth/importer/store/abs/core ok; web tsc +
 324 tests + build clean (2026-10-04).
+
+## GPT audit pass 12 (2026-10-04, AUDIT-CHATGPT-12.md) - 3 fixed + 1 auditor-missed
+
+Regression/gap review on current main after audit11 (2fdef07). Standing
+deferrals not re-reported.
+
+- **A12-01 cookie accepted for any method / no origin defense:** media
+  cookie routes are now GET/HEAD-only; a new MediaMutationRequest
+  classification gates cookie-authenticated mutations (POST /progress
+  beacon, DELETE /hls stop - an auditor-missed mutation found during the
+  fix) behind sameOrigin (Sec-Fetch-Site + Origin host == Host, no
+  forwarded-header trust); query tokens refused on both classifications.
+- **A12-02 sync/close position validated against client duration before
+  server-duration substitution:** both bypass vectors closed via shared
+  sessionDuration (server authoritative when >0, else client, 30-day cap).
+- **A12-03 timeListened validation broken in postProgress:** negative/
+  absurd values now 400 with rows untouched; store-level
+  validateListenedDelta in all three close/update paths (defense in depth).
+
+Verification: gofmt/vet clean; go test ./... 23 pkgs ok; race on
+abs/core/auth/store ok; web tsc + 324 tests + build clean (2026-10-04).
+TLS-proxy deployments without --secure-cookie fail closed on beacons
+(covered by persisted-queue replay) - noted for operators.

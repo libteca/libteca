@@ -151,13 +151,29 @@ func (d *DB) Session(id string) (*Session, error) {
 	return &s, err
 }
 
+// validateListenedDelta keeps the shared numeric policy on every listened
+// delta the transaction helpers accumulate, so a future caller cannot bypass
+// the handler-level check (A12-03).
+func validateListenedDelta(v float64) error {
+	if err := ValidPosition(v, 0); err != nil {
+		return fmt.Errorf("invalid timeListened")
+	}
+	return nil
+}
+
 func (d *DB) CloseSession(id string, position, listened float64) error {
+	if err := validateListenedDelta(listened); err != nil {
+		return err
+	}
 	_, err := d.Exec(`UPDATE playback_sessions SET position_secs = ?, time_listened_secs = time_listened_secs + ?, updated_at = ?, closed_at = ? WHERE id = ? AND closed_at IS NULL`,
 		position, listened, nowMilli(), nowMilli(), id)
 	return err
 }
 
 func (d *DB) CloseSessionWithProgress(s *Session, p *Progress, listenedDelta float64) error {
+	if err := validateListenedDelta(listenedDelta); err != nil {
+		return err
+	}
 	return d.Update(func(tx *Tx) error {
 		var owner, edition int64
 		var closed sql.NullInt64
@@ -190,6 +206,9 @@ func (d *DB) CloseSessionWithProgress(s *Session, p *Progress, listenedDelta flo
 // failure on either side leaves both rows untouched, so a client retry can
 // never double-count listened time.
 func (d *DB) UpdateSessionWithProgress(s *Session, p *Progress, listenedDelta float64) error {
+	if err := validateListenedDelta(listenedDelta); err != nil {
+		return err
+	}
 	return d.Update(func(tx *Tx) error {
 		var owner, edition int64
 		var closed sql.NullInt64

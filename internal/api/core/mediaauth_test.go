@@ -62,6 +62,7 @@ type mediaAuthEnv struct {
 	srv    *httptest.Server
 	token  string
 	fileID int64
+	edID   int64
 }
 
 func newMediaAuthEnv(t *testing.T) *mediaAuthEnv {
@@ -97,10 +98,10 @@ func newMediaAuthEnv(t *testing.T) *mediaAuthEnv {
 	a := New(db, dir)
 	app := neutron.New()
 	a.MountPublic(app.Router().Group("/api/core"))
-	a.Mount(app.Router().Group("/api/core", auth.MiddlewareWithMediaCookie(db, MediaRequest)))
+	a.Mount(app.Router().Group("/api/core", auth.MiddlewareWithMediaCookie(db, MediaRequest, MediaMutationRequest)))
 	srv := httptest.NewServer(app.Handler())
 	t.Cleanup(srv.Close)
-	return &mediaAuthEnv{db: db, srv: srv, token: token, fileID: fid}
+	return &mediaAuthEnv{db: db, srv: srv, token: token, fileID: fid, edID: ed}
 }
 
 func (e *mediaAuthEnv) do(t *testing.T, method, path, authz, cookie string) (*http.Response, string) {
@@ -164,6 +165,152 @@ func TestMediaCookieAuthenticatesMediaRoutes(t *testing.T) {
 	}
 }
 
+func (e *mediaAuthEnv) beacon(t *testing.T, path, authz, cookie, body string, hdr map[string]string) (*http.Response, string) {
+	t.Helper()
+	req, err := http.NewRequest("POST", e.srv.URL+path, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	for k, v := range hdr {
+		req.Header.Set(k, v)
+	}
+	if authz != "" {
+		req.Header.Set("Authorization", "Bearer "+authz)
+	}
+	if cookie != "" {
+		req.AddCookie(&http.Cookie{Name: auth.MediaCookieName, Value: cookie})
+	}
+	resp, err := e.srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { resp.Body.Close() })
+	data, _ := io.ReadAll(resp.Body)
+	return resp, string(data)
+}
+
+func TestMediaCookieProgressBeaconOriginPolicy(t *testing.T) {
+	env := newMediaAuthEnv(t)
+	path := "/api/core/progress/" + strconv.FormatInt(env.edID, 10)
+	origin := env.srv.URL
+
+	resp, body := env.beacon(t, path, "", env.token, `{}`, map[string]string{"Sec-Fetch-Site": "same-origin"})
+	if resp.StatusCode != 200 {
+		t.Fatalf("same-origin beacon = %d %s, want 200", resp.StatusCode, body)
+	}
+	resp, body = env.beacon(t, path, "", env.token, `{}`, map[string]string{"Sec-Fetch-Site": "same-origin", "Origin": origin})
+	if resp.StatusCode != 200 {
+		t.Fatalf("beacon with matching Origin = %d %s, want 200", resp.StatusCode, body)
+	}
+	resp, body = env.beacon(t, path, "", env.token, `{}`, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("beacon without origin markers (legacy same-origin UA) = %d %s, want 200", resp.StatusCode, body)
+	}
+
+	resp, _ = env.beacon(t, path, "", env.token, `{}`, map[string]string{"Sec-Fetch-Site": "cross-site"})
+	if resp.StatusCode != 401 {
+		t.Fatalf("cross-site beacon = %d, want 401", resp.StatusCode)
+	}
+	resp, _ = env.beacon(t, path, "", env.token, `{}`, map[string]string{"Sec-Fetch-Site": "same-site"})
+	if resp.StatusCode != 401 {
+		t.Fatalf("same-site sibling beacon = %d, want 401", resp.StatusCode)
+	}
+	resp, _ = env.beacon(t, path, "", env.token, `{}`, map[string]string{"Origin": "https://sibling.example"})
+	if resp.StatusCode != 401 {
+		t.Fatalf("mismatched Origin beacon = %d, want 401", resp.StatusCode)
+	}
+	resp, _ = env.beacon(t, path, "", env.token, `{}`, map[string]string{"Sec-Fetch-Site": "same-origin", "Origin": "https://evil.example"})
+	if resp.StatusCode != 401 {
+		t.Fatalf("beacon with spoofed Sec-Fetch-Site + foreign Origin = %d, want 401", resp.StatusCode)
+	}
+
+	resp, body = env.beacon(t, path, env.token, "", `{}`, map[string]string{"Sec-Fetch-Site": "cross-site", "Origin": "https://evil.example"})
+	if resp.StatusCode != 200 {
+		t.Fatalf("bearer-header progress post = %d %s, want 200 (header auth is not cookie auth)", resp.StatusCode, body)
+	}
+
+	resp, _ = env.beacon(t, path+"?token="+env.token, "", "", `{}`, nil)
+	if resp.StatusCode != 401 {
+		t.Fatalf("query-token beacon = %d, want 401", resp.StatusCode)
+	}
+
+	resp, _ = env.do(t, "POST", "/api/core/libraries", "", env.token)
+	if resp.StatusCode != 401 {
+		t.Fatalf("cookie on an ordinary core mutation = %d, want 401", resp.StatusCode)
+	}
+}
+
+func TestMediaCookieHlsStopOriginPolicy(t *testing.T) {
+	env := newMediaAuthEnv(t)
+	sameOrigin := func(t *testing.T, hdr map[string]string) int {
+		t.Helper()
+		req, err := http.NewRequest("DELETE", env.srv.URL+"/api/core/hls/web-1-none", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for k, v := range hdr {
+			req.Header.Set(k, v)
+		}
+		req.AddCookie(&http.Cookie{Name: auth.MediaCookieName, Value: env.token})
+		resp, err := env.srv.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+	if code := sameOrigin(t, map[string]string{"Sec-Fetch-Site": "same-origin", "Origin": env.srv.URL}); code == 401 {
+		t.Fatal("same-origin cookie HLS stop must pass authentication (handler outcome may be 404 for an unknown session)")
+	}
+	if code := sameOrigin(t, nil); code == 401 {
+		t.Fatal("cookie HLS stop without origin markers (legacy same-origin UA) must pass authentication")
+	}
+	if code := sameOrigin(t, map[string]string{"Sec-Fetch-Site": "same-site"}); code != 401 {
+		t.Fatalf("same-site sibling cookie HLS stop = %d, want 401", code)
+	}
+	if code := sameOrigin(t, map[string]string{"Origin": "https://evil.example"}); code != 401 {
+		t.Fatalf("mismatched Origin cookie HLS stop = %d, want 401", code)
+	}
+}
+
+func TestMediaMutationRequestClassification(t *testing.T) {
+	for _, m := range []string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch, http.MethodDelete} {
+		r := httptest.NewRequest(m, "/api/core/progress/5", nil)
+		if MediaMutationRequest(r) {
+			t.Fatalf("MediaMutationRequest(%s /progress/5) = true, want false", m)
+		}
+	}
+	r := httptest.NewRequest(http.MethodPost, "/api/core/progress/5", nil)
+	if !MediaMutationRequest(r) {
+		t.Fatal("MediaMutationRequest(POST /progress/5) = false, want true")
+	}
+	for _, m := range []string{http.MethodGet, http.MethodPost, http.MethodPut} {
+		r := httptest.NewRequest(m, "/api/core/hls/web-1-abc", nil)
+		if MediaMutationRequest(r) {
+			t.Fatalf("MediaMutationRequest(%s /hls/...) = true, want false", m)
+		}
+	}
+	r = httptest.NewRequest(http.MethodDelete, "/api/core/hls/web-1-abc", nil)
+	if !MediaMutationRequest(r) {
+		t.Fatal("MediaMutationRequest(DELETE /hls/{sid}) = false, want true")
+	}
+	for _, p := range []string{"/api/core/progress", "/api/core/progress/", "/api/core/progress/5/x", "/api/core/stream/5", "/api/core/libraries", "/api/core/hls", "/api/core/hls/a/b"} {
+		r := httptest.NewRequest(http.MethodPost, p, nil)
+		if MediaMutationRequest(r) {
+			t.Fatalf("MediaMutationRequest(POST %s) = true, want false", p)
+		}
+	}
+	r = httptest.NewRequest(http.MethodGet, "/api/core/progress/5", nil)
+	if !MediaRequest(r) {
+		t.Fatal("MediaRequest(GET /progress/5) = false, want true (read-only cookie read stays allowed)")
+	}
+	r = httptest.NewRequest(http.MethodPost, "/api/core/progress/5", nil)
+	if MediaRequest(r) {
+		t.Fatal("MediaRequest(POST /progress/5) = true, want false (cookie is read-only for media routes)")
+	}
+}
+
 func TestMediaCookieLifecycle(t *testing.T) {
 	dir := t.TempDir()
 	db, err := store.Open(filepath.Join(dir, "test.db"))
@@ -174,7 +321,7 @@ func TestMediaCookieLifecycle(t *testing.T) {
 	a := New(db, dir)
 	app := neutron.New()
 	a.MountPublic(app.Router().Group("/api/core"))
-	a.Mount(app.Router().Group("/api/core", auth.MiddlewareWithMediaCookie(db, MediaRequest)))
+	a.Mount(app.Router().Group("/api/core", auth.MiddlewareWithMediaCookie(db, MediaRequest, MediaMutationRequest)))
 	srv := httptest.NewServer(app.Handler())
 	t.Cleanup(srv.Close)
 
@@ -273,7 +420,7 @@ func TestMediaCookieSecureMode(t *testing.T) {
 	a.SecureCookies = true
 	app := neutron.New()
 	a.MountPublic(app.Router().Group("/api/core"))
-	a.Mount(app.Router().Group("/api/core", auth.MiddlewareWithMediaCookie(db, MediaRequest)))
+	a.Mount(app.Router().Group("/api/core", auth.MiddlewareWithMediaCookie(db, MediaRequest, MediaMutationRequest)))
 	srv := httptest.NewServer(app.Handler())
 	t.Cleanup(srv.Close)
 
