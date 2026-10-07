@@ -108,16 +108,31 @@ func (a *API) podcastDetail(w http.ResponseWriter, r *http.Request) {
 	a.writePodcastDetail(w, r, 200, p)
 }
 
+// podcastEpisodes/episodeProgress are injectable query seams (tests force
+// DB failures through them).
+var (
+	podcastEpisodes = (*store.DB).PodcastEpisodes
+	episodeProgress = (*store.DB).EpisodeProgressByPodcast
+)
+
 func (a *API) writePodcastDetail(w http.ResponseWriter, r *http.Request, status int, p *store.Podcast) {
-	writeJSON(w, status, a.podcastDetailBody(p, auth.UserID(r)))
+	body, err := a.podcastDetailBody(p, auth.UserID(r))
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
+		return
+	}
+	writeJSON(w, status, body)
 }
 
-func (a *API) podcastDetailBody(p *store.Podcast, userID int64) map[string]any {
-	eps, err := a.DB.PodcastEpisodes(p.ID)
+func (a *API) podcastDetailBody(p *store.Podcast, userID int64) (map[string]any, error) {
+	eps, err := podcastEpisodes(a.DB, p.ID)
 	if err != nil {
-		return map[string]any{"error": "internal error"}
+		return nil, err
 	}
-	progs, _ := a.DB.EpisodeProgressByPodcast(userID, p.ID)
+	progs, err := episodeProgress(a.DB, userID, p.ID)
+	if err != nil {
+		return nil, err
+	}
 	downloaded := 0
 	epJSON := make([]map[string]any, 0, len(eps))
 	for i := range eps {
@@ -128,7 +143,7 @@ func (a *API) podcastDetailBody(p *store.Podcast, userID int64) map[string]any {
 	}
 	body := podcastJSON(p, len(eps), downloaded)
 	body["episodes"] = epJSON
-	return body
+	return body, nil
 }
 
 func (a *API) podcastRefresh(svc *podcast.Service, w http.ResponseWriter, r *http.Request) {
@@ -148,7 +163,11 @@ func (a *API) podcastRefresh(svc *podcast.Service, w http.ResponseWriter, r *htt
 		writeJSON(w, 502, map[string]string{"error": "feed refresh failed"})
 		return
 	}
-	body := a.podcastDetailBody(p, auth.UserID(r))
+	body, err := a.podcastDetailBody(p, auth.UserID(r))
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": "internal error"})
+		return
+	}
 	body["changed"] = changed
 	writeJSON(w, 200, body)
 }
@@ -267,7 +286,7 @@ func (a *API) podcastImportOPML(w http.ResponseWriter, r *http.Request) {
 	run = &opmlRun{snap: opmlImportStatus{Status: "running", Total: len(urls)}}
 	a.opmlRun = run
 	a.opmlMu.Unlock()
-	if !a.launchJob(func() { a.runOPMLImport(context.WithoutCancel(r.Context()), run, urls) }) {
+	if !a.launchJob(func() { a.runOPMLImport(a.scanCtx(), run, urls) }) {
 		a.opmlMu.Lock()
 		if a.opmlRun == run {
 			a.opmlRun = nil
@@ -300,6 +319,10 @@ func (a *API) runOPMLImport(ctx context.Context, run *opmlRun, urls []string) {
 	}
 	added, failed := 0, 0
 	for _, feedURL := range urls {
+		if ctx.Err() != nil {
+			run.update(opmlImportStatus{Status: "error", Added: added, Failed: failed, Total: len(urls), CurrentURL: feedURL})
+			return
+		}
 		run.update(opmlImportStatus{Status: "running", Added: added, Failed: failed, Total: len(urls), CurrentURL: feedURL})
 		_, err := a.Podcasts.Subscribe(ctx, feedURL, true, 3)
 		switch {

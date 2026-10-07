@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 const fixtureM4B = `{
@@ -206,6 +207,28 @@ func TestProbeFFProbeFailure(t *testing.T) {
 	installFakeFFProbe(t, "", 1)
 	if _, err := probeTemp(t, "missing.m4b"); err == nil {
 		t.Fatal("want error when ffprobe exits non-zero")
+	}
+}
+
+// The pass-7 F08 cap must actually fire: bytes.Buffer's promoted ReadFrom
+// let os.exec's io.Copy bypass Write entirely, so an over-limit ffprobe was
+// buffered in full (found via audit C-06 applying the same pattern to
+// ffmpeg subtitle extraction).
+func TestProbeOutputCapped(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ffprobe")
+	script := "#!/bin/sh\nyes 0123456789abcdef | head -c 4194305\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	start := time.Now()
+	_, err := probeTemp(t, "big.m4b")
+	if err == nil || !strings.Contains(err.Error(), "output exceeds") {
+		t.Fatalf("err = %v, want output-cap error", err)
+	}
+	if elapsed := time.Since(start); elapsed > 15*time.Second {
+		t.Fatalf("cap enforcement took %s; child not killed on overflow", elapsed)
 	}
 }
 

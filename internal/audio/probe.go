@@ -63,30 +63,38 @@ type ffprobeOut struct {
 
 const probeOutputLimit = 4 << 20
 
+// boundedBuffer caps ffprobe output at probeOutputLimit and kills the child
+// the moment the cap is exceeded. The buffer is a field, not an embedded
+// value: embedding would promote bytes.Buffer's ReadFrom, and os.exec's
+// internal io.Copy prefers ReaderFrom over Write, silently bypassing the
+// cap entirely (found while applying the pattern to subtitle extraction,
+// audit C-06).
 type boundedBuffer struct {
-	bytes.Buffer
+	buf    bytes.Buffer
 	limit  int
 	cancel context.CancelFunc
 	over   bool
 }
 
 func (b *boundedBuffer) Write(p []byte) (int, error) {
-	room := b.limit - b.Buffer.Len()
+	room := b.limit - b.buf.Len()
 	if room < 0 {
 		room = 0
 	}
 	if len(p) > room {
 		b.over = true
 		if room > 0 {
-			b.Buffer.Write(p[:room])
+			b.buf.Write(p[:room])
 		}
 		b.cancel()
 	}
 	if !b.over {
-		b.Buffer.Write(p)
+		b.buf.Write(p)
 	}
 	return len(p), nil
 }
+
+func (b *boundedBuffer) Bytes() []byte { return b.buf.Bytes() }
 
 // ProbeFile runs ffprobe against an already opened, rooted media
 // descriptor: the pathname never reaches the child and the protocol

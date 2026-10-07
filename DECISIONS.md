@@ -658,3 +658,21 @@ backup = `libteca backup` (15g); neutron-go published (17).
     is inferred from one synthetic run. Real-data mappings, agreed conflict
     and generation schemas, permitted browser/native acceptance and measured
     representative workloads remain prerequisites for the respective changes.
+
+50. **Pass-C audit landings (2026-10-06).** Games ROM hashing (sampled
+    xxhash and full sha256) runs before the store transaction opens, so the
+    SQLite write lock is held only for the millisecond-scale upsert; the
+    sha256 read is injectable via the sha256File seam and regression-tested
+    by proving concurrent writers succeed while a hash blocks. File updates
+    write sha256 directly instead of coalescing: a changed file whose re-hash
+    failed lands NULL (retryable), because non-games scanners never set
+    SHA256 and their rows are NULL by construction. The games warm-skip
+    requires a stored sha256, which also pulls pre-0016 rows into scan-time
+    re-hash. The lazy view backfill takes the request context, a 2-slot
+    budget and a per-file singleflight. Podcast detail composition failures
+    are HTTP 500 via query seams. refresh-meta and OPML jobs run under the
+    shutdown context like scans. ffmpeg subtitle extraction caps output at
+    the 16 MiB cache budget with child kill on overflow; implementing it
+    exposed that embedding bytes.Buffer promotes ReadFrom and lets os.exec's
+    io.Copy bypass Write-based caps entirely, so both the ffmpeg and ffprobe
+    bounded writers now compose the buffer as a field.

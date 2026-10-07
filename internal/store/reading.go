@@ -275,6 +275,23 @@ func (d *DB) FileStatByPath(path string) (int64, int64, int64, bool, error) {
 	return size, mtime, mtimeNs, true, nil
 }
 
+// FileStatByPathWithSHA additionally reports whether the row carries a
+// content hash. The games scanner warm-skips only when hasSHA is true: a
+// NULL sha256 means the last read failed (or predates migration 0016), and
+// skipping would freeze the missing value forever.
+func (d *DB) FileStatByPathWithSHA(path string) (int64, int64, int64, bool, bool, error) {
+	var size, mtime, mtimeNs int64
+	var sha sql.NullString
+	err := d.QueryRow(`SELECT size_bytes, mtime_secs, mtime_ns, sha256 FROM files WHERE path = ? AND missing = 0`, path).Scan(&size, &mtime, &mtimeNs, &sha)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, 0, 0, false, false, nil
+	}
+	if err != nil {
+		return 0, 0, 0, false, false, err
+	}
+	return size, mtime, mtimeNs, sha.Valid && sha.String != "", true, nil
+}
+
 func (d *DB) SetFileMeta(fileID int64, meta string) error {
 	_, err := d.Exec(`UPDATE files SET embedded_meta = ? WHERE id = ?`, meta, fileID)
 	return err

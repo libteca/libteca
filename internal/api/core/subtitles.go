@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -27,12 +28,57 @@ var srtStamp = regexp.MustCompile(`(\d{1,2}:\d{2}:\d{2}),(\d{1,3})`)
 var (
 	ffmpegLookPath = exec.LookPath
 	ffmpegRun      = func(ctx context.Context, name string, files []*os.File, args ...string) ([]byte, error) {
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		out := &boundedWriter{limit: subtitleCacheLimit, cancel: cancel}
 		cmd := exec.CommandContext(ctx, name, args...)
 		cmd.ExtraFiles = files
-		return cmd.Output()
+		cmd.Stdout = out
+		err := cmd.Run()
+		if out.over {
+			return nil, fmt.Errorf("ffmpeg %s: output exceeds %d bytes", name, subtitleCacheLimit)
+		}
+		if err != nil {
+			return nil, err
+		}
+		return out.Bytes(), nil
 	}
 	errSubtitleBusy = errors.New("subtitle extraction capacity exhausted")
 )
+
+// boundedWriter caps collected child output and kills the child the moment
+// the cap is exceeded - the pass-7 ffprobe pattern (audit F08) applied to
+// subtitle extraction: a crafted stream must not buffer unbounded stdout
+// for the whole 30s deadline. The buffer is a field, not an embedded
+// value: embedding would promote bytes.Buffer's ReadFrom, and os.exec's
+// internal io.Copy prefers ReaderFrom over Write, silently bypassing the
+// cap (the same flaw the ffprobe boundedBuffer carried until audit C).
+type boundedWriter struct {
+	buf    bytes.Buffer
+	limit  int
+	cancel context.CancelFunc
+	over   bool
+}
+
+func (b *boundedWriter) Write(p []byte) (int, error) {
+	room := b.limit - b.buf.Len()
+	if room < 0 {
+		room = 0
+	}
+	if len(p) > room {
+		b.over = true
+		if room > 0 {
+			b.buf.Write(p[:room])
+		}
+		b.cancel()
+	}
+	if !b.over {
+		b.buf.Write(p)
+	}
+	return len(p), nil
+}
+
+func (b *boundedWriter) Bytes() []byte { return b.buf.Bytes() }
 
 var subtitleSlots = make(chan struct{}, 2)
 

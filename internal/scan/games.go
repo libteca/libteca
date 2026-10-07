@@ -199,7 +199,10 @@ func scanGamesLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 		if d.title == "" {
 			d.title = strings.TrimSuffix(d.name, filepath.Ext(d.name))
 		}
-		if size, mtime, mtimeNs, ok, serr := db.FileStatByPath(d.path); serr == nil && ok && size == d.size && mtime == d.mtime && mtimeNs == d.mtimeNs && mtimeNs != 0 {
+		// Warm-skip requires a stored sha256 as well as matching stat: a row
+		// left NULL by a failed read (or predating migration 0016) must be
+		// re-hashed, or the stale/missing value would survive forever (C-02).
+		if size, mtime, mtimeNs, hasSHA, ok, serr := db.FileStatByPathWithSHA(d.path); serr == nil && ok && hasSHA && size == d.size && mtime == d.mtime && mtimeNs == d.mtimeNs && mtimeNs != 0 {
 			continue
 		}
 		if serr := storeGame(db, lib, d, coversDir, tr); serr != nil {
@@ -213,6 +216,15 @@ func scanGamesLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 
 func storeGame(db *store.DB, lib *store.Library, d *gameDoc, coversDir string, tr *tracker) error {
 	var workID int64
+	// Both hashes read the whole ROM and can take minutes on multi-GB ISOs;
+	// they run BEFORE the transaction opens so SQLite's single write lock is
+	// held for the millisecond-scale upsert only (C-01: progress saves and
+	// other libraries' parallel scans must not queue behind a hash).
+	hash := hashFile(d.path, d.size)
+	var fileSHA *string
+	if sum := sha256File(d.path); sum != "" {
+		fileSHA = &sum
+	}
 	err := db.Update(func(tx *store.Tx) error {
 		// Games set no work metadata of their own (providers fill it in G2),
 		// so every file links to the shared work without unconditional updates.
@@ -244,11 +256,6 @@ func storeGame(db *store.DB, lib *store.Library, d *gameDoc, coversDir string, t
 		}
 		if err != nil {
 			return err
-		}
-		hash := hashFile(d.path, d.size)
-		var fileSHA *string
-		if sum := SHA256File(d.path); sum != "" {
-			fileSHA = &sum
 		}
 		fr := &store.FileRec{
 			EditionID: editionID, Path: d.path, Seq: int(seq),

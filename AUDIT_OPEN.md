@@ -996,3 +996,29 @@ Two deliberate design changes superseding parts of the audit12 entry above:
 Verification: gofmt/vet clean; go test ./... green (one pre-existing
 unar-availability flake in scan, green isolated + baseline-stashed);
 race on core/auth/store green; web tsc + 324 tests + build clean.
+
+## 2026-10-06 — Subagent audit pass C (AUDIT-CHATGPT-13): closed
+
+- **C-01 (fixed)**: full-ROM hashing no longer runs inside the BEGIN
+  IMMEDIATE transaction — multi-GB sha256 could hold SQLite's write lock
+  past busy_timeout, failing concurrent progress saves and other
+  libraries' parallel scans (SQLITE_BUSY reproduced). Hashes hoisted;
+  regression proves concurrent writes + scans succeed during a slow hash.
+- **C-02 (fixed)**: a changed file whose re-hash failed kept its stale
+  sha256 forever (coalesce + warm-skip). Rows now retry when the stored
+  hash is NULL; update writes sha256 directly.
+- **C-03 (fixed)**: lazy backfill in GET /works/{id} gained request-context
+  cancellation, a 2-slot budget, and per-file singleflight.
+- **C-04 (fixed)**: podcast detail/refresh/patch/episode-progress DB
+  failures now surface as HTTP 500, never 200-with-error-body.
+- **C-05 (fixed)**: refresh-meta/OPML jobs use the scan context (cancel
+  branches live again; WaitJobs no longer stalls shutdown).
+- **C-06 (fixed)**: ffmpeg subtitle extraction output capped at the
+  subtitle cache limit (child killed on overflow).
+- **Bonus (fixed, DECISIONS §50)**: bounded writers embedded bytes.Buffer,
+  promoting ReadFrom — the byte cap never fired (embedded io.Copy growth);
+  latent in the pass-7 ffprobe boundedBuffer too. Both now compose the
+  buffer; probe cap has its own regression.
+
+Verification: build/vet/gofmt clean; go test ./... 23 pkgs green
+(discrimination checks run for C-01/C-02/C-06); web tsc clean + 324 green.

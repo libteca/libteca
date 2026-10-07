@@ -435,8 +435,14 @@ func relinkableFileID(q dbtx, hash string, f *FileRec) (int64, bool, error) {
 	return eligible[0], true, nil
 }
 
+// updateFileRow writes the scanner's fresh evidence verbatim, sha256
+// included: a changed file whose re-hash failed must land NULL (retryable by
+// the next scan or the lazy backfill), never keep the hash of bytes that no
+// longer exist. Non-games scanners never set SHA256 and their rows are NULL
+// by construction, so the direct write only ever replaces a games value the
+// same scan just re-derived.
 func updateFileRow(q dbtx, id int64, f *FileRec) error {
-	_, err := q.Exec(`UPDATE files SET edition_id = ?, path = ?, seq = ?, size_bytes = ?, mtime_secs = ?, mtime_ns = ?, hash = ?, sha256 = coalesce(?, sha256), codec = ?, video_codec = ?, width = ?, height = ?, container = ?, bitrate = ?, channels = ?, sample_rate = ?, duration_secs = ?, chapters = ?, missing = 0, probed_at = ? WHERE id = ?`,
+	_, err := q.Exec(`UPDATE files SET edition_id = ?, path = ?, seq = ?, size_bytes = ?, mtime_secs = ?, mtime_ns = ?, hash = ?, sha256 = ?, codec = ?, video_codec = ?, width = ?, height = ?, container = ?, bitrate = ?, channels = ?, sample_rate = ?, duration_secs = ?, chapters = ?, missing = 0, probed_at = ? WHERE id = ?`,
 		f.EditionID, f.Path, f.Seq, f.SizeBytes, f.MtimeSecs, f.MtimeNS, f.Hash, f.SHA256, f.Codec, f.VideoCodec, f.Width, f.Height, f.Container, f.Bitrate, f.Channels, f.SampleRate, f.DurationSecs, f.Chapters, nowMilli(), id)
 	f.ID = id
 	f.Inserted = false

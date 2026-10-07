@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"math"
 	"net/http"
@@ -805,31 +806,106 @@ func fileOK(p string) bool {
 	return err == nil && !fi.IsDir() && fi.Size() > 0
 }
 
-// backfillSHA256 computes the content hash for pre-0016 games files on
-// first view and persists it, so an existing ROM library migrates without
-// a startup bulk-hash pass. Each file is read at most once ever: after the
-// persisted value lands, the scan-time path owns updates.
-func backfillSHA256(db *store.DB, root string, editions []store.EditionView) {
+// backfillSHA256 computes the content hash for pre-0016 games files (and
+// rows a scan left NULL after a failed read) and persists it, so an existing
+// ROM library migrates without a startup bulk-hash pass. Each file is read
+// at most once per view-burst: a 2-slot budget caps concurrent full-file
+// reads, a per-file singleflight makes concurrent views of the same work
+// share one hash, and the request context aborts the read when the client
+// is gone. After the persisted value lands, the scan-time path owns updates.
+func backfillSHA256(ctx context.Context, db *store.DB, root string, editions []store.EditionView) {
 	for i := range editions {
 		for j := range editions[i].Files {
+			if ctx.Err() != nil {
+				return
+			}
 			f := &editions[i].Files[j]
 			if f.SHA256 != nil {
 				continue
 			}
-			fh, err := mediafs.Open(root, f.Path)
-			if err != nil {
-				continue
-			}
-			sum := scan.SHA256Content(fh)
-			fh.Close()
-			if sum == "" {
-				continue
-			}
-			if err := db.SetFileSHA256(f.ID, sum); err == nil {
+			if sum, ok := backfillFileSHA(ctx, db, root, f); ok {
 				f.SHA256 = &sum
 			}
 		}
 	}
+}
+
+var backfillSlots = make(chan struct{}, 2)
+
+// backfillHashFile is the injectable full-file read (tests block it to
+// prove cancellation and singleflight behavior).
+var backfillHashFile = func(ctx context.Context, root, path string) string {
+	fh, err := mediafs.Open(root, path)
+	if err != nil {
+		return ""
+	}
+	defer fh.Close()
+	return scan.SHA256Content(ctxReader{ctx: ctx, r: fh})
+}
+
+// ctxReader fails reads once the context is done, so an abandoned request
+// stops paying for a multi-GB hash between buffer fills.
+type ctxReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (c ctxReader) Read(p []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return c.r.Read(p)
+}
+
+type backfillCall struct {
+	done chan struct{}
+	sum  string
+}
+
+var backfillInFlight = struct {
+	sync.Mutex
+	m map[int64]*backfillCall
+}{m: map[int64]*backfillCall{}}
+
+// backfillFileSHA hashes one still-NULL file: the first caller leads the
+// read and waits share its result, so N concurrent views of the same work
+// cost one file read.
+func backfillFileSHA(ctx context.Context, db *store.DB, root string, f *store.FileRec) (string, bool) {
+	backfillInFlight.Lock()
+	c, busy := backfillInFlight.m[f.ID]
+	if busy {
+		backfillInFlight.Unlock()
+		select {
+		case <-c.done:
+			return c.sum, c.sum != ""
+		case <-ctx.Done():
+			return "", false
+		}
+	}
+	c = &backfillCall{done: make(chan struct{})}
+	backfillInFlight.m[f.ID] = c
+	backfillInFlight.Unlock()
+	defer func() {
+		close(c.done)
+		backfillInFlight.Lock()
+		delete(backfillInFlight.m, f.ID)
+		backfillInFlight.Unlock()
+	}()
+	select {
+	case backfillSlots <- struct{}{}:
+		defer func() { <-backfillSlots }()
+	case <-ctx.Done():
+		return "", false
+	}
+	sum := backfillHashFile(ctx, root, f.Path)
+	if sum == "" {
+		return "", false
+	}
+	if err := db.SetFileSHA256(f.ID, sum); err != nil {
+		return "", false
+	}
+	c.sum = sum
+	return sum, true
 }
 
 func (a *API) works(w http.ResponseWriter, r *http.Request) {
@@ -913,7 +989,7 @@ func (a *API) work(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if lib.Type == "games" {
-		backfillSHA256(a.DB, lib.Path, full.Editions)
+		backfillSHA256(r.Context(), a.DB, lib.Path, full.Editions)
 	}
 	progress, err := a.DB.UserProgressList(auth.UserID(r))
 	if err != nil {

@@ -395,6 +395,10 @@ func hashFile(path string, size int64) string {
 	return fmt.Sprintf("%x-%d", h.Sum64(), size)
 }
 
+// sha256File is the injectable form of SHA256File: tests block it to prove
+// the multi-GB read runs outside the store's write transaction.
+var sha256File = SHA256File
+
 // SHA256File/SHA256Content are the full-content identity the games contract
 // exposes (the sampled xxhash above is move-relink identity, not content
 // identity). Empty string means "could not read"; callers leave the column
