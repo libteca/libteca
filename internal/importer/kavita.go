@@ -12,9 +12,15 @@ import (
 )
 
 // Kavita imports a Kavita app.db (series/libraries/chapters/files/users/
-// reading progress), read-only. Reading progress lands as page + percent
-// against the imported edition's page_count. Users without an account here
-// get one with a temp password (Kavita's ASP.NET hashes cannot migrate).
+// reading progress), read-only. The source layout is detected first: a
+// released Kavita database keeps users in the ASP.NET identity tables and
+// reading history in AppUserProgresses; the library type enum follows the
+// released LibraryType meanings (Manga/Comic/ComicVine share our comics
+// type, Book/LightNovel map to books, loose-image libraries are unsupported
+// and warned, never silently relabeled). Required catalog tables missing
+// from a detected layout are fatal — an import must not report success with
+// an empty catalog. Users without an account here get one with a temp
+// password (Kavita's ASP.NET hashes cannot migrate).
 func Kavita(dbPath string, db *store.DB, dryRun bool) (*Plan, error) {
 	plan := &Plan{Source: "kavita"}
 	if fi, err := os.Stat(dbPath); err != nil || fi.IsDir() {
@@ -26,8 +32,10 @@ func Kavita(dbPath string, db *store.DB, dryRun bool) (*Plan, error) {
 	}
 	defer fdb.Close()
 
-	// Kavita stores the library type as an int enum: 1=Book, 2=Comic,
-	// 3=Manga. Manga shares our comics type.
+	if err := detectKavitaLayout(fdb); err != nil {
+		return nil, err
+	}
+
 	type libRow struct {
 		id   int64
 		name string
@@ -73,6 +81,9 @@ func Kavita(dbPath string, db *store.DB, dryRun bool) (*Plan, error) {
 				}
 			}
 			rows.Close()
+			if err := rows.Err(); err != nil {
+				return nil, err
+			}
 		}
 		// Author credit is best-effort: when the people tables are absent
 		// (or empty) the series imports without an author, not a failure.
@@ -85,7 +96,11 @@ func Kavita(dbPath string, db *store.DB, dryRun bool) (*Plan, error) {
 		author string
 	}
 	seriesByLib := map[int64][]seriesRow{}
-	if srows, err := fdb.Query(`SELECT Id, LibraryId, Name FROM Series`); err == nil {
+	{
+		srows, err := fdb.Query(`SELECT Id, LibraryId, Name FROM Series`)
+		if err != nil {
+			return nil, fmt.Errorf("Series unreadable: %w", err)
+		}
 		for srows.Next() {
 			var s seriesRow
 			if srows.Scan(&s.id, &s.libID, &s.name) == nil {
@@ -94,6 +109,9 @@ func Kavita(dbPath string, db *store.DB, dryRun bool) (*Plan, error) {
 			}
 		}
 		srows.Close()
+		if err := srows.Err(); err != nil {
+			return nil, err
+		}
 	}
 
 	type chapterRow struct {
@@ -103,8 +121,12 @@ func Kavita(dbPath string, db *store.DB, dryRun bool) (*Plan, error) {
 		pages    int
 	}
 	chaptersBySeries := map[int64][]chapterRow{}
-	if crows, err := fdb.Query(`SELECT c.Id, v.SeriesId, c.Title, c.Range, c.Number, c.Pages
-		FROM Chapter c JOIN Volume v ON v.Id = c.VolumeId`); err == nil {
+	{
+		crows, err := fdb.Query(`SELECT c.Id, v.SeriesId, c.Title, c.Range, c.Number, c.Pages
+			FROM Chapter c JOIN Volume v ON v.Id = c.VolumeId`)
+		if err != nil {
+			return nil, fmt.Errorf("Chapter/Volume unreadable: %w", err)
+		}
 		for crows.Next() {
 			var c chapterRow
 			var title, numRange sql.NullString
@@ -115,11 +137,18 @@ func Kavita(dbPath string, db *store.DB, dryRun bool) (*Plan, error) {
 			}
 		}
 		crows.Close()
+		if err := crows.Err(); err != nil {
+			return nil, err
+		}
 	}
 
 	filesByChapter := map[int64][]fileSpec{}
 	formatsByChapter := map[int64]string{}
-	if frows, err := fdb.Query(`SELECT ChapterId, FilePath, Format FROM MangaFile`); err == nil {
+	{
+		frows, err := fdb.Query(`SELECT ChapterId, FilePath, Format FROM MangaFile`)
+		if err != nil {
+			return nil, fmt.Errorf("MangaFile unreadable: %w", err)
+		}
 		for frows.Next() {
 			var chID int64
 			var path string
@@ -130,50 +159,59 @@ func Kavita(dbPath string, db *store.DB, dryRun bool) (*Plan, error) {
 			if _, err := os.Stat(path); err != nil {
 				continue
 			}
+			kind, supported := kavitaFormat(format, path)
+			if !supported {
+				plan.warnf("chapter %d: file %q has unsupported MangaFormat %d; skipped", chID, path, format)
+				continue
+			}
 			filesByChapter[chID] = append(filesByChapter[chID], fileSpec{Path: path})
-			formatsByChapter[chID] = kavitaFormat(format, path)
+			formatsByChapter[chID] = kind
 		}
 		frows.Close()
+		if err := frows.Err(); err != nil {
+			return nil, err
+		}
 	}
 
-	var users []foreignUser
-	if urows, err := fdb.Query(`SELECT Id, Username, Roles FROM AppUser`); err == nil {
-		for urows.Next() {
-			var u foreignUser
-			var roles string
-			if urows.Scan(&u.ID, &u.Name, &roles) == nil {
-				u.IsAdmin = strings.Contains(roles, "Admin")
-				users = append(users, u)
-			}
-		}
-		urows.Close()
-	} else if !schemaErr(err) {
+	users, err := kavitaUsers(fdb, plan)
+	if err != nil {
 		return nil, err
 	}
 
 	type progRow struct {
-		userID    int64
+		userID    foreignID
 		chapterID int64
 		pagesRead int
 	}
 	var progRows []progRow
-	if prows, err := fdb.Query(`SELECT AppUserId, ChapterId, PagesRead FROM AppUserProgress`); err == nil {
-		for prows.Next() {
-			var p progRow
-			if prows.Scan(&p.userID, &p.chapterID, &p.pagesRead) == nil {
-				progRows = append(progRows, p)
+	{
+		prows, err := fdb.Query(`SELECT AppUserId, ChapterId, PagesRead FROM AppUserProgresses`)
+		if err == nil {
+			for prows.Next() {
+				var p progRow
+				var userID any
+				if prows.Scan(&userID, &p.chapterID, &p.pagesRead) == nil {
+					p.userID = idOf(userID)
+					progRows = append(progRows, p)
+				}
 			}
+			prows.Close()
+			if err := prows.Err(); err != nil {
+				return nil, err
+			}
+		} else if !schemaErr(err) {
+			return nil, err
+		} else {
+			plan.warnf("AppUserProgresses unreadable; no reading progress imported")
 		}
-		prows.Close()
 	}
 
-	ourType := map[int]string{1: "books", 2: "comics", 3: "comics"}
 	libIndex := map[int64]int{}
 	libType := map[int64]string{}
 	for _, l := range libs {
-		typ, ok := ourType[l.typ]
+		typ, ok := kavitaLibraryType(l.typ)
 		if !ok {
-			plan.warnf("library %q has unsupported type %d; skipped", l.name, l.typ)
+			plan.warnf("library %q (id %d) has unsupported type %d; skipped", l.name, l.id, l.typ)
 			continue
 		}
 		libType[l.id] = typ
@@ -224,7 +262,7 @@ func Kavita(dbPath string, db *store.DB, dryRun bool) (*Plan, error) {
 		}
 	}
 
-	userIDs := map[int64]bool{}
+	userIDs := map[foreignID]bool{}
 	for _, u := range users {
 		userIDs[u.ID] = true
 	}
@@ -344,6 +382,85 @@ func Kavita(dbPath string, db *store.DB, dryRun bool) (*Plan, error) {
 	return plan, nil
 }
 
+func detectKavitaLayout(fdb *sql.DB) error {
+	cols, err := tableColumns(fdb, "Library")
+	if err != nil {
+		if schemaErr(err) {
+			return fmt.Errorf("not a Kavita database: %w", err)
+		}
+		return err
+	}
+	if len(cols) == 0 {
+		return fmt.Errorf("not a Kavita database: Library table is absent")
+	}
+	for _, table := range []string{"Series", "Chapter", "Volume", "MangaFile"} {
+		if _, err := tableColumns(fdb, table); err != nil {
+			return fmt.Errorf("unsupported Kavita database: %s unreadable: %w", table, err)
+		}
+	}
+	return nil
+}
+
+func kavitaUsers(fdb *sql.DB, plan *Plan) ([]foreignUser, error) {
+	rows, err := fdb.Query(`SELECT Id, UserName FROM AspNetUsers`)
+	if err != nil {
+		if !schemaErr(err) {
+			return nil, err
+		}
+		plan.warnf("AspNetUsers unreadable; users and progress cannot be imported")
+		return nil, nil
+	}
+	var users []foreignUser
+	for rows.Next() {
+		var u foreignUser
+		var id any
+		var name sql.NullString
+		if rows.Scan(&id, &name) == nil && name.String != "" {
+			u.ID = idOf(id)
+			u.Name = name.String
+			users = append(users, u)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	admins := map[foreignID]bool{}
+	arows, err := fdb.Query(`SELECT aur.UserId FROM AspNetUserRoles aur
+		JOIN AspNetRoles ar ON ar.Id = aur.RoleId WHERE ar.Name = 'Admin'`)
+	if err == nil {
+		for arows.Next() {
+			var id any
+			if arows.Scan(&id) == nil {
+				admins[idOf(id)] = true
+			}
+		}
+		arows.Close()
+		if err := arows.Err(); err != nil {
+			return nil, err
+		}
+	} else if !schemaErr(err) {
+		return nil, err
+	} else {
+		plan.warnf("AspNetUserRoles/AspNetRoles unreadable; imported users are non-admin")
+	}
+	for i := range users {
+		users[i].IsAdmin = admins[users[i].ID]
+	}
+	return users, nil
+}
+
+func kavitaLibraryType(sourceType int) (string, bool) {
+	switch sourceType {
+	case 0, 1, 5:
+		return "comics", true
+	case 2, 4:
+		return "books", true
+	default:
+		return "", false
+	}
+}
+
 func chapterTitle(title, numRange string, number sql.NullFloat64) string {
 	if t := strings.TrimSpace(title); t != "" {
 		return t
@@ -357,23 +474,25 @@ func chapterTitle(title, numRange string, number sql.NullFloat64) string {
 	return "Untitled"
 }
 
-func kavitaFormat(format int, path string) string {
+func kavitaFormat(format int, path string) (string, bool) {
 	switch ext := strings.ToLower(filepath.Ext(path)); ext {
 	case ".epub":
-		return "epub"
+		return "epub", true
 	case ".pdf":
-		return "pdf"
+		return "pdf", true
 	case ".cbz", ".zip":
-		return "cbz"
+		return "cbz", true
 	case ".cbr", ".rar":
-		return "cbr"
+		return "cbr", true
 	}
 	switch format {
-	case 2:
-		return "pdf"
+	case 1:
+		return "cbz", true
 	case 3:
-		return "epub"
+		return "epub", true
+	case 4:
+		return "pdf", true
 	default:
-		return "cbz"
+		return "", false
 	}
 }

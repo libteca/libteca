@@ -676,3 +676,57 @@ backup = `libteca backup` (15g); neutron-go published (17).
     exposed that embedding bytes.Buffer promotes ReadFrom and lets os.exec's
     io.Copy bypass Write-based caps entirely, so both the ffmpeg and ffprobe
     bounded writers now compose the buffer as a field.
+
+51. **Video/podcast progress uses one endpoint-scoped coordinator (LT-F01..F04
+    pass, 2026-10-06).** VideoProgressSaver is rewritten in the
+    AudioProgressSaver shape: the write tail and intent generation live on a
+    module scope keyed by token+endpoint, so component replacement keeps
+    same-endpoint ordering while new sessions supersede queued/retry work.
+    Acknowledged state starts null (the old fabricated position-0
+    acknowledgement suppressed the first sub-second save); the sub-second
+    dedup is bypassed for explicit seeks and retries; failed completion
+    retries on a capped exponential timer owned by the timer closure
+    (survives unmount) and terminal 4xx (except 408/429) drops the patch.
+    Callers guard on a metadata/live flag, not on `position > 0` — that
+    truthiness check is exactly what dropped deliberate rewinds to zero.
+    Scopes are kept for the tab lifetime rather than reference counted:
+    idle-scope reclamation buys nothing at edition-count scale and the
+    audio saver already established that posture. The work view owns a
+    local progress map consulted before the stale work-detail snapshot; ABS
+    session close treats currentTime as presence-aware so explicit zero
+    commits progress while absent keeps the documented empty-close path.
+
+52. **Importer layouts are detected, not guessed (LT-F06..F08 pass,
+    2026-10-06).** ABS detects released (books.audioFiles) vs legacy
+    (durationSec/author + audioTracks) schemas read-only and refuses
+    anything else before destination writes — an empty successful import on
+    structural mismatch is worse than an error. Foreign ids are strings
+    end-to-end so UUID sources work, and edition/progress/playlist
+    references are keyed by tagged media ids because released
+    MediaProgress/PlaylistMediaItem point at Book/PodcastEpisode ids, not
+    library-item ids. Kavita's AppUser/Roles shape was fictional; the
+    adapter now reads the ASP.NET identity tables, maps the released
+    LibraryType/MangaFormat enums, treats required catalog tables as fatal
+    on a detected layout, and warns (never relabels) unsupported
+    loose-image libraries. Exact released spellings that could not be
+    confirmed locally are recorded in AUDIT-CHATGPT-14.md; a real
+    disposable backup remains the acceptance gate.
+
+53. **Scan mutation telemetry is commit-scoped (LT-F17 pass, 2026-10-06).**
+    Tracker deltas apply only after db.Update commits: terminal error jobs
+    cannot report rolled-back counters, and the observer that persists
+    scan_jobs counts can never contend for SQLite's writer lock through the
+    transaction it is observing. Files-seen/probed remain attempt metrics
+    (emitted from the walk/probe phases, never inside a write closure).
+
+54. **Podcast-library deletion shares the generic dependency tree (LT-F13
+    pass, 2026-10-06).** deleteEditionBackedLibraryRows +
+    deleteLibraryScanJobs are the one implementation used by both
+    DeleteLibrary and DeletePodcastsLibrary; the podcast service keeps its
+    lifecycle gate, single-flight slots and post-commit native byte cleanup,
+    and imported files stay catalog references whose source bytes are never
+    touched. The watcher treats the scanner's explicit busy admission
+    (scan.ErrScanRunning sentinel) as the re-arm verdict instead of
+    re-reading job status (LT-F14), and watch roots resolve through
+    symlinks before arming with alias spelling preserved in storage
+    (LT-F16).

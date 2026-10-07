@@ -88,7 +88,7 @@ func newAtomicImportFixture(t *testing.T, format string) atomicImportFixture {
 	sourceExec(t, path, func(db *sql.DB) {
 		importExec(t, db, `INSERT INTO Chapter VALUES (12, 9, 2, '', '', 30)`)
 		importExec(t, db, `INSERT INTO MangaFile VALUES (2, 12, ?, 1)`, media)
-		importExec(t, db, `INSERT INTO AppUserProgress VALUES (2, 1, 12, 20)`)
+		importExec(t, db, `INSERT INTO AppUserProgresses VALUES (2, 'u-1', 12, 20)`)
 	})
 	stages[3].condition = `NEW.title = 'Chapter 2'`
 	stages[4].condition = `NEW.path LIKE '%/Saga 002.cbz'`
@@ -98,7 +98,7 @@ func newAtomicImportFixture(t *testing.T, format string) atomicImportFixture {
 		stages: stages,
 		grow: func(t *testing.T) {
 			sourceExec(t, path, func(db *sql.DB) {
-				importExec(t, db, `INSERT INTO AppUser VALUES (10, 'rollback-first-user', '', ''), (11, 'rollback-last-user', '', '')`)
+				importExec(t, db, `INSERT INTO AspNetUsers VALUES ('u-10', 'rollback-first-user', ''), ('u-11', 'rollback-last-user', '')`)
 				importExec(t, db, `INSERT INTO Library VALUES (10, 'Rollback First Library', 2), (11, 'Rollback Last Library', 2)`)
 			})
 		},

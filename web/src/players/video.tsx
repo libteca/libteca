@@ -51,6 +51,8 @@ type VideoPlayerProps = {
   editionId: number;
   onClose: () => void;
   onSelectEdition: (id: number) => void;
+  localProgress?: Map<number, { position: number; isFinished: boolean }>;
+  onProgress?: (editionId: number, patch: { position: number; duration: number; finished: boolean }) => void;
 };
 
 export function VideoPlayer(props: VideoPlayerProps) {
@@ -63,6 +65,7 @@ function VideoPlayerSession(props: VideoPlayerProps) {
   const ed: EditionDetail = found ?? { id: props.editionId, format: "video", title: props.w.title, duration: 0, files: [], chapters: [] };
   const ref = useRef<HTMLVideoElement | null>(null);
   const saved = useRef(0);
+  const live = useRef(false);
   const edRef = useRef(ed);
   edRef.current = ed;
   const progressRef = useRef<{ key: string; saver: VideoProgressSaver } | null>(null);
@@ -99,7 +102,7 @@ function VideoPlayerSession(props: VideoPlayerProps) {
     const editionId = ed.id;
     progressRef.current = {
       key: progressKey,
-      saver: new VideoProgressSaver(ed.duration, async (patch) => {
+      saver: new VideoProgressSaver(`/progress/${editionId}`, ed.duration, async (patch) => {
         const controller = new AbortController();
         const timer = window.setTimeout(() => controller.abort(), 15000);
         try {
@@ -113,6 +116,20 @@ function VideoPlayerSession(props: VideoPlayerProps) {
     };
   }
 
+  const propsRef = useRef(props);
+  propsRef.current = props;
+  const durRef = useRef(dur);
+  durRef.current = dur;
+
+  const report = (position: number, finished: boolean) => {
+    propsRef.current.onProgress?.(edRef.current.id, { position, duration: durRef.current || edRef.current.duration || 0, finished });
+  };
+
+  const save = (pos: number, finished = false, explicit = false) => {
+    report(pos, finished);
+    return progressRef.current!.saver.save(pos, finished, explicit);
+  };
+
 
   const total = dur || ed.duration || 0;
   const chapters = (ed.chapters || []).filter((ch) => ch.end > ch.start && ch.start < total);
@@ -124,11 +141,10 @@ function VideoPlayerSession(props: VideoPlayerProps) {
     setActive(false);
     setFatal("");
     saved.current = 0;
-    // The HLS resource is the FULL edition: the old &start= parameter asked
-    // the server to truncate the timeline at the resume point, and the
-    // browser then saved currentTime as if it were absolute - resuming at
-    // 600s and playing 15s saved ~15. Resume is purely client-side now.
-    resumeRef.current = ed.position && ed.position > 0 && !ed.isFinished ? ed.position : 0;
+    live.current = false;
+    const local = props.localProgress?.get(props.editionId);
+    const resumeFrom = local ?? { position: ed.position ?? 0, isFinished: !!ed.isFinished };
+    resumeRef.current = resumeFrom.position > 0 && !resumeFrom.isFinished ? resumeFrom.position : 0;
     const boot = async () => {
       let info: PlaybackInfo = { mode: "direct", fileId };
       try {
@@ -248,17 +264,17 @@ function VideoPlayerSession(props: VideoPlayerProps) {
     const t = window.setInterval(() => { if (ref.current) saved.current = ref.current.currentTime; }, 1000);
     const p = window.setInterval(() => {
       const v = ref.current;
-      if (v && !v.paused && v.currentTime > 0) void save(v.currentTime);
+      if (v && !v.paused && live.current) void save(v.currentTime);
     }, 15000);
     return () => {
       clearInterval(t);
       clearInterval(p);
-      const pos = ref.current?.currentTime || saved.current;
-      if (pos > 0) void save(pos);
+      if (live.current) {
+        const pos = ref.current?.currentTime ?? saved.current;
+        void save(pos);
+      }
     };
   }, []);
-
-  const save = (pos: number, finished = false) => progressRef.current!.saver.save(pos, finished);
 
   const showUI = () => {
     setUiVis(true);
@@ -297,6 +313,7 @@ function VideoPlayerSession(props: VideoPlayerProps) {
     v.currentTime = Math.max(0, t);
     saved.current = v.currentTime;
     setTime(v.currentTime);
+    if (live.current) void save(v.currentTime, false, true);
     flashSkip(delta < 0 ? "back" : "fwd");
   };
 
@@ -308,6 +325,7 @@ function VideoPlayerSession(props: VideoPlayerProps) {
     v.currentTime = Math.max(0, t);
     saved.current = v.currentTime;
     setTime(v.currentTime);
+    if (live.current) void save(v.currentTime, false, true);
   };
 
   const toggleFullscreen = () => {
@@ -412,7 +430,15 @@ function VideoPlayerSession(props: VideoPlayerProps) {
         <p style={{ ...muted, margin: 0, fontSize: "0.95rem", maxWidth: "26rem", textAlign: "center", lineHeight: 1.5 }}>{fatal || "This edition is no longer available."}</p>
         <div style={{ display: "flex", gap: "0.6rem" }}>
           {fatal ? (
-            <button className="press" style={ghostBtn} onClick={() => { setFatal(""); setBootKey((k) => k + 1); }}>Retry</button>
+            <button className="press" style={ghostBtn} onClick={() => {
+              const v = ref.current;
+              if (v && live.current) {
+                saved.current = v.currentTime;
+                void save(v.currentTime, false, true);
+              }
+              setFatal("");
+              setBootKey((k) => k + 1);
+            }}>Retry</button>
           ) : null}
           <button className="press" style={ghostBtn} onClick={props.onClose}>Back</button>
         </div>
@@ -522,6 +548,7 @@ function VideoPlayerSession(props: VideoPlayerProps) {
           onLoadedMetadata={() => {
             const v = ref.current;
             if (!v) return;
+            live.current = true;
             setDur(v.duration || ed.duration || 0);
             const target = resumeRef.current;
             if (target <= 0) return;
@@ -553,6 +580,7 @@ function VideoPlayerSession(props: VideoPlayerProps) {
           onTimeUpdate={() => {
             const v = ref.current;
             if (!v) return;
+            live.current = true;
             saved.current = v.currentTime;
             setTime(v.currentTime);
             try {
@@ -573,7 +601,14 @@ function VideoPlayerSession(props: VideoPlayerProps) {
             if (src) setFatal("Playback failed — the stream could not be loaded.");
           }}
           onPlay={() => { setPlaying(true); setWaiting(false); showUI(); if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "playing"; }}
-          onPause={() => { setPlaying(false); setUiVis(true); void save(saved.current); if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "paused"; }}
+          onPause={() => { setPlaying(false); setUiVis(true); if (live.current) void save(saved.current); if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "paused"; }}
+          onSeeked={() => {
+            const v = ref.current;
+            if (!v || !live.current) return;
+            saved.current = v.currentTime;
+            setTime(v.currentTime);
+            void save(v.currentTime, false, true);
+          }}
           onEnded={() => { setPlaying(false); setUiVis(true); void save(total, true); if (next) props.onSelectEdition(next.id); else props.onClose(); }}
         >
           {subs ? <track kind="subtitles" src={media(`/subtitles/${fileId}`)} srcLang="en" label="Subtitles" /> : null}

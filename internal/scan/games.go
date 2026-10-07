@@ -216,6 +216,7 @@ func scanGamesLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 
 func storeGame(db *store.DB, lib *store.Library, d *gameDoc, coversDir string, tr *tracker) error {
 	var workID int64
+	groupWorks, groupAdded, groupUpdated := 0, 0, 0
 	// Both hashes read the whole ROM and can take minutes on multi-GB ISOs;
 	// they run BEFORE the transaction opens so SQLite's single write lock is
 	// held for the millisecond-scale upsert only (C-01: progress saves and
@@ -239,7 +240,7 @@ func storeGame(db *store.DB, lib *store.Library, d *gameDoc, coversDir string, t
 				return err
 			}
 			if w.Created {
-				tr.work()
+				groupWorks++
 			}
 		}
 
@@ -265,12 +266,18 @@ func storeGame(db *store.DB, lib *store.Library, d *gameDoc, coversDir string, t
 		if err := tx.UpsertFile(fr); err != nil {
 			return err
 		}
-		tr.file(fr.Inserted)
+		if fr.Inserted {
+			groupAdded++
+		} else {
+			groupUpdated++
+		}
 		return nil
 	})
 	if err != nil {
 		return err
 	}
+	tr.workN(groupWorks)
+	tr.fileN(groupAdded, groupUpdated)
 	return writeGameCover(db, workID, d, coversDir)
 }
 

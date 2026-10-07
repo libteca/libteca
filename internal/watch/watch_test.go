@@ -48,10 +48,14 @@ func start(t *testing.T, w *Watcher) (context.CancelFunc, <-chan struct{}) {
 
 func waitWatched(t *testing.T, w *Watcher, dir string) {
 	t.Helper()
+	resolved, err := resolveWatchRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		w.mu.Lock()
-		_, ok := w.dirs[dir]
+		_, ok := w.dirs[resolved]
 		w.mu.Unlock()
 		if ok {
 			return

@@ -26,6 +26,15 @@ func ValidPosition(position, total float64) error {
 	return nil
 }
 
+const MaxPlaytimeSeconds = float64(1<<53 - 1)
+
+func ValidPlaytime(seconds float64) error {
+	if math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds < 0 || seconds > MaxPlaytimeSeconds {
+		return fmt.Errorf("playtime out of supported range")
+	}
+	return nil
+}
+
 func (d *DB) GetProgress(userID, editionID int64) (*Progress, error) {
 	var p Progress
 	var fin int

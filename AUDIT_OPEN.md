@@ -1022,3 +1022,73 @@ race on core/auth/store green; web tsc + 324 tests + build clean.
 
 Verification: build/vet/gofmt clean; go test ./... 23 pkgs green
 (discrimination checks run for C-01/C-02/C-06); web tsc clean + 324 green.
+
+## 2026-10-06 — Deeper source-review pass (AUDIT-CHATGPT-14): 15 of 17 LT items closed, 2 owner-gated
+
+Reconciliation first: LT-F05 was already fixed by pass C (C-02), LT-F15
+partially (C-05 launch contexts; the final-unit residual closed here).
+LT-F11 (reset-wins reader-recovery policy) and LT-F12 (atomic cross-tab
+recovery, which depends on it) remain OWNER-GATED — an explicit owner acceptance of the reset-wins policy is required before implementation.
+
+Closed (all verified against `237633f` before fixing; details and test
+names in AUDIT-CHATGPT-14.md):
+
+- **LT-F01..F04 (fixed)**: web video/podcast progress moved onto the
+  shared endpoint-scoped coordinator (AudioProgressSaver shape): zero
+  positions persist, seeks save immediately, same-endpoint writes order
+  across component replacement with intent generations, failed completion
+  retries with a capped backoff that survives unmount, terminal 4xx drops
+  patches; the work view carries a fresh local progress map (reopen, A→B→A,
+  badges, Retry capture); ABS session close is currentTime-presence-aware so
+  an explicit zero commits progress while an absent field keeps the
+  empty-close compatibility path.
+- **LT-F06/F07 (fixed)**: ABS importer detects the released (audioFiles)
+  vs legacy (durationSec/audioTracks) books layout read-only and refuses
+  unsupported schemas before any destination write; released discovery uses
+  UUID foreign ids throughout, books.audioFiles per-file tuples, and
+  bookAuthors/authors; progress/playlist/edition references are keyed by
+  tagged media ids (Book/PodcastEpisode), never library-item ids. Whole
+  import transaction unchanged; rollback matrix still green.
+- **LT-F08 (fixed)**: Kavita importer reads AspNetUsers +
+  AspNetUserRoles/AspNetRoles + AppUserProgresses, maps the released
+  LibraryType enum (0/1/5→comics, 2/4→books, Image=3 warned+skipped) and
+  MangaFormat (Archive=1/Epub=3/Pdf=4; Unknown=2 and Image=0 rejected
+  instead of fabricated), and treats required catalog tables as fatal on a
+  detected layout. Synthetic fixture updated to the released contract.
+- **LT-F09 (fixed)**: game-* edition positions validate through
+  ValidPlaytime (2^53-1 ceiling) — lifetime playtime above 720h round-trips;
+  media-position bounds unchanged.
+- **LT-F10 (fixed)**: lazy sha256 backfill publishes only an applied
+  conditional write (id/edition/path/size/mtime_ns + NULL guard +
+  RowsAffected), with before/after descriptor stat agreement; a concurrent
+  scan's newer checksum is never overwritten nor misreported.
+- **LT-F13 (fixed)**: podcasts-library deletion removes imported
+  edition-backed works and scan_jobs in the same gated transaction as native
+  children (shared helpers with the generic DeleteLibrary); imported source
+  bytes are catalog references and survive.
+- **LT-F14 (fixed)**: watcher re-arms on the explicit scan.ErrScanRunning
+  admission result (dependency-neutral sentinel) instead of a later
+  job-status snapshot, closing the busy→done event-loss gap.
+- **LT-F15 (fixed)**: OPML/refresh-meta publish error/canceled with honest
+  partial counts when the lifecycle context dies during the final unit,
+  never done.
+- **LT-F16 (fixed)**: symlink library roots resolve before arming watches
+  (real directories watched, alias spelling stored); target replacement
+  reconciles old subtrees; unresolvable roots arm nothing.
+- **LT-F17 (fixed)**: scanner mutation telemetry applies only after
+  db.Update commits — terminal error jobs no longer report rolled-back
+  counters and progress persistence cannot contend with its own open write
+  transaction.
+
+Open (owner-gated): **LT-F11 reset-wins policy** (needs
+Tyler's explicit acceptance; then LT-F12's transactional durable store
+follows). External schema confirmations listed in AUDIT-CHATGPT-14.md
+(ABS audioFiles JSON keys, bookAuthors/authors names, mediaProgresses table
+name; Kavita identity-table columns) — adapters are written against the
+note's stated contract with tolerant fallbacks where names were uncertain;
+a permissioned real disposable v2.37.1 / v0.9.1.4 backup remains the final
+acceptance gate for both importers.
+
+Verification: go vet ./... clean; go test ./... -count=1 green; go test
+-race on store/scan/watch/importer/core/abs green; web tsc + vitest 335/335
+in 25 files + build clean.

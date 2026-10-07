@@ -171,6 +171,7 @@ func storeBook(db *store.DB, lib *store.Library, d *bookDoc, coversDir string, t
 		descPtr = &d.description
 	}
 	var workID int64
+	groupWorks, groupAdded, groupUpdated := 0, 0, 0
 	err := db.Update(func(tx *store.Tx) error {
 		// Files without their own metadata (cbz/pdf beside an epub) must not
 		// clobber the work metadata a sibling edition already set, so they link
@@ -188,7 +189,7 @@ func storeBook(db *store.DB, lib *store.Library, d *bookDoc, coversDir string, t
 				return err
 			}
 			if w.Created {
-				tr.work()
+				groupWorks++
 			}
 		}
 
@@ -212,7 +213,11 @@ func storeBook(db *store.DB, lib *store.Library, d *bookDoc, coversDir string, t
 		if err := tx.UpsertFile(fr); err != nil {
 			return err
 		}
-		tr.file(fr.Inserted)
+		if fr.Inserted {
+			groupAdded++
+		} else {
+			groupUpdated++
+		}
 		if len(d.toc) > 0 {
 			if meta, merr := json.Marshal(map[string]any{"toc": d.toc}); merr == nil {
 				if serr := tx.SetFileMeta(fr.ID, string(meta)); serr != nil {
@@ -225,6 +230,8 @@ func storeBook(db *store.DB, lib *store.Library, d *bookDoc, coversDir string, t
 	if err != nil {
 		return err
 	}
+	tr.workN(groupWorks)
+	tr.fileN(groupAdded, groupUpdated)
 	return writeBookCover(db, workID, d, coversDir)
 }
 

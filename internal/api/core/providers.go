@@ -939,6 +939,10 @@ func (a *API) runRefreshMeta(ctx context.Context, libID int64, run *metaRun) {
 			}
 		}
 	}
+	if ctx.Err() != nil {
+		run.finish(metaSnap{Status: "error", Matched: matched, AutoApplied: applied, Total: total, Error: "canceled"})
+		return
+	}
 	run.finish(metaSnap{Status: "done", Matched: matched, AutoApplied: applied, Total: total})
 }
 

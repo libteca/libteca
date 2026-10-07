@@ -214,6 +214,8 @@ func scanVideoLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 			continue
 		}
 		var workID int64
+		groupWorks, groupAdded, groupUpdated := 0, 0, 0
+		groupCount := 0
 		err := db.Update(func(tx *store.Tx) error {
 			var err error
 			workID, err = tx.UpsertWork(w)
@@ -221,7 +223,7 @@ func scanVideoLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 				return err
 			}
 			if w.Created {
-				tr.work()
+				groupWorks++
 			}
 			if err := applyNFO(tx, workID, nfo); err != nil {
 				fmt.Fprintf(os.Stderr, "libteca: skip nfo %s: %v\n", top, err)
@@ -252,14 +254,21 @@ func scanVideoLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 				if err := tx.UpsertFile(fr); err != nil {
 					return err
 				}
-				tr.file(fr.Inserted)
-				count++
+				if fr.Inserted {
+					groupAdded++
+				} else {
+					groupUpdated++
+				}
+				groupCount++
 			}
 			return nil
 		})
 		if err != nil {
 			return count, err
 		}
+		count += groupCount
+		tr.workN(groupWorks)
+		tr.fileN(groupAdded, groupUpdated)
 		if err := ensureCoverVideo(ctx, db, abs, workID, top, group[0].path, coversDir); err != nil {
 			return count, err
 		}
@@ -495,6 +504,8 @@ func scanMusicLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 			continue
 		}
 		var workID int64
+		groupWorks, groupAdded, groupUpdated := 0, 0, 0
+		groupCount := 0
 		err := db.Update(func(tx *store.Tx) error {
 			var err error
 			workID, err = tx.UpsertWork(w)
@@ -502,7 +513,7 @@ func scanMusicLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 				return err
 			}
 			if w.Created {
-				tr.work()
+				groupWorks++
 			}
 			for i := range group {
 				if !skip[i] {
@@ -534,14 +545,21 @@ func scanMusicLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 				if err := tx.UpsertFile(fr); err != nil {
 					return err
 				}
-				tr.file(fr.Inserted)
-				count++
+				if fr.Inserted {
+					groupAdded++
+				} else {
+					groupUpdated++
+				}
+				groupCount++
 			}
 			return nil
 		})
 		if err != nil {
 			return count, err
 		}
+		count += groupCount
+		tr.workN(groupWorks)
+		tr.fileN(groupAdded, groupUpdated)
 		if err := ensureCoverVideo(ctx, db, abs, workID, top, group[0].path, coversDir); err != nil {
 			return count, err
 		}

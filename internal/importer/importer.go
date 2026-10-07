@@ -174,7 +174,7 @@ func strPtr(s string) *string {
 }
 
 type foreignUser struct {
-	ID      int64
+	ID      foreignID
 	Name    string
 	IsAdmin bool
 }
@@ -187,8 +187,8 @@ type userStore interface {
 // applyUsers maps foreign users onto ours by (case-insensitive) name. New
 // users get a temp password on commit — foreign bcrypt hashes cannot be
 // migrated into our argon2id scheme; the admin resets them after first login.
-func applyUsers(db userStore, users []foreignUser, plan *Plan, commit bool) (map[int64]int64, error) {
-	ids := map[int64]int64{}
+func applyUsers(db userStore, users []foreignUser, plan *Plan, commit bool) (map[foreignID]int64, error) {
+	ids := map[foreignID]int64{}
 	for _, u := range users {
 		up := UserPlan{Name: u.Name, IsAdmin: u.IsAdmin}
 		existing, err := db.UserByName(u.Name)

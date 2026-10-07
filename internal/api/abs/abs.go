@@ -718,9 +718,9 @@ func (a *API) sessionSync(w http.ResponseWriter, r *http.Request) {
 func (a *API) sessionClose(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var body struct {
-		CurrentTime  float64 `json:"currentTime"`
-		TimeListened float64 `json:"timeListened"`
-		Duration     float64 `json:"duration"`
+		CurrentTime  *float64 `json:"currentTime"`
+		TimeListened float64  `json:"timeListened"`
+		Duration     float64  `json:"duration"`
 	}
 	if err := decodeBody(w, r, 1<<20, true, &body); err != nil {
 		status, msg := bodyErrorStatus(err)
@@ -742,21 +742,23 @@ func (a *API) sessionClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dur := sessionDuration(ed, body.Duration)
-	if err := store.ValidPosition(body.CurrentTime, dur); err != nil {
-		fail(w, 400, err.Error())
-		return
-	}
 	if err := store.ValidPosition(body.TimeListened, 0); err != nil {
 		fail(w, 400, "invalid timeListened")
 		return
 	}
-	if body.CurrentTime > 0 {
-		fileID, offset := ed.Locate(body.CurrentTime)
+	if body.CurrentTime != nil {
+		if err := store.ValidPosition(*body.CurrentTime, dur); err != nil {
+			fail(w, 400, err.Error())
+			return
+		}
+	}
+	if body.CurrentTime != nil {
+		fileID, offset := ed.Locate(*body.CurrentTime)
 		device := "abs-app"
 		p := &store.Progress{
 			UserID: s.UserID, EditionID: s.EditionID, FileID: &fileID, FileOffsetSecs: offset,
-			EditionPositionSecs: body.CurrentTime, DurationSecs: &dur, Device: &device,
-			IsFinished: dur > 0 && body.CurrentTime >= dur-5,
+			EditionPositionSecs: *body.CurrentTime, DurationSecs: &dur, Device: &device,
+			IsFinished: dur > 0 && *body.CurrentTime >= dur-5,
 		}
 		if err := a.DB.CloseSessionWithProgress(s, p, body.TimeListened); err != nil {
 			if errors.Is(err, store.ErrNotFound) {
@@ -766,7 +768,7 @@ func (a *API) sessionClose(w http.ResponseWriter, r *http.Request) {
 			serverError(w, r, err)
 			return
 		}
-	} else if err := a.DB.CloseSession(s.ID, body.CurrentTime, body.TimeListened); err != nil {
+	} else if err := a.DB.CloseSession(s.ID, 0, body.TimeListened); err != nil {
 		serverError(w, r, err)
 		return
 	}

@@ -62,6 +62,7 @@ type LocalAudioProgress = Map<number, { position: number; isFinished: boolean }>
 
 function WorkSession(props: { id: number }) {
   const audioProgress = useRef<LocalAudioProgress>(new Map());
+  const videoProgress = useRef<LocalAudioProgress>(new Map());
   const sessionToken = useRef(getToken());
   const [w, setW] = useState<WorkDetail | null>(null);
   const [edition, setEdition] = useState<number>(0);
@@ -110,15 +111,29 @@ function WorkSession(props: { id: number }) {
     );
   }
   if (!w) return <SkeletonWork />;
-  const first = w.editions[0];
+  const withVideoProgress: WorkDetail = {
+    ...w,
+    editions: w.editions.map((e) => {
+      const local = videoProgress.current.get(e.id);
+      return local ? { ...e, position: local.position, isFinished: local.isFinished } : e;
+    }),
+  };
+  const first = withVideoProgress.editions[0];
   const isTV = w.editions.some((e) => e.seasonNum !== undefined);
   const isMusic = first && first.format === "audio" && !first.chapters?.length && w.editions.length > 1;
   const isMovie = first && first.format === "video" && !isTV;
 
   if (videoEdition) {
-    return <VideoPlayer w={w} editionId={videoEdition} onClose={() => setVideoEdition(null)} onSelectEdition={setVideoEdition} />;
+    return <VideoPlayer
+      w={withVideoProgress}
+      editionId={videoEdition}
+      onClose={() => setVideoEdition(null)}
+      onSelectEdition={setVideoEdition}
+      localProgress={videoProgress.current}
+      onProgress={(editionId, patch) => { videoProgress.current.set(editionId, { position: patch.position, isFinished: patch.finished }); }}
+    />;
   }
-  if (isTV) return <><style>{WORK_CSS}</style><EpisodeList w={w} onPlay={setVideoEdition} /></>;
+  if (isTV) return <><style>{WORK_CSS}</style><EpisodeList w={withVideoProgress} onPlay={setVideoEdition} /></>;
   if (isMusic) return <><style>{WORK_CSS}</style><TrackList key={w.id} w={w} sessionToken={sessionToken.current} /></>;
   if (isMovie) {
     const vf = first?.files?.[0];

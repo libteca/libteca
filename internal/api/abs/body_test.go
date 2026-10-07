@@ -294,3 +294,61 @@ func TestSessionCloseEmptyBodyStillAccepted(t *testing.T) {
 		t.Fatal("empty close must still close the session")
 	}
 }
+
+func TestSessionCloseExplicitZeroUpdatesProgress(t *testing.T) {
+	s := newBodyTestStack(t)
+	s.createSession(t, "sid-close-zero")
+	if err := s.db.SetProgress(&store.Progress{UserID: 1, EditionID: s.edID, EditionPositionSecs: 30, DurationSecs: ptrFloat(60)}); err != nil {
+		t.Fatal(err)
+	}
+	code, body := s.post(t, "/api/session/sid-close-zero/close", "application/json", `{"currentTime":0,"timeListened":4,"duration":60}`)
+	if code != 200 {
+		t.Fatalf("zero close = %d %s, want 200", code, body)
+	}
+	p, err := s.db.GetProgress(1, s.edID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.EditionPositionSecs != 0 || p.IsFinished {
+		t.Fatalf("progress after zero close = %+v, want position 0 unfinished", p)
+	}
+	if pos, _ := s.sessionState(t, "sid-close-zero"); pos != 0 {
+		t.Fatalf("session position after zero close = %v, want 0", pos)
+	}
+}
+
+func TestSessionCloseWithoutCurrentTimePreservesProgress(t *testing.T) {
+	s := newBodyTestStack(t)
+	s.createSession(t, "sid-close-absent")
+	if err := s.db.SetProgress(&store.Progress{UserID: 1, EditionID: s.edID, EditionPositionSecs: 30, DurationSecs: ptrFloat(60)}); err != nil {
+		t.Fatal(err)
+	}
+	code, body := s.post(t, "/api/session/sid-close-absent/close", "application/json", `{"timeListened":4}`)
+	if code != 200 {
+		t.Fatalf("absent currentTime close = %d %s, want 200", code, body)
+	}
+	p, err := s.db.GetProgress(1, s.edID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.EditionPositionSecs != 30 {
+		t.Fatalf("progress after absent-currentTime close = %+v, want position 30 preserved", p)
+	}
+	if got, err := s.db.Session("sid-close-absent"); err != nil || got.ClosedAt == nil {
+		t.Fatalf("session not closed: %v %v", got, err)
+	}
+}
+
+func TestSessionCloseInvalidCurrentTimeRejected(t *testing.T) {
+	s := newBodyTestStack(t)
+	s.createSession(t, "sid-close-bad")
+	code, body := s.post(t, "/api/session/sid-close-bad/close", "application/json", `{"currentTime":500,"timeListened":4,"duration":60}`)
+	if code != 400 {
+		t.Fatalf("out-of-range close = %d %s, want 400", code, body)
+	}
+	if got, err := s.db.Session("sid-close-bad"); err != nil || got.ClosedAt != nil {
+		t.Fatalf("session must stay open after rejected close: %v %v", got, err)
+	}
+}
+
+func ptrFloat(v float64) *float64 { return &v }

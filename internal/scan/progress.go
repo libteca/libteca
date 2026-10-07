@@ -58,10 +58,30 @@ func (t *tracker) file(inserted bool) {
 	t.maybeEmit()
 }
 
+func (t *tracker) fileN(added, updated int) {
+	if added == 0 && updated == 0 {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.p.FilesAdded += added
+	t.p.FilesUpdated += updated
+	t.maybeEmit()
+}
+
 func (t *tracker) work() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.p.WorksChanged++
+}
+
+func (t *tracker) workN(n int) {
+	if n == 0 {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.p.WorksChanged += n
 }
 
 func (t *tracker) maybeEmit() {

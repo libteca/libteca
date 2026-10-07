@@ -327,9 +327,40 @@ func (d *DB) DeletePodcastWithFiles(id int64) ([]int64, error) {
 // with its episodes and file rows AND the library row itself in one
 // transaction, so the lifecycle gate in the service covers the whole
 // destructive operation - core no longer deletes the library row in a
-// separate, ungated commit. File ids are captured before the episodes that
-// reference them are deleted. Returns the ids so callers can drop the stored
-// media after commit.
+func deleteEditionBackedLibraryRows(tx dbtx, libraryID int64) error {
+	editions := `SELECT id FROM editions WHERE work_id IN (SELECT id FROM works WHERE library_id = ?)`
+	if _, err := tx.Exec(`DELETE FROM progress WHERE edition_id IN (`+editions+`)`, libraryID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM playback_sessions WHERE edition_id IN (`+editions+`)`, libraryID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM playlist_items WHERE edition_id IN (`+editions+`)`, libraryID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM files WHERE edition_id IN (`+editions+`)`, libraryID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM editions WHERE work_id IN (SELECT id FROM works WHERE library_id = ?)`, libraryID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM works WHERE library_id = ?`, libraryID); err != nil {
+		return err
+	}
+	return nil
+}
+
+func deleteLibraryScanJobs(tx dbtx, libraryID int64) error {
+	_, err := tx.Exec(`DELETE FROM scan_jobs WHERE library_id = ?`, libraryID)
+	return err
+}
+
+// DeletePodcastsLibrary removes a whole podcasts library atomically: native
+// subscriptions, their episodes and episode-linked files, imported
+// edition-backed works (ABS imports land as ordinary works in a podcasts
+// library), scan jobs and the library row itself. Edition-backed rows and
+// scan jobs both hold non-cascading library/work foreign keys, so a library
+// with either dependency family used to be undeletable.
 func (d *DB) DeletePodcastsLibrary(libID int64) ([]int64, error) {
 	var fileIDs []int64
 	err := d.Update(func(tx *Tx) error {
@@ -362,6 +393,9 @@ func (d *DB) DeletePodcastsLibrary(libID int64) ([]int64, error) {
 			(SELECT id FROM podcasts WHERE library_id = ?)`, libID); err != nil {
 			return err
 		}
+		if err := deleteEditionBackedLibraryRows(tx, libID); err != nil {
+			return err
+		}
 		if len(fileIDs) > 0 {
 			placeholders := strings.Repeat("?,", len(fileIDs))
 			placeholders = placeholders[:len(placeholders)-1]
@@ -372,6 +406,9 @@ func (d *DB) DeletePodcastsLibrary(libID int64) ([]int64, error) {
 			if _, err := tx.Exec(`DELETE FROM files WHERE id IN (`+placeholders+`)`, args...); err != nil {
 				return err
 			}
+		}
+		if err := deleteLibraryScanJobs(tx, libID); err != nil {
+			return err
 		}
 		if _, err := tx.Exec(`DELETE FROM podcasts WHERE library_id = ?`, libID); err != nil {
 			return err

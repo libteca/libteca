@@ -279,6 +279,7 @@ func scanBook(ctx context.Context, db *store.DB, lib *store.Library, root, top s
 	}
 	sortBookFiles(top, group)
 	var workID int64
+	groupWorks, groupAdded, groupUpdated := 0, 0, 0
 	txErr := db.Update(func(tx *store.Tx) error {
 		if err := cancelErr(ctx); err != nil {
 			return err
@@ -289,7 +290,7 @@ func scanBook(ctx context.Context, db *store.DB, lib *store.Library, root, top s
 			return err
 		}
 		if w.Created {
-			tr.work()
+			groupWorks++
 		}
 		if err := applyNFO(tx, workID, nfo); err != nil {
 			fmt.Fprintf(os.Stderr, "libteca: skip nfo %s: %v\n", top, err)
@@ -334,13 +335,19 @@ func scanBook(ctx context.Context, db *store.DB, lib *store.Library, root, top s
 			if err := markBookOrder(tx, fr.ID, f); err != nil {
 				return err
 			}
-			tr.file(fr.Inserted)
+			if fr.Inserted {
+				groupAdded++
+			} else {
+				groupUpdated++
+			}
 		}
 		return cancelErr(ctx)
 	})
 	if txErr != nil {
 		return txErr
 	}
+	tr.workN(groupWorks)
+	tr.fileN(groupAdded, groupUpdated)
 
 	return ensureCover(ctx, db, root, workID, top, group, coversDir)
 }

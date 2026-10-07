@@ -137,26 +137,10 @@ func (d *DB) DeleteLibrary(id int64) error {
 		return err
 	}
 
-	editions := `SELECT id FROM editions WHERE work_id IN (SELECT id FROM works WHERE library_id = ?)`
-	if _, err := tx.Exec(`DELETE FROM progress WHERE edition_id IN (`+editions+`)`, id); err != nil {
+	if err := deleteEditionBackedLibraryRows(tx, id); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`DELETE FROM playback_sessions WHERE edition_id IN (`+editions+`)`, id); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(`DELETE FROM playlist_items WHERE edition_id IN (`+editions+`)`, id); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(`DELETE FROM files WHERE edition_id IN (`+editions+`)`, id); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(`DELETE FROM editions WHERE work_id IN (SELECT id FROM works WHERE library_id = ?)`, id); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(`DELETE FROM works WHERE library_id = ?`, id); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(`DELETE FROM scan_jobs WHERE library_id = ?`, id); err != nil {
+	if err := deleteLibraryScanJobs(tx, id); err != nil {
 		return err
 	}
 	if typ == "podcasts" {
@@ -449,11 +433,29 @@ func updateFileRow(q dbtx, id int64, f *FileRec) error {
 	return err
 }
 
-// SetFileSHA256 persists the content hash the lazy backfill computed for a
-// pre-0016 row. The NULL guard keeps a concurrent scan-time value winning.
-func (d *DB) SetFileSHA256(id int64, sum string) error {
-	_, err := d.Exec(`UPDATE files SET sha256 = ? WHERE id = ? AND sha256 IS NULL`, sum, id)
-	return err
+type FileVersion struct {
+	ID        int64
+	EditionID int64
+	Path      string
+	SizeBytes int64
+	MtimeNS   int64
+}
+
+func (d *DB) SetFileSHA256IfCurrent(expected FileVersion, sum string) (bool, error) {
+	result, err := d.Exec(`UPDATE files SET sha256 = ?
+		WHERE id = ? AND edition_id = ? AND path = ?
+		AND size_bytes = ? AND mtime_ns = ?
+		AND missing = 0 AND sha256 IS NULL`,
+		sum, expected.ID, expected.EditionID, expected.Path,
+		expected.SizeBytes, expected.MtimeNS)
+	if err != nil {
+		return false, err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return changed == 1, nil
 }
 
 func (d *DB) SetWorkCover(workID int64, rel string) error {

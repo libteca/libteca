@@ -377,7 +377,7 @@ func (a *API) scanLibrary(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 202, map[string]any{"status": "scanning", "jobId": jobID})
 }
 
-var ErrScanRunning = errors.New("scan already running")
+var ErrScanRunning = scan.ErrScanRunning
 
 // TriggerScan starts a library scan through the same lock and job machinery
 // as POST /libraries/{id}/scan. It returns ErrScanRunning when a scan is
@@ -901,11 +901,34 @@ func backfillFileSHA(ctx context.Context, db *store.DB, root string, f *store.Fi
 	if sum == "" {
 		return "", false
 	}
-	if err := db.SetFileSHA256(f.ID, sum); err != nil {
+	if sum == "" {
+		return "", false
+	}
+	if !backfillStatMatches(root, f) {
+		return "", false
+	}
+	applied, err := db.SetFileSHA256IfCurrent(store.FileVersion{
+		ID: f.ID, EditionID: f.EditionID, Path: f.Path,
+		SizeBytes: f.SizeBytes, MtimeNS: f.MtimeNS,
+	}, sum)
+	if err != nil || !applied {
 		return "", false
 	}
 	c.sum = sum
 	return sum, true
+}
+
+func backfillStatMatches(root string, f *store.FileRec) bool {
+	fh, err := mediafs.Open(root, f.Path)
+	if err != nil {
+		return false
+	}
+	defer fh.Close()
+	fi, err := fh.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode().IsRegular() && fi.Size() == f.SizeBytes && fi.ModTime().UnixNano() == f.MtimeNS
 }
 
 func (a *API) works(w http.ResponseWriter, r *http.Request) {
@@ -1174,7 +1197,13 @@ func (a *API) setProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if body.Position != nil {
-		if err := store.ValidPosition(*body.Position, ed.TotalDuration()); err != nil {
+		var err error
+		if strings.HasPrefix(ed.Format, "game-") {
+			err = store.ValidPlaytime(*body.Position)
+		} else {
+			err = store.ValidPosition(*body.Position, ed.TotalDuration())
+		}
+		if err != nil {
 			writeJSON(w, 400, map[string]string{"error": err.Error()})
 			return
 		}

@@ -231,6 +231,7 @@ type opmlImportStatus struct {
 	Failed     int    `json:"failed"`
 	Total      int    `json:"total"`
 	CurrentURL string `json:"currentUrl"`
+	Error      string `json:"error,omitempty"`
 }
 
 type opmlRun struct {
@@ -333,6 +334,10 @@ func (a *API) runOPMLImport(ctx context.Context, run *opmlRun, urls []string) {
 			added++
 		}
 		run.update(opmlImportStatus{Status: "running", Added: added, Failed: failed, Total: len(urls), CurrentURL: feedURL})
+	}
+	if ctx.Err() != nil {
+		run.update(opmlImportStatus{Status: "error", Added: added, Failed: failed, Total: len(urls), Error: "canceled"})
+		return
 	}
 	run.update(opmlImportStatus{Status: "done", Added: added, Failed: failed, Total: len(urls)})
 }

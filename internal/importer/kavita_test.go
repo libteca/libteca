@@ -7,10 +7,11 @@ import (
 	"testing"
 )
 
-// buildKavitaFixture creates a synthetic Kavita app.db: one comic library
-// with a series (author + summary), one volume/chapter with a real cbz on
-// disk, one admin user with 10/24 pages read, plus a library of unsupported
-// type (must warn-skip) and a chapter whose file is missing.
+// buildKavitaFixture creates a synthetic released-schema Kavita app.db: one
+// manga library with a series (author + summary), one volume/chapter with a
+// real cbz on disk, one admin user (AspNetUsers + AspNetUserRoles +
+// AspNetRoles) with 10/24 pages read in AppUserProgresses, plus a library of
+// unsupported type (must warn-skip) and a chapter whose file is missing.
 func buildKavitaFixture(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
@@ -33,9 +34,11 @@ func buildKavitaFixture(t *testing.T) string {
 		`CREATE TABLE Volume (Id INTEGER PRIMARY KEY, SeriesId INTEGER, Number TEXT)`,
 		`CREATE TABLE Chapter (Id INTEGER PRIMARY KEY, VolumeId INTEGER, Number REAL, Range TEXT, Title TEXT, Pages INTEGER)`,
 		`CREATE TABLE MangaFile (Id INTEGER PRIMARY KEY, ChapterId INTEGER, FilePath TEXT, Format INTEGER)`,
-		`CREATE TABLE AppUser (Id INTEGER PRIMARY KEY, Username TEXT, PasswordHash TEXT, Roles TEXT)`,
-		`CREATE TABLE AppUserProgress (Id INTEGER PRIMARY KEY, AppUserId INTEGER, ChapterId INTEGER, PagesRead INTEGER)`,
-		`INSERT INTO Library VALUES (1, 'Comics', 2), (2, 'Weird', 9)`,
+		`CREATE TABLE AspNetUsers (Id TEXT PRIMARY KEY, UserName TEXT, PasswordHash TEXT)`,
+		`CREATE TABLE AspNetRoles (Id TEXT PRIMARY KEY, Name TEXT)`,
+		`CREATE TABLE AspNetUserRoles (UserId TEXT, RoleId TEXT)`,
+		`CREATE TABLE AppUserProgresses (Id INTEGER PRIMARY KEY, AppUserId TEXT, ChapterId INTEGER, PagesRead INTEGER)`,
+		`INSERT INTO Library VALUES (1, 'Comics', 0), (2, 'Weird', 9)`,
 		`INSERT INTO Series VALUES (5, 1, 'Saga'), (6, 2, 'Skipped Series')`,
 		`INSERT INTO SeriesMetadata VALUES (1, 5, 'A space opera')`,
 		`INSERT INTO Person VALUES (1, 'BKV')`,
@@ -43,8 +46,10 @@ func buildKavitaFixture(t *testing.T) string {
 		`INSERT INTO Volume VALUES (9, 5, '1')`,
 		`INSERT INTO Chapter VALUES (11, 9, 1, '', '', 24)`,
 		`INSERT INTO MangaFile VALUES (1, 11, '` + cbz + `', 1)`,
-		`INSERT INTO AppUser VALUES (1, 'ktan', 'aspnet-hash', '["Admin"]')`,
-		`INSERT INTO AppUserProgress VALUES (1, 1, 11, 10)`,
+		`INSERT INTO AspNetUsers VALUES ('u-1', 'ktan', 'aspnet-hash')`,
+		`INSERT INTO AspNetRoles VALUES ('r-admin', 'Admin')`,
+		`INSERT INTO AspNetUserRoles VALUES ('u-1', 'r-admin')`,
+		`INSERT INTO AppUserProgresses VALUES (1, 'u-1', 11, 10)`,
 	}
 	for _, s := range stmts {
 		if _, err := fdb.Exec(s); err != nil {

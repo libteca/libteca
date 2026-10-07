@@ -13,6 +13,7 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 
+	"github.com/libteca/libteca/internal/scan"
 	"github.com/libteca/libteca/internal/store"
 )
 
@@ -46,6 +47,7 @@ type Watcher struct {
 
 	mu      sync.Mutex
 	dirs    map[string]int64
+	roots   map[int64]string
 	timers  map[int64]*time.Timer
 	stopped bool
 	ctx     context.Context
@@ -66,7 +68,7 @@ func New(scan Scanner, db *store.DB, cfg Config) *Watcher {
 	return &Watcher{
 		scan: scan, db: db,
 		debounce: cfg.Debounce, sweepEvery: cfg.SweepEvery, staleAfter: cfg.StaleAfter, syncEvery: cfg.SyncEvery,
-		dirs: map[string]int64{}, timers: map[int64]*time.Timer{},
+		dirs: map[string]int64{}, roots: map[int64]string{}, timers: map[int64]*time.Timer{},
 	}
 }
 
@@ -197,18 +199,15 @@ func (w *Watcher) triggerAndWait(ctx context.Context, libID int64) {
 	if _, err := w.scan.TriggerScan(ctx, libID); err != nil {
 		// A change that arrived while a scan was already running must not be
 		// dropped: its debounce timer fired into the running scan and was
-		// consumed. Re-arm so a fresh scan catches it once the current one
-		// finishes; persistent failures (library gone) do not re-arm.
-		if w.scanInFlight(libID) {
+		// consumed. The admission result itself carries the busy verdict;
+		// re-deciding it from a later job-status snapshot drops the event
+		// when the running scan finishes inside the gap. Re-arm on the
+		// explicit rejection; persistent failures (library gone) do not.
+		if errors.Is(err, scan.ErrScanRunning) {
 			w.markDirty(libID)
 		}
 		fmt.Fprintf(os.Stderr, "libteca: watch: scan for library %d skipped: %v\n", libID, err)
 	}
-}
-
-func (w *Watcher) scanInFlight(libID int64) bool {
-	jobs, err := w.db.ListScanJobs(libID, 1)
-	return err == nil && len(jobs) > 0 && jobs[0].Status == "running"
 }
 
 func (w *Watcher) markAllDirty() {
@@ -279,22 +278,71 @@ func (w *Watcher) syncLibraries(markNew bool) {
 	}
 	w.mu.Unlock()
 	for _, l := range libs {
-		if w.watchTree(l.Path, l.ID) && markNew {
+		if w.watchRoot(l.Path, l.ID) && markNew {
 			w.markDirty(l.ID)
 		}
 	}
 }
 
-func (w *Watcher) watchTree(root string, libID int64) bool {
-	root = filepath.Clean(root)
+func resolveWatchRoot(configured string) (string, error) {
+	absolute, err := filepath.Abs(configured)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(absolute)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("library watch root is not a directory")
+	}
+	return filepath.Clean(resolved), nil
+}
+
+func (w *Watcher) watchRoot(configured string, libID int64) bool {
+	cleaned := filepath.Clean(configured)
+	resolved, rerr := resolveWatchRoot(cleaned)
+	if rerr != nil {
+		fmt.Fprintf(os.Stderr, "libteca: watch root %s: %v\n", cleaned, rerr)
+		w.mu.Lock()
+		old, had := w.roots[libID]
+		delete(w.roots, libID)
+		w.mu.Unlock()
+		if had {
+			w.unwatchTree(old)
+		}
+		return false
+	}
 	w.mu.Lock()
-	_, wasWatched := w.dirs[root]
+	if old, ok := w.roots[libID]; ok && old != resolved {
+		w.mu.Unlock()
+		w.unwatchTree(old)
+		w.mu.Lock()
+	}
+	w.roots[libID] = resolved
+	_, wasWatched := w.dirs[resolved]
 	w.mu.Unlock()
-	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+	return w.walkTree(resolved, libID) && !wasWatched
+}
+
+func (w *Watcher) watchTree(root string, libID int64) bool {
+	resolved, rerr := resolveWatchRoot(root)
+	if rerr != nil {
+		return false
+	}
+	return w.walkTree(resolved, libID)
+}
+
+func (w *Watcher) walkTree(resolved string, libID int64) bool {
+	filepath.WalkDir(resolved, func(path string, d os.DirEntry, err error) error {
 		if err != nil || !d.IsDir() {
 			return nil
 		}
-		if strings.HasPrefix(d.Name(), ".") && path != root {
+		if strings.HasPrefix(d.Name(), ".") && path != resolved {
 			return filepath.SkipDir
 		}
 		w.addDir(path, libID)
@@ -302,8 +350,8 @@ func (w *Watcher) watchTree(root string, libID int64) bool {
 	})
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	_, armed := w.dirs[root]
-	return armed && !wasWatched
+	_, armed := w.dirs[resolved]
+	return armed
 }
 
 func (w *Watcher) addDir(dir string, libID int64) {
