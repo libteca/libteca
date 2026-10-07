@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  mergeServerProgress, parseProgressPatch, parseStoredProgress, ProgressQueue,
+  mergeServerProgress, parseProgressPatch, parseStoredProgress, ProgressQueue, ResetConflictError,
   type ProgressPatch, type StoredProgress,
 } from "../src/progressQueue";
 
@@ -119,7 +119,10 @@ describe("ProgressQueue", () => {
     let store: StoredProgress | null = null;
     const storage = {
       load: () => store,
-      save: (patch: ProgressPatch, baseRevision: number) => { store = patch && Object.keys(patch).length ? { baseRevision, patch } : null; },
+      save: (patch: ProgressPatch, baseRevision: number, resetGeneration: number) => {
+        store = { baseRevision, resetGeneration, patch };
+      },
+      clear: () => { store = null; },
     };
     const q = new ProgressQueue({
       send: async (patch, base) => { sent.push({ patch, base }); },
@@ -127,9 +130,9 @@ describe("ProgressQueue", () => {
       initialBaseRevision: 3,
     });
     q.enqueue({ page: 40, percent: 0.4 });
-    expect(store).toEqual({ baseRevision: 3, patch: { page: 40, percent: 0.4 } });
+    expect(store).toEqual({ baseRevision: 3, resetGeneration: 0, patch: { page: 40, percent: 0.4 } });
     const reloaded = new ProgressQueue({
-      send: async (patch, base) => { sent.push({ patch, base }); return 7; },
+      send: async (patch, base) => { sent.push({ patch, base }); return { revision: 7 }; },
       storage,
       initialBaseRevision: 9,
     });
@@ -148,9 +151,10 @@ describe("ProgressQueue", () => {
     let store: StoredProgress | null = null;
     const storage = {
       load: () => store,
-      save: (patch: ProgressPatch, baseRevision: number) => {
-        store = Object.keys(patch).length ? { baseRevision, patch } : null;
+      save: (patch: ProgressPatch, baseRevision: number, resetGeneration: number) => {
+        store = { baseRevision, resetGeneration, patch };
       },
+      clear: () => { store = null; },
     };
     const sent: ProgressPatch[] = [];
     const q = new ProgressQueue({
@@ -185,6 +189,7 @@ describe("ProgressQueue", () => {
       storage: {
         load: () => { throw new Error("unavailable"); },
         save: () => { throw new Error("unavailable"); },
+        clear: () => { throw new Error("unavailable"); },
       },
     });
     q.enqueue({ page: 1 });
@@ -273,6 +278,107 @@ describe("terminal error policy", () => {
   });
 });
 
+describe("reset-wins delivery policy", () => {
+  it("quarantines a reset-conflicted operation and rebases onto the server lineage", async () => {
+    let store: StoredProgress | null = null;
+    const storage = {
+      load: () => store,
+      save: (patch: ProgressPatch, baseRevision: number, resetGeneration: number) => {
+        store = { baseRevision, resetGeneration, patch };
+      },
+      clear: () => { store = null; },
+    };
+    const delivered: { patch: ProgressPatch; base: number; generation: number }[] = [];
+    let conflict = true;
+    const q = new ProgressQueue({
+      send: async (patch, base, generation) => {
+        if (conflict) throw new ResetConflictError({ revision: 6, resetGeneration: 2, deleted: true });
+        delivered.push({ patch, base, generation });
+        return { revision: 7, resetGeneration: 2 };
+      },
+      storage,
+      initialBaseRevision: 5,
+      initialResetGeneration: 0,
+      shouldRetry: () => true,
+      retryBaseMs: 1,
+    });
+    q.enqueue({ page: 80 });
+    await q.flush();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(q.snapshot()).toEqual({});
+    expect(q.base()).toBe(6);
+    expect(q.generation()).toBe(2);
+    expect(store).toEqual({ baseRevision: 5, resetGeneration: 0, patch: { page: 80 } });
+
+    conflict = false;
+    q.enqueue({ page: 3 });
+    expect(store).toEqual({ baseRevision: 6, resetGeneration: 2, patch: { page: 3 } });
+    await q.flush();
+    expect(delivered).toEqual([{ patch: { page: 3 }, base: 6, generation: 2 }]);
+    expect(q.base()).toBe(7);
+    expect(store).toBeNull();
+    q.stop();
+  });
+
+  it("delivers input enqueued during a conflicting delivery on the post-reset lineage", async () => {
+    let store: StoredProgress | null = null;
+    const storage = {
+      load: () => store,
+      save: (patch: ProgressPatch, baseRevision: number, resetGeneration: number) => {
+        store = { baseRevision, resetGeneration, patch };
+      },
+      clear: () => { store = null; },
+    };
+    const gate = deferred();
+    const delivered: { patch: ProgressPatch; base: number; generation: number }[] = [];
+    let conflict = true;
+    const q = new ProgressQueue({
+      send: async (patch, base, generation) => {
+        if (conflict) {
+          await gate.promise;
+          conflict = false;
+          throw new ResetConflictError({ revision: 6, resetGeneration: 2, deleted: true });
+        }
+        delivered.push({ patch, base, generation });
+        return { revision: 7, resetGeneration: 2 };
+      },
+      storage,
+      initialBaseRevision: 5,
+      initialResetGeneration: 0,
+    });
+    q.enqueue({ page: 80 });
+    const first = q.flush();
+    q.enqueue({ page: 3 });
+    gate.resolve();
+    await first;
+    await flushMicrotasks();
+    expect(delivered).toEqual([{ patch: { page: 3 }, base: 6, generation: 2 }]);
+    expect(store).toBeNull();
+    q.stop();
+  });
+
+  it("does not replay durable recovery from an older generation than the server", () => {
+    let store: StoredProgress | null = { baseRevision: 4, resetGeneration: 0, patch: { page: 80 } };
+    const q = new ProgressQueue({
+      send: async () => { throw new Error("must not deliver quarantined work"); },
+      storage: {
+        load: () => store,
+        save: (patch: ProgressPatch, baseRevision: number, resetGeneration: number) => {
+          store = { baseRevision, resetGeneration, patch };
+        },
+        clear: () => { store = null; },
+      },
+      initialBaseRevision: 6,
+      initialResetGeneration: 1,
+    });
+    expect(q.snapshot()).toEqual({});
+    expect(q.base()).toBe(6);
+    expect(q.generation()).toBe(1);
+    expect(store).toEqual({ baseRevision: 4, resetGeneration: 0, patch: { page: 80 } });
+    q.stop();
+  });
+});
+
 describe("parseProgressPatch", () => {
   it("accepts a well-formed record", () => {
     expect(parseProgressPatch({ page: 3, percent: 0.5, locator: "cfi(/6)", finished: true }))
@@ -293,6 +399,8 @@ describe("parseProgressPatch", () => {
   it("rejects stored records without a valid base revision", () => {
     expect(() => parseStoredProgress({ patch: {} })).toThrow();
     expect(() => parseStoredProgress({ baseRevision: -1, patch: {} })).toThrow();
-    expect(parseStoredProgress({ baseRevision: 4, patch: { page: 1 } })).toEqual({ baseRevision: 4, patch: { page: 1 } });
+    expect(() => parseStoredProgress({ baseRevision: 4, resetGeneration: -1, patch: {} })).toThrow();
+    expect(parseStoredProgress({ baseRevision: 4, patch: { page: 1 } })).toEqual({ baseRevision: 4, resetGeneration: 0, patch: { page: 1 } });
+    expect(parseStoredProgress({ baseRevision: 4, resetGeneration: 2, patch: { page: 1 } })).toEqual({ baseRevision: 4, resetGeneration: 2, patch: { page: 1 } });
   });
 });

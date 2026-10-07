@@ -65,13 +65,13 @@ afterEach(() => {
 
 describe("reader progress transport integration", () => {
   it("recovers the full pending winner through the real hook and queue", async () => {
-    data.set("libteca-progress-v2-u1-e9-a", JSON.stringify({ baseRevision: 1, patch: { page: 80, percent: 0.8, locator: "80" } }));
-    data.set("libteca-progress-v2-u1-e9-b", JSON.stringify({ baseRevision: 1, patch: { page: 20, percent: 0.2, locator: "20" } }));
+    data.set("libteca-progress-v2-u1-e9-a", JSON.stringify({ baseRevision: 1, resetGeneration: 0, patch: { page: 80, percent: 0.8, locator: "80" } }));
+    data.set("libteca-progress-v2-u1-e9-b", JSON.stringify({ baseRevision: 1, resetGeneration: 0, patch: { page: 20, percent: 0.2, locator: "20" } }));
     mount(9, 1, { page: 10, percent: 0.1 });
     await settle();
     expect(fetchWithDeadline).toHaveBeenCalledTimes(1);
     expect(JSON.parse(vi.mocked(fetchWithDeadline).mock.calls[0][1]!.body as string))
-      .toEqual({ page: 80, percent: 0.8, locator: "80", revision: 1 });
+      .toEqual({ page: 80, percent: 0.8, locator: "80", revision: 1, resetGeneration: 0 });
     expect(data.size).toBe(0);
   });
 
@@ -93,7 +93,7 @@ describe("reader progress transport integration", () => {
     saver.flush();
     expect(beacon).toHaveBeenCalledTimes(1);
     expect(beacon.mock.calls[0][1].headers.Authorization).toBe("Bearer reader-token");
-    expect(JSON.parse(beacon.mock.calls[0][1].body as string)).toEqual({ finished: false, revision: 10 });
+    expect(JSON.parse(beacon.mock.calls[0][1].body as string)).toEqual({ finished: false, revision: 10, resetGeneration: 0 });
   });
 
   it("updates the high-water mark after successful forward delivery", async () => {
@@ -116,7 +116,7 @@ describe("reader progress transport integration", () => {
     await settle();
     saver.save({ page: 92, finished: false });
     saver.flush();
-    expect(JSON.parse(beacon.mock.calls[0][1].body as string)).toEqual({ finished: false, revision: 20 });
+    expect(JSON.parse(beacon.mock.calls[0][1].body as string)).toEqual({ finished: false, revision: 20, resetGeneration: 0 });
   });
 
   it("includes an unresolved ordinary save in lifecycle delivery when storage is unavailable", async () => {
@@ -128,7 +128,7 @@ describe("reader progress transport integration", () => {
     expect(fetchWithDeadline).toHaveBeenCalledTimes(1);
     saver.flush();
     expect(JSON.parse(beacon.mock.calls[0][1].body as string))
-      .toEqual({ page: 95, percent: 0.95, locator: "95", revision: 10 });
+      .toEqual({ page: 95, percent: 0.95, locator: "95", revision: 10, resetGeneration: 0 });
   });
 
   it("combines in-flight position with newer completion intent on close", async () => {
@@ -139,7 +139,7 @@ describe("reader progress transport integration", () => {
     saver.save({ finished: true });
     saver.flush();
     expect(JSON.parse(beacon.mock.calls[0][1].body as string))
-      .toEqual({ page: 95, percent: 0.95, locator: "95", finished: true, revision: 10 });
+      .toEqual({ page: 95, percent: 0.95, locator: "95", finished: true, revision: 10, resetGeneration: 0 });
   });
 
   it("does not flush one user's pending state with another user's session", async () => {
@@ -150,5 +150,84 @@ describe("reader progress transport integration", () => {
     setCurrentUser(2);
     saver.flush();
     expect(beacon).not.toHaveBeenCalled();
+  });
+});
+
+describe("reader reset-wins policy", () => {
+  function storedRecords(): { baseRevision: number; resetGeneration: number; patch: Record<string, unknown> }[] {
+    return Array.from(data.entries())
+      .filter(([key]) => key.startsWith("libteca-progress-v2-u1-e9-"))
+      .map(([, raw]) => JSON.parse(raw));
+  }
+
+  it("does not relabel a pre-reset operation after a reset conflict", async () => {
+    data.set("libteca-progress-v2-u1-e9-a", JSON.stringify({ baseRevision: 1, resetGeneration: 0, patch: { page: 80, percent: 0.8 } }));
+    vi.mocked(fetchWithDeadline).mockResolvedValueOnce({
+      response: new Response("", { status: 409 }),
+      text: JSON.stringify({ error: "progress was reset", current: { revision: 2, resetGeneration: 1, deleted: true, position: 0 } }),
+    });
+    vi.mocked(fetchWithDeadline).mockResolvedValueOnce({ response: new Response(), text: '{"revision":3,"resetGeneration":1}' });
+    mount(9, 1, { page: 10, percent: 0.1 });
+    await settle();
+    expect(fetchWithDeadline).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(vi.mocked(fetchWithDeadline).mock.calls[0][1]!.body as string))
+      .toEqual({ page: 80, percent: 0.8, revision: 1, resetGeneration: 0 });
+    const evidence = storedRecords();
+    expect(evidence).toHaveLength(1);
+    expect(evidence[0]).toEqual({ baseRevision: 1, resetGeneration: 0, patch: { page: 80, percent: 0.8 } });
+  });
+
+  it("establishes a fresh operation on deliberate post-reset input", async () => {
+    data.set("libteca-progress-v2-u1-e9-a", JSON.stringify({ baseRevision: 1, resetGeneration: 0, patch: { page: 80, percent: 0.8 } }));
+    vi.mocked(fetchWithDeadline).mockResolvedValueOnce({
+      response: new Response("", { status: 409 }),
+      text: JSON.stringify({ error: "progress was reset", current: { revision: 2, resetGeneration: 1, deleted: true, position: 0 } }),
+    });
+    vi.mocked(fetchWithDeadline).mockResolvedValueOnce({ response: new Response(), text: '{"revision":3,"resetGeneration":1}' });
+    const saver = mount(9, 1, { page: 10, percent: 0.1 });
+    await settle();
+    saver.save({ page: 3, percent: 0.03 });
+    vi.advanceTimersByTime(5000);
+    await settle();
+    expect(fetchWithDeadline).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(vi.mocked(fetchWithDeadline).mock.calls[1][1]!.body as string))
+      .toEqual({ page: 3, percent: 0.03, revision: 2, resetGeneration: 1 });
+    expect(storedRecords()).toHaveLength(0);
+  });
+
+  it("retains explicit finished intent inside the quarantined evidence", async () => {
+    data.set("libteca-progress-v2-u1-e9-a", JSON.stringify({ baseRevision: 1, resetGeneration: 0, patch: { page: 80, finished: true } }));
+    vi.mocked(fetchWithDeadline).mockResolvedValueOnce({
+      response: new Response("", { status: 409 }),
+      text: JSON.stringify({ error: "progress was reset", current: { revision: 2, resetGeneration: 1, deleted: true, position: 0 } }),
+    });
+    mount(9, 1, { page: 10, percent: 0.1 });
+    await settle();
+    expect(storedRecords()).toEqual([{ baseRevision: 1, resetGeneration: 0, patch: { page: 80, finished: true } }]);
+  });
+
+  it("skips replay when the server lineage advanced before mount", async () => {
+    data.set("libteca-progress-v2-u1-e9-a", JSON.stringify({ baseRevision: 1, resetGeneration: 0, patch: { page: 80, percent: 0.8 } }));
+    mount(9, 2, { revision: 2, resetGeneration: 1, deleted: true });
+    await settle();
+    expect(fetchWithDeadline).not.toHaveBeenCalled();
+    expect(storedRecords()).toEqual([{ baseRevision: 1, resetGeneration: 0, patch: { page: 80, percent: 0.8 } }]);
+  });
+
+  it("still merges and resends an ordinary same-generation conflict", async () => {
+    data.set("libteca-progress-v2-u1-e9-a", JSON.stringify({ baseRevision: 3, resetGeneration: 1, patch: { page: 95, percent: 0.95 } }));
+    vi.mocked(fetchWithDeadline).mockResolvedValueOnce({
+      response: new Response("", { status: 409 }),
+      text: JSON.stringify({ error: "stale progress revision", current: { revision: 6, resetGeneration: 1, page: 90, percent: 0.9 } }),
+    });
+    vi.mocked(fetchWithDeadline).mockResolvedValueOnce({ response: new Response(), text: '{"revision":7,"resetGeneration":1}' });
+    mount(9, 5, { revision: 5, resetGeneration: 1, page: 90, percent: 0.9 });
+    await settle();
+    expect(fetchWithDeadline).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(vi.mocked(fetchWithDeadline).mock.calls[0][1]!.body as string))
+      .toEqual({ page: 95, percent: 0.95, revision: 3, resetGeneration: 1 });
+    expect(JSON.parse(vi.mocked(fetchWithDeadline).mock.calls[1][1]!.body as string))
+      .toEqual({ page: 95, percent: 0.95, revision: 6, resetGeneration: 1 });
+    expect(storedRecords()).toHaveLength(0);
   });
 });

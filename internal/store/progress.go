@@ -104,15 +104,22 @@ func setProgressAt(q dbtx, p *Progress, now int64) error {
 // revision keeps advancing so a base captured before the delete can never
 // match a later recreated row (ABA), and readers skip tombstones while the
 // single-row reader still exposes the revision for a fresh conditional
-// start.
+// start. The reset generation advances on every reset and ordinary writes
+// never change it, so a client holding a pre-reset operation can be
+// identified even after new writes clear the tombstone. One upsert covers
+// the absent-row case too: resetting a row that never existed still leaves
+// a tombstone, so a base-0 operation captured while the row was absent can
+// never insert over a reset lineage.
 func (d *DB) DeleteProgress(userID, editionID int64) error {
-	_, err := d.Exec(`UPDATE progress SET
-		file_id = NULL, file_offset_secs = 0, edition_position_secs = 0,
-		duration_secs = NULL, is_finished = 0, device = NULL,
-		page = NULL, percent = NULL, locator = NULL,
-		deleted = 1, revision = revision + 1, updated_at = ?
-		WHERE user_id = ? AND edition_id = ?`,
-		nowMilli(), userID, editionID)
+	_, err := d.Exec(`INSERT INTO progress (user_id, edition_id, deleted, revision, reset_generation, updated_at)
+		VALUES (?,?,1,1,1,?)
+		ON CONFLICT(user_id, edition_id) DO UPDATE SET
+			file_id = NULL, file_offset_secs = 0, edition_position_secs = 0,
+			duration_secs = NULL, is_finished = 0, device = NULL,
+			page = NULL, percent = NULL, locator = NULL,
+			deleted = 1, revision = progress.revision + 1,
+			reset_generation = progress.reset_generation + 1, updated_at = excluded.updated_at`,
+		userID, editionID, nowMilli())
 	return err
 }
 

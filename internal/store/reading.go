@@ -38,9 +38,9 @@ func (d *DB) ReadingListByUser(userID int64) (map[int64]*ReadingProgress, error)
 func (d *DB) GetReadingProgress(userID, editionID int64) (*ReadingProgress, error) {
 	var p ReadingProgress
 	var fin, deleted int
-	err := d.QueryRow(`SELECT user_id, edition_id, file_id, file_offset_secs, edition_position_secs, duration_secs, is_finished, device, updated_at, page, percent, locator, revision, deleted
+	err := d.QueryRow(`SELECT user_id, edition_id, file_id, file_offset_secs, edition_position_secs, duration_secs, is_finished, device, updated_at, page, percent, locator, revision, reset_generation, deleted
 		FROM progress WHERE user_id = ? AND edition_id = ?`, userID, editionID).
-		Scan(&p.UserID, &p.EditionID, &p.FileID, &p.FileOffsetSecs, &p.EditionPositionSecs, &p.DurationSecs, &fin, &p.Device, &p.UpdatedAt, &p.Page, &p.Percent, &p.Locator, &p.Revision, &deleted)
+		Scan(&p.UserID, &p.EditionID, &p.FileID, &p.FileOffsetSecs, &p.EditionPositionSecs, &p.DurationSecs, &fin, &p.Device, &p.UpdatedAt, &p.Page, &p.Percent, &p.Locator, &p.Revision, &p.ResetGeneration, &deleted)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
@@ -117,20 +117,27 @@ func setReadingProgressFields(q dbtx, p *ReadingProgress, fields ProgressFields)
 // caller's view of it. baseRevision 0 means "no row exists" and only ever
 // inserts; a positive base is a conditional UPDATE and never resurrects a
 // row (an absent row stays absent), so a deleted-then-recreated lineage can
-// never collide with a base captured before the delete. applied is false
-// when the row moved underneath the caller; the caller re-reads and answers
-// the stale base with the current state.
-func (d *DB) SetReadingProgressRevision(p *ReadingProgress, fields ProgressFields, baseRevision int64) (int64, bool, error) {
-	var revision int64
+// never collide with a base captured before the delete. baseGeneration < 0
+// means the caller is not generation-aware and only the revision is
+// compared (the documented compatibility scope); a presented generation
+// must additionally match the row's reset generation, so an operation
+// captured before a reset is rejected even if a later write gave the row a
+// familiar revision. applied is false when the row moved underneath the
+// caller; the caller re-reads and answers the stale base with the current
+// state. Ordinary writes never change the reset generation: it is retained
+// through tombstone clears and row recreation and advances only on
+// DeleteProgress.
+func (d *DB) SetReadingProgressRevision(p *ReadingProgress, fields ProgressFields, baseRevision, baseGeneration int64) (int64, int64, bool, error) {
+	var revision, generation int64
 	var err error
 	if baseRevision == 0 {
 		err = d.QueryRow(`INSERT INTO progress (user_id, edition_id, file_id, file_offset_secs, edition_position_secs, duration_secs, is_finished, device, updated_at, page, percent, locator, revision)
 			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1)
 			ON CONFLICT(user_id, edition_id) DO NOTHING
-			RETURNING revision`,
-			p.UserID, p.EditionID, p.FileID, p.FileOffsetSecs, p.EditionPositionSecs, p.DurationSecs, p.IsFinished, p.Device, nowMilli(), p.Page, p.Percent, p.Locator).Scan(&revision)
+			RETURNING revision, reset_generation`,
+			p.UserID, p.EditionID, p.FileID, p.FileOffsetSecs, p.EditionPositionSecs, p.DurationSecs, p.IsFinished, p.Device, nowMilli(), p.Page, p.Percent, p.Locator).Scan(&revision, &generation)
 	} else {
-		err = d.QueryRow(`UPDATE progress SET
+		query := `UPDATE progress SET
 			file_id = CASE WHEN ? THEN ? ELSE progress.file_id END,
 			file_offset_secs = CASE WHEN ? THEN ? ELSE progress.file_offset_secs END,
 			edition_position_secs = CASE WHEN ? THEN ? ELSE progress.edition_position_secs END,
@@ -143,8 +150,8 @@ func (d *DB) SetReadingProgressRevision(p *ReadingProgress, fields ProgressField
 			locator = coalesce(?, progress.locator),
 			deleted = 0,
 			revision = progress.revision + 1
-		WHERE user_id = ? AND edition_id = ? AND revision = ?
-		RETURNING revision`,
+		WHERE user_id = ? AND edition_id = ? AND revision = ?`
+		args := []any{
 			fields.Position, p.FileID,
 			fields.Position, p.FileOffsetSecs,
 			fields.Position, p.EditionPositionSecs,
@@ -152,15 +159,21 @@ func (d *DB) SetReadingProgressRevision(p *ReadingProgress, fields ProgressField
 			fields.Finished, p.IsFinished,
 			fields.Device, p.Device,
 			nowMilli(), p.Page, p.Percent, p.Locator,
-			p.UserID, p.EditionID, baseRevision).Scan(&revision)
+			p.UserID, p.EditionID, baseRevision,
+		}
+		if baseGeneration >= 0 {
+			query += ` AND reset_generation = ?`
+			args = append(args, baseGeneration)
+		}
+		err = d.QueryRow(query+` RETURNING revision, reset_generation`, args...).Scan(&revision, &generation)
 	}
 	if errors.Is(err, sql.ErrNoRows) {
-		return 0, false, nil
+		return 0, 0, false, nil
 	}
 	if err != nil {
-		return 0, false, err
+		return 0, 0, false, err
 	}
-	return revision, true, nil
+	return revision, generation, true, nil
 }
 
 // EditionPages is Edition plus page_count; the scanner upserts book editions

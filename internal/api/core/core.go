@@ -1128,15 +1128,18 @@ func (a *API) getProgress(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]string{"error": "progress unavailable"})
 		return
 	}
-	m := map[string]any{"editionId": eid, "position": 0, "isFinished": false, "revision": 0}
+	m := map[string]any{"editionId": eid, "position": 0, "isFinished": false, "revision": 0, "resetGeneration": 0, "deleted": false}
 	if err == nil {
 		if p.Deleted {
 			m["revision"] = p.Revision
+			m["resetGeneration"] = p.ResetGeneration
+			m["deleted"] = true
 		} else {
 			m = map[string]any{
 				"editionId": p.EditionID, "fileId": p.FileID, "offset": p.FileOffsetSecs,
 				"position": p.EditionPositionSecs, "duration": p.DurationSecs, "isFinished": p.IsFinished,
 				"updatedAt": p.UpdatedAt, "revision": p.Revision,
+				"resetGeneration": p.ResetGeneration, "deleted": false,
 			}
 			if p.Page != nil {
 				m["page"] = *p.Page
@@ -1176,6 +1179,7 @@ func (a *API) setProgress(w http.ResponseWriter, r *http.Request) {
 		Percent  *float64 `json:"percent"`
 		Locator  *string  `json:"locator"`
 		Revision *int64   `json:"revision"`
+		ResetGen *int64   `json:"resetGeneration"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, 400, map[string]string{"error": "bad request"})
@@ -1220,6 +1224,10 @@ func (a *API) setProgress(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "revision must be nonnegative"})
 		return
 	}
+	if body.ResetGen != nil && *body.ResetGen < 0 {
+		writeJSON(w, 400, map[string]string{"error": "resetGeneration must be nonnegative"})
+		return
+	}
 	fields := store.ProgressFields{Finished: body.Finished != nil}
 	p := &store.ReadingProgress{
 		Progress: store.Progress{UserID: auth.UserID(r), EditionID: eid},
@@ -1244,7 +1252,11 @@ func (a *API) setProgress(w http.ResponseWriter, r *http.Request) {
 		fields.Device = true
 	}
 	if body.Revision != nil {
-		revision, applied, err := a.DB.SetReadingProgressRevision(p, fields, *body.Revision)
+		baseGeneration := int64(-1)
+		if body.ResetGen != nil {
+			baseGeneration = *body.ResetGen
+		}
+		revision, generation, applied, err := a.DB.SetReadingProgressRevision(p, fields, *body.Revision, baseGeneration)
 		if err != nil {
 			writeJSON(w, 500, map[string]string{"error": "internal error"})
 			return
@@ -1261,6 +1273,7 @@ func (a *API) setProgress(w http.ResponseWriter, r *http.Request) {
 			current := map[string]any{
 				"editionId": cur.EditionID, "position": cur.EditionPositionSecs,
 				"isFinished": cur.IsFinished, "revision": cur.Revision,
+				"resetGeneration": cur.ResetGeneration, "deleted": cur.Deleted,
 			}
 			if cur.Page != nil {
 				current["page"] = *cur.Page
@@ -1271,10 +1284,14 @@ func (a *API) setProgress(w http.ResponseWriter, r *http.Request) {
 			if cur.Locator != nil {
 				current["locator"] = *cur.Locator
 			}
+			if body.ResetGen != nil && cur.ResetGeneration != *body.ResetGen {
+				writeJSON(w, 409, map[string]any{"error": "progress was reset", "current": current})
+				return
+			}
 			writeJSON(w, 409, map[string]any{"error": "stale progress revision", "current": current})
 			return
 		}
-		writeJSON(w, 200, map[string]any{"ok": true, "revision": revision})
+		writeJSON(w, 200, map[string]any{"ok": true, "revision": revision, "resetGeneration": generation})
 		return
 	}
 	if err := a.DB.SetReadingProgressFields(p, fields); err != nil {

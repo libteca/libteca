@@ -24,6 +24,7 @@ function PdfSession(props: PdfReaderProps) {
   const countRef = useRef<number | undefined>();
   const saver = useProgressSaver(props.editionId, props.progress?.revision ?? 0, {
     page: props.progress?.page, percent: props.progress?.percent,
+    resetGeneration: props.progress?.resetGeneration,
   });
   const download = media(`/editions/${props.editionId}/download`);
 

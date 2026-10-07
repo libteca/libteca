@@ -144,18 +144,18 @@ func TestSetReadingProgressRevisionRejectsStaleBase(t *testing.T) {
 	}
 	eid := revisionTestEdition(t, db)
 	page := int64(10)
-	rev, applied, err := db.SetReadingProgressRevision(&store.ReadingProgress{
+	rev, _, applied, err := db.SetReadingProgressRevision(&store.ReadingProgress{
 		Progress: store.Progress{UserID: 1, EditionID: eid}, Page: &page,
-	}, store.ProgressFields{Position: false}, 0)
+	}, store.ProgressFields{Position: false}, 0, -1)
 	if err != nil || !applied {
 		t.Fatalf("first revisioned write = rev %d applied %v err %v", rev, applied, err)
 	}
 	if rev != 1 {
 		t.Fatalf("first write revision = %d, want 1", rev)
 	}
-	_, applied, err = db.SetReadingProgressRevision(&store.ReadingProgress{
+	_, _, applied, err = db.SetReadingProgressRevision(&store.ReadingProgress{
 		Progress: store.Progress{UserID: 1, EditionID: eid}, Page: &page,
-	}, store.ProgressFields{Position: false}, 0)
+	}, store.ProgressFields{Position: false}, 0, -1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,9 +163,9 @@ func TestSetReadingProgressRevisionRejectsStaleBase(t *testing.T) {
 		t.Fatal("stale base revision accepted")
 	}
 	next := int64(11)
-	rev, applied, err = db.SetReadingProgressRevision(&store.ReadingProgress{
+	rev, _, applied, err = db.SetReadingProgressRevision(&store.ReadingProgress{
 		Progress: store.Progress{UserID: 1, EditionID: eid}, Page: &next,
-	}, store.ProgressFields{Position: false}, 1)
+	}, store.ProgressFields{Position: false}, 1, -1)
 	if err != nil || !applied || rev != 2 {
 		t.Fatalf("current-base write = rev %d applied %v err %v", rev, applied, err)
 	}
@@ -182,9 +182,9 @@ func TestLegacyProgressWritesAdvanceRevision(t *testing.T) {
 	}
 	eid := revisionTestEdition(t, db)
 	page := int64(10)
-	if _, _, err := db.SetReadingProgressRevision(&store.ReadingProgress{
+	if _, _, _, err := db.SetReadingProgressRevision(&store.ReadingProgress{
 		Progress: store.Progress{UserID: 1, EditionID: eid}, Page: &page,
-	}, store.ProgressFields{Position: false}, 0); err != nil {
+	}, store.ProgressFields{Position: false}, 0, -1); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.SetReadingProgressFields(&store.ReadingProgress{
@@ -196,9 +196,9 @@ func TestLegacyProgressWritesAdvanceRevision(t *testing.T) {
 	if err != nil || p.Revision != 2 {
 		t.Fatalf("legacy write did not advance revision: %+v err %v", p, err)
 	}
-	_, applied, err := db.SetReadingProgressRevision(&store.ReadingProgress{
+	_, _, applied, err := db.SetReadingProgressRevision(&store.ReadingProgress{
 		Progress: store.Progress{UserID: 1, EditionID: eid}, Page: &page,
-	}, store.ProgressFields{Position: false}, 1)
+	}, store.ProgressFields{Position: false}, 1, -1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,14 +221,14 @@ func TestDeleteProgressResetsRevisionLineage(t *testing.T) {
 	}
 	eid := revisionTestEdition(t, db)
 	page := int64(10)
-	if _, _, err := db.SetReadingProgressRevision(&store.ReadingProgress{
+	if _, _, _, err := db.SetReadingProgressRevision(&store.ReadingProgress{
 		Progress: store.Progress{UserID: 1, EditionID: eid}, Page: &page,
-	}, store.ProgressFields{Position: false}, 0); err != nil {
+	}, store.ProgressFields{Position: false}, 0, -1); err != nil {
 		t.Fatal(err)
 	}
-	_, applied, err := db.SetReadingProgressRevision(&store.ReadingProgress{
+	_, _, applied, err := db.SetReadingProgressRevision(&store.ReadingProgress{
 		Progress: store.Progress{UserID: 1, EditionID: eid}, Page: &page,
-	}, store.ProgressFields{Position: false}, 99)
+	}, store.ProgressFields{Position: false}, 99, -1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,9 +236,9 @@ func TestDeleteProgressResetsRevisionLineage(t *testing.T) {
 		t.Fatal("absent-row conditional write with a positive base must not apply")
 	}
 	next := int64(11)
-	if _, _, err := db.SetReadingProgressRevision(&store.ReadingProgress{
+	if _, _, _, err := db.SetReadingProgressRevision(&store.ReadingProgress{
 		Progress: store.Progress{UserID: 1, EditionID: eid}, Page: &next,
-	}, store.ProgressFields{Position: false}, 1); err != nil {
+	}, store.ProgressFields{Position: false}, 1, -1); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.DeleteProgress(1, eid); err != nil {
@@ -248,22 +248,22 @@ func TestDeleteProgressResetsRevisionLineage(t *testing.T) {
 	if err != nil || !p.Deleted || p.Revision != 3 || p.Page != nil || p.Percent != nil || p.Locator != nil || p.IsFinished {
 		t.Fatalf("tombstone = %+v err %v, want deleted revision 3 with cleared fields", p, err)
 	}
-	if _, applied, err := db.SetReadingProgressRevision(&store.ReadingProgress{
+	if _, _, applied, err := db.SetReadingProgressRevision(&store.ReadingProgress{
 		Progress: store.Progress{UserID: 1, EditionID: eid}, Page: &page,
-	}, store.ProgressFields{Position: false}, 1); err != nil || applied {
+	}, store.ProgressFields{Position: false}, 1, -1); err != nil || applied {
 		t.Fatalf("stale pre-delete base accepted: applied %v err %v", applied, err)
 	}
-	if _, applied, err := db.SetReadingProgressRevision(&store.ReadingProgress{
+	if _, _, applied, err := db.SetReadingProgressRevision(&store.ReadingProgress{
 		Progress: store.Progress{UserID: 1, EditionID: eid}, Page: &page,
-	}, store.ProgressFields{Position: false}, 0); err != nil || applied {
+	}, store.ProgressFields{Position: false}, 0, -1); err != nil || applied {
 		t.Fatalf("base-0 insert onto a tombstone must conflict: applied %v err %v", applied, err)
 	}
 	if _, err := db.GetProgress(1, eid); err != store.ErrNotFound {
 		t.Fatalf("compatibility reader must skip the tombstone: %v", err)
 	}
-	rev, applied, err := db.SetReadingProgressRevision(&store.ReadingProgress{
+	rev, _, applied, err := db.SetReadingProgressRevision(&store.ReadingProgress{
 		Progress: store.Progress{UserID: 1, EditionID: eid}, Page: &page,
-	}, store.ProgressFields{Position: false}, 3)
+	}, store.ProgressFields{Position: false}, 3, -1)
 	if err != nil || !applied || rev != 4 {
 		t.Fatalf("conditional restart on the tombstone revision = rev %d applied %v err %v, want rev 4", rev, applied, err)
 	}
@@ -308,9 +308,9 @@ func TestProgressReadersReportRevision(t *testing.T) {
 	eid := revisionTestEdition(t, db)
 	page := int64(3)
 	for i := 0; i < 3; i++ {
-		if _, _, err := db.SetReadingProgressRevision(&store.ReadingProgress{
+		if _, _, _, err := db.SetReadingProgressRevision(&store.ReadingProgress{
 			Progress: store.Progress{UserID: 1, EditionID: eid}, Page: &page,
-		}, store.ProgressFields{}, int64(i)); err != nil {
+		}, store.ProgressFields{}, int64(i), -1); err != nil {
 			t.Fatal(err)
 		}
 	}

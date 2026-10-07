@@ -730,3 +730,34 @@ backup = `libteca backup` (15g); neutron-go published (17).
     re-reading job status (LT-F14), and watch roots resolve through
     symlinks before arming with alias spelling preserved in storage
     (LT-F16).
+
+55. **Reset wins over concurrent recovery (LT-F11/LT-F12 pass, 2026-10-06;
+    policy accepted by the owner 2026-10-07).** An explicit progress reset
+    cancels earlier pending reading work: a reset advances a server-owned
+    reset generation (migration 0017) that ordinary writes never change, is
+    created atomically even when no row exists (resetting an absent row
+    inserts a tombstone, so a base-0 offline record can never insert over a
+    reset lineage), and is returned on GET, successful POST and 409. The
+    reader queue carries its operation's generation through every retry
+    and conflict; a rejected generation never rebases — the stale
+    operation is dropped from delivery while its durable record is kept in
+    place as quarantined evidence until a deliberate new save supersedes
+    it, and the reader surfaces "progress was reset" instead of silently
+    replaying. Recovery never max-merges across generations. Legacy stored
+    records without a generation are migrated to generation 0 — the only
+    lineage they can ever match — rather than guessing from a fresh read.
+    Durable queue storage is now immutable uniquely keyed records
+    (per-tab writer id + monotonic sequence): recovery publishes the
+    merged replacement before retiring captured sources, same-producer
+    supersession and acknowledgement remove only exact keys, and a live
+    writer's newer record can never be deleted by a racing compare-then-
+    remove in another tab. IndexedDB was considered and deferred: the
+    immutable-key discipline closes the demonstrated race without a
+    storage-backend migration, and old records remain readable. Absent
+    resetGeneration in a request keeps the documented compatibility scope
+    (revision-only and unconditional writers — ABS/Jellyfin/Subsonic
+    faces, media savers — are unchanged). Reverse: (a) dropping the
+    generation fence restores silent stale-base resurrection after a
+    reset; (b) rewritable shared keys restore the cross-tab
+    compare-then-delete loss window; (c) merging across generations
+    replays positions the owner explicitly discarded.

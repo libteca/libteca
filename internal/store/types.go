@@ -81,6 +81,7 @@ type Progress struct {
 	Device              *string
 	UpdatedAt           int64
 	Revision            int64
+	ResetGeneration     int64
 	Deleted             bool
 }
 

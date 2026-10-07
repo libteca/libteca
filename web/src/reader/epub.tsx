@@ -83,6 +83,7 @@ function EpubSession(props: EpubReaderProps) {
   const [sectionHref, setSectionHref] = useState("");
   const saver = useProgressSaver(props.editionId, props.progress?.revision ?? 0, {
     page: props.progress?.page, percent: props.progress?.percent,
+    resetGeneration: props.progress?.resetGeneration,
   });
   const keyHandler = useRef<(e: KeyboardEvent) => void>(() => {});
   const navigate = useCallback((action: (rendition: Rendition) => Promise<unknown>) => {

@@ -11,7 +11,7 @@ LT-A01..A07 stay decision-gated and untouched.
 | LT-F05 stale sha256 after failed rehash | FIXED by pass C (C-02) | `internal/store/queries.go` updateFileRow writes `sha256 = ?` directly; games warm-skip requires a stored hash via FileStatByPathWithSHA; regressions TestScanGamesFailedRehashClearsStaleSHA256 |
 | LT-F15 background jobs ignore server cancellation | PARTIALLY fixed by pass C (C-05) | launch contexts are `a.scanCtx()` with per-unit cancellation checks; residual: final-unit cancellation still published `done` — fixed here |
 | LT-F06/F07/F08, LT-F01..F04, LT-F09, LT-F10, LT-F13, LT-F14, LT-F16, LT-F17 | SURVIVED pass C | verified at the exact evidence sites before fixing; all fixed in this pass |
-| LT-F11 reader reset-wins policy, LT-F12 atomic cross-tab recovery | SKIPPED, owner-gated | implementation waits on explicit owner acceptance of the reset-wins policy; LT-F12 depends on it |
+| LT-F11 reader reset-wins policy, LT-F12 atomic cross-tab recovery | LANDED in the 2026-10-07 extension below | owner accepted the reset-wins policy; see "Extension" section |
 
 ## What was implemented
 
@@ -235,3 +235,121 @@ gate for both importers.
   green.
 - web: `npx tsc --noEmit` clean; `npx vitest run` 335/335 in 25 files
   (baseline 324/24); `npm run build` clean.
+
+## Extension (2026-10-07): LT-F11/LT-F12 landed after owner accepted the reset-wins policy
+
+Verified at `6ac48f2` first: both findings survived the deeper pass
+unchanged. DeleteProgress still created a tombstone only when a row
+existed and bumped no lineage counter; the 409 `current` payload still
+omitted any reset/deleted signal; the reader sender still adopted the
+conflict revision, max-merged against a position-free tombstone, and
+resent the pre-reset page at the adopted revision (reproduction
+re-confirmed live: baseline returns 200 `revision:3` for the relabeled
+replay — the reset is silently undone). createProgressStorage still
+retired foreign records with a compare-then-remove over keys a live
+writer keeps overwriting, so a write landing between the compare and the
+delete of a shared key is lost with only the absorber's older copy
+surviving.
+
+### LT-F11 reset wins
+
+- Migration 0017 adds `progress.reset_generation` (default 0 = never
+  reset). DeleteProgress is one atomic upsert: an existing row is
+  tombstoned with revision+1 AND generation+1; an absent row gets a
+  tombstone (revision 1, generation 1) so a base-0 offline record can
+  never insert over a reset lineage. Ordinary writers never touch the
+  generation — it is retained through tombstone clears and row
+  recreation and advances only on reset.
+- `SetReadingProgressRevision` takes a base generation: negative keeps
+  the documented revision-only compatibility scope (ABS/Jellyfin/
+  Subsonic, media savers, beacons without the field — unchanged); a
+  presented generation is compared in the same atomic statement.
+- GET /progress answers `resetGeneration` and `deleted` in every branch
+  (absent, tombstone, live). POST answers them on 200 and inside the 409
+  `current`; a generation mismatch answers 409 with error `progress was
+  reset` (distinct from `stale progress revision`).
+- The reader sender classifies every 409 by generation BEFORE the
+  merge-resend loop: same generation keeps the documented adopt/merge/
+  resend behavior; a different generation throws ResetConflictError. The
+  queue drops the operation without retry, rebases its base+generation
+  onto the server state the conflict carried, leaves the durable record
+  in place as quarantined evidence (finished intent included), and the
+  reader shows "progress was reset". A deliberate new save publishes a
+  fresh operation at the post-reset base and supersedes the quarantine.
+  Mount-time quarantine: recovery records older than the server
+  generation known from GET are not replayed at all. Legacy records
+  without a generation parse as generation 0 — the only lineage they can
+  ever match — never relabeled from a fresh read.
+- Tests (Go): TestDeleteProgressTombstonesAbsentRow,
+  TestResetGenerationFenceRejectsPreResetOperations (store);
+  TestResetWinsAgainstRelabeledReplay,
+  TestResetConflictResponseCarriesLineage (core HTTP, fail-before
+  demonstrated at `6ac48f2` in a clean worktree: post-reset GET lacks
+  lineage keys; relabeled pre-reset replay is ACCEPTED with 200 and
+  resurrects page 80; ordinary-conflict `current` lacks lineage).
+- Tests (web): "does not relabel a pre-reset operation after a reset
+  conflict", "establishes a fresh operation on deliberate post-reset
+  input", "retains explicit finished intent inside the quarantined
+  evidence", "skips replay when the server lineage advanced before
+  mount", "still merges and resends an ordinary same-generation
+  conflict", plus queue-level quarantine/rebase tests (fail-before at
+  baseline: the hook reproduction was called 2 times, not 1).
+
+### LT-F12 transactional cross-tab retirement
+
+- Durable queue storage is rewritten as immutable uniquely keyed records:
+  every publish writes a new key (per-tab writer id + monotonic
+  sequence) and no key is ever rewritten. A racing recovery can only
+  retire the exact record it captured (compare-unchanged + removeItem of
+  that exact key); a live writer's newer record lives under a different
+  key and cannot be deleted underneath it. Recovery publishes the merged
+  replacement BEFORE retiring sources (write-before-retire preserved,
+  including on quota failure). Same-producer supersession removes the
+  writer's own previous key only after the replacement is durable;
+  clear() acknowledges the exact published version instead of deleting
+  whatever occupies a mutable key.
+- Recovery merges only records in the newest reset generation; older-
+  generation records are left in place as quarantined evidence (bounded
+  residue: one record per tab per reset), never max-merged (LT-F11
+  interaction).
+- IndexedDB was considered and deferred: the immutable-key discipline
+  closes the demonstrated race without a storage-backend migration, and
+  legacy records remain readable/migratable in place. Storage denial
+  still degrades to the in-memory queue.
+- Tests: "keeps a live writer's newer record when recovery retires its
+  older one" (the forced interleaving — a write injected between the
+  compare and the delete survives; fails at baseline),
+  "acknowledges only the exact immutable version it published",
+  "leaves older-generation evidence in place instead of merging or
+  dropping it", "keeps a durable full-winner copy across two successive
+  recovering tabs", "never merges recovery across reset generations",
+  "migrates legacy records by assigning the never-reset generation",
+  plus the preserved write-before-retire/quota/updated-source controls.
+
+### Scope and limits
+
+- Absent `resetGeneration` in a request is the documented compatibility
+  boundary: unconditional faces and media savers are untouched; a
+  strictly global reset guarantee for them would be its own scoped
+  change.
+- Quarantined lower-generation records are retained (never silently
+  purged); a deliberate fresh save supersedes the tab's own record.
+- Go HTTP/browser integration against a real deployed server was not
+  run; coverage is the modeled-server vitest suite plus real-handler Go
+  HTTP tests.
+
+### Extension verification (all on the working tree at `6ac48f2`+changes)
+
+- `go vet ./...` — clean; `gofmt` — clean.
+- `go test ./... -count=1 -timeout 900s` — all packages green.
+- `go test -race ./internal/store/ ./internal/api/core/ ./internal/api/abs/
+  ./internal/api/jellyfin/ ./internal/api/subsonic/ ./internal/api/opds/
+  -count=1` — green.
+- web: `npx tsc --noEmit` clean; `npx vitest run` 348/348 in 25 files
+  (baseline 335; +13); `npm run build` clean; `make build` clean
+  (embedded webdist + binary).
+- Fail-before evidence: new Go and web tests copied into clean worktrees
+  at `6ac48f2` — API tests fail on the missing lineage payload and the
+  accepted relabeled replay (200 `revision:3`); the web hook
+  reproduction shows the relabeled resend firing twice; the
+  interleaving test loses the injected newer record.

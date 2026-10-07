@@ -1028,7 +1028,9 @@ Verification: build/vet/gofmt clean; go test ./... 23 pkgs green
 Reconciliation first: LT-F05 was already fixed by pass C (C-02), LT-F15
 partially (C-05 launch contexts; the final-unit residual closed here).
 LT-F11 (reset-wins reader-recovery policy) and LT-F12 (atomic cross-tab
-recovery, which depends on it) remain OWNER-GATED — an explicit owner acceptance of the reset-wins policy is required before implementation.
+recovery, which depends on it) remained OWNER-GATED — CLOSED 2026-10-07
+after the owner accepted the reset-wins policy (see the extension section
+in AUDIT-CHATGPT-14.md and decision 55; 17 of 17 closed).
 
 Closed (all verified against `237633f` before fixing; details and test
 names in AUDIT-CHATGPT-14.md):
@@ -1080,9 +1082,12 @@ names in AUDIT-CHATGPT-14.md):
   counters and progress persistence cannot contend with its own open write
   transaction.
 
-Open (owner-gated): **LT-F11 reset-wins policy** (needs
-Tyler's explicit acceptance; then LT-F12's transactional durable store
-follows). External schema confirmations listed in AUDIT-CHATGPT-14.md
+Closed 2026-10-07 (was owner-gated): **LT-F11 reset-wins policy** —
+owner accepted; implemented with **LT-F12** (generation-fenced conditional
+writes, atomic absent-row tombstones, quarantined durable evidence,
+immutable uniquely keyed cross-tab storage; absent-resetGeneration requests
+keep the documented compatibility scope). External schema confirmations
+listed in AUDIT-CHATGPT-14.md
 (ABS audioFiles JSON keys, bookAuthors/authors names, mediaProgresses table
 name; Kavita identity-table columns) — adapters are written against the
 note's stated contract with tolerant fallbacks where names were uncertain;

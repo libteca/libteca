@@ -3,19 +3,29 @@ export type ProgressPatch = {
 };
 
 export type ServerProgress = {
-  revision?: number; page?: number; percent?: number;
+  revision?: number; resetGeneration?: number; deleted?: boolean;
+  page?: number; percent?: number;
   locator?: string; isFinished?: boolean;
 };
 
-export type StoredProgress = { baseRevision: number; patch: ProgressPatch };
+export type StoredProgress = { baseRevision: number; resetGeneration: number; patch: ProgressPatch };
 
 export type QueueStorage = {
   load: () => StoredProgress | null;
-  save: (patch: ProgressPatch, baseRevision: number) => void;
+  save: (patch: ProgressPatch, baseRevision: number, resetGeneration: number) => void;
+  clear: () => void;
 };
 
+export class ResetConflictError extends Error {
+  constructor(readonly server: ServerProgress) {
+    super("progress was reset");
+  }
+}
+
+type SendResult = { revision?: number; resetGeneration?: number };
+
 type QueueOptions = {
-  send: (patch: ProgressPatch, baseRevision: number) => Promise<number | void>;
+  send: (patch: ProgressPatch, baseRevision: number, resetGeneration: number) => Promise<SendResult | void>;
   prepare?: (patch: ProgressPatch) => ProgressPatch;
   onError?: (error: unknown, terminal: boolean) => void;
   shouldRetry?: (error: unknown) => boolean;
@@ -23,11 +33,16 @@ type QueueOptions = {
   maxRetryMs?: number;
   storage?: QueueStorage;
   initialBaseRevision?: number;
+  initialResetGeneration?: number;
 };
 
 // Strict validation for patches restored from storage: property names AND
 // types/ranges are checked so a malformed record is quarantined instead of
-// replayed forever as a doomed request.
+// replayed forever as a doomed request. resetGeneration is absent on
+// records written before the reset-wins protocol: the floor value 0 is the
+// only lineage such a record can ever match (generations only rise), so it
+// replays unchanged against never-reset servers and is rejected once any
+// reset has happened - never relabeled from a fresh read.
 export function parseProgressPatch(value: unknown): ProgressPatch {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("invalid saved progress");
@@ -64,30 +79,46 @@ export function parseStoredProgress(value: unknown): StoredProgress {
   if (typeof v.baseRevision !== "number" || !Number.isSafeInteger(v.baseRevision) || v.baseRevision < 0) {
     throw new Error("invalid saved progress revision");
   }
-  return { baseRevision: v.baseRevision, patch: parseProgressPatch(v.patch) };
+  let resetGeneration = 0;
+  if (v.resetGeneration !== undefined) {
+    if (typeof v.resetGeneration !== "number" || !Number.isSafeInteger(v.resetGeneration) || v.resetGeneration < 0) {
+      throw new Error("invalid saved progress generation");
+    }
+    resetGeneration = v.resetGeneration;
+  }
+  return { baseRevision: v.baseRevision, resetGeneration, patch: parseProgressPatch(v.patch) };
 }
 
 // Serial, merge-preserving delivery queue for reader progress patches. The
-// queue owns the base revision for its (user, edition) scope: a persisted
-// record replays with the revision it was BASED on (never one minted later
-// by a fresh page load - that would relabel a stale patch as current and
-// the server would accept it without the conflict the merge logic depends
-// on), and the base only advances when the server acknowledges a write or
-// answers a conflict with its current state. Enqueued patches merge
-// field-by-field (a completion update never wipes the page state queued
-// before it), exactly one delivery runs at a time, and a retryable failure
-// is reinserted UNDER newer patches and retried with backoff. A failure the
-// shouldRetry policy declares permanent drops its patch (a malformed or
-// 404-gone operation must not wedge every later save behind it) and is
-// reported as terminal. When a storage adapter is supplied the union of the
-// in-flight batch and the pending patch survives reloads with its base
-// revision; the entry is only cleared after a delivery succeeds, so a
-// crash between take and ack replays the batch on the next open against
-// the SAME base - safe under the server's conditional write.
+// queue owns the base revision AND reset generation for its (user, edition)
+// scope: a persisted record replays with the revision and generation it was
+// BASED on (never ones minted later by a fresh page load - that would
+// relabel a stale patch as current and the server would accept it without
+// the conflict the merge logic depends on), and the base only advances when
+// the server acknowledges a write or answers a conflict with its current
+// state. Enqueued patches merge field-by-field (a completion update never
+// wipes the page state queued before it), exactly one delivery runs at a
+// time, and a retryable failure is reinserted UNDER newer patches and
+// retried with backoff. A failure the shouldRetry policy declares permanent
+// drops its patch (a malformed or 404-gone operation must not wedge every
+// later save behind it) and is reported as terminal. A ResetConflictError
+// (the server lineage was reset after this operation was captured) drops
+// the conflicted batch without retrying and without publishing a
+// replacement over it: the durable record keeps the discarded operation as
+// recoverable evidence until a deliberate new save supersedes it, while
+// the queue rebases onto the server state the conflict carried - patches
+// enqueued DURING the conflicting delivery are fresh local input and are
+// delivered on the post-reset lineage next. When a storage adapter is
+// supplied the union of the in-flight batch and the pending patch
+// survives reloads with its base; the
+// record is only acknowledged after a delivery succeeds, so a crash between
+// take and ack replays the batch on the next open against the SAME base -
+// safe under the server's conditional write.
 export class ProgressQueue {
   private pending: ProgressPatch = {};
   private inFlight: ProgressPatch | undefined;
   private baseRevision: number;
+  private resetGeneration: number;
   private sending = false;
   private stopped = false;
   private failures = 0;
@@ -95,12 +126,14 @@ export class ProgressQueue {
 
   constructor(private readonly options: QueueOptions) {
     this.baseRevision = Math.max(0, Math.trunc(options.initialBaseRevision ?? 0));
+    this.resetGeneration = Math.max(0, Math.trunc(options.initialResetGeneration ?? 0));
     if (options.storage) {
       try {
         const stored = options.storage.load();
-        if (stored) {
+        if (stored && stored.resetGeneration >= this.resetGeneration) {
           this.pending = parseProgressPatch(stored.patch);
           this.baseRevision = stored.baseRevision;
+          this.resetGeneration = stored.resetGeneration;
         }
       } catch {
         this.pending = {};
@@ -112,6 +145,10 @@ export class ProgressQueue {
     return this.baseRevision;
   }
 
+  generation(): number {
+    return this.resetGeneration;
+  }
+
   snapshot(): ProgressPatch {
     return { ...this.pending };
   }
@@ -120,6 +157,7 @@ export class ProgressQueue {
     const patch = this.clean({ ...this.inFlight, ...this.pending });
     return {
       baseRevision: this.baseRevision,
+      resetGeneration: this.resetGeneration,
       patch: this.options.prepare ? this.options.prepare(patch) : patch,
     };
   }
@@ -134,7 +172,9 @@ export class ProgressQueue {
 
   private persist(): void {
     try {
-      this.options.storage?.save(this.clean({ ...this.inFlight, ...this.pending }), this.baseRevision);
+      const patch = this.clean({ ...this.inFlight, ...this.pending });
+      if (Object.keys(patch).length === 0) this.options.storage?.clear();
+      else this.options.storage?.save(patch, this.baseRevision, this.resetGeneration);
     } catch { /* storage unavailable */ }
   }
 
@@ -142,6 +182,15 @@ export class ProgressQueue {
     if (this.stopped) return;
     this.pending = { ...this.pending, ...this.clean(patch) };
     this.persist();
+  }
+
+  private adoptBase(revision: unknown, generation: unknown): void {
+    if (typeof revision === "number" && Number.isSafeInteger(revision) && revision >= 0) {
+      this.baseRevision = revision;
+    }
+    if (typeof generation === "number" && Number.isSafeInteger(generation) && generation >= 0) {
+      this.resetGeneration = generation;
+    }
   }
 
   async flush(): Promise<void> {
@@ -159,15 +208,20 @@ export class ProgressQueue {
         this.persist();
         try {
           const prepared = this.options.prepare ? this.options.prepare({ ...batch }) : batch;
-          const nextBase = await this.options.send(prepared, this.baseRevision);
+          const next = await this.options.send(prepared, this.baseRevision, this.resetGeneration);
           this.failures = 0;
           this.inFlight = undefined;
-          if (typeof nextBase === "number" && Number.isSafeInteger(nextBase) && nextBase >= 0) {
-            this.baseRevision = nextBase;
+          if (next && typeof next === "object") {
+            this.adoptBase(next.revision, next.resetGeneration);
           }
           this.persist();
         } catch (error) {
           this.inFlight = undefined;
+          if (error instanceof ResetConflictError) {
+            this.adoptBase(error.server.revision, error.server.resetGeneration);
+            this.notifyError(error, true);
+            continue;
+          }
           const retryable = this.options.shouldRetry ? this.options.shouldRetry(error) : true;
           if (!retryable) {
             this.persist();
@@ -252,11 +306,20 @@ export function mergeServerProgress(server: ServerProgress, patch: ProgressPatch
   return merged;
 }
 
+// Merges recovery records from one reset generation: numeric reading
+// position is monotonic within a lineage, so the farther-along side wins
+// and takes its percent/locator with it, while explicit completion intent
+// survives. Records from a lower generation describe a lineage the server
+// explicitly discarded and are excluded from the merge entirely - never
+// max-merged into the current one; the storage layer keeps them in place
+// as quarantined evidence.
 export function mergeStoredProgress(records: readonly StoredProgress[]): StoredProgress | null {
   if (records.length === 0) return null;
+  const newest = records.reduce((max, r) => Math.max(max, r.resetGeneration), 0);
   let patch: ProgressPatch = {};
   let baseRevision = Number.MAX_SAFE_INTEGER;
   for (const record of records) {
+    if (record.resetGeneration !== newest) continue;
     const delta = mergeServerProgress(patch, record.patch);
     if (delta.page !== undefined || delta.percent !== undefined || delta.locator !== undefined) {
       const finished = patch.finished;
@@ -267,39 +330,77 @@ export function mergeStoredProgress(records: readonly StoredProgress[]): StoredP
     }
     baseRevision = Math.min(baseRevision, record.baseRevision);
   }
-  return Object.keys(patch).length > 0 ? { baseRevision, patch } : null;
+  return Object.keys(patch).length > 0 ? { baseRevision: baseRevision === Number.MAX_SAFE_INTEGER ? 0 : baseRevision, resetGeneration: newest, patch } : null;
 }
 
-export function createProgressStorage(storage: Storage, prefix: string, ownKey: string): QueueStorage {
+// Durable queue storage as immutable, uniquely keyed records. Every publish
+// writes a NEW key (writer id + monotonic sequence) and never rewrites a
+// key that already exists, so a concurrent reader in another tab can only
+// ever retire the exact record it captured: a newer record published by a
+// live writer lands under a different key and cannot be removed by a
+// compare-then-delete racing against that writer. Recovery publishes the
+// merged replacement BEFORE retiring any captured source (write-before-
+// retire), same-producer supersession removes the writer's own previous
+// record only after the replacement is durable, and clear() acknowledges
+// the exact published version rather than whatever value occupies a
+// mutable key. Records from an older reset generation are left in place as
+// quarantined evidence; they are never merged into the current lineage.
+export function createProgressStorage(storage: Storage, prefix: string, writerId: string): QueueStorage {
+  let seq = 0;
+  let lastKey: string | undefined;
+  const publish = (patch: ProgressPatch, baseRevision: number, resetGeneration: number): void => {
+    seq += 1;
+    const key = `${prefix}${writerId}-${seq}`;
+    storage.setItem(key, JSON.stringify({ baseRevision, resetGeneration, patch }));
+    lastKey = key;
+  };
   return {
     load: () => {
       const keys = Array.from({ length: storage.length }, (_, i) => storage.key(i));
-      const records: StoredProgress[] = [];
-      const sources: { key: string; raw: string }[] = [];
+      const records: { key: string; raw: string; record: StoredProgress }[] = [];
       for (const key of keys) {
-        if (!key || !key.startsWith(prefix) || key === ownKey) continue;
+        if (!key || !key.startsWith(prefix)) continue;
         const raw = storage.getItem(key);
         if (raw === null) continue;
         try {
-          records.push(parseStoredProgress(JSON.parse(raw)));
-          sources.push({ key, raw });
+          records.push({ key, raw, record: parseStoredProgress(JSON.parse(raw)) });
         } catch {
           try { storage.removeItem(key); } catch {}
         }
       }
-      const merged = mergeStoredProgress(records);
+      if (records.length === 0) return null;
+      const merged = mergeStoredProgress(records.map((r) => r.record));
       if (!merged) return null;
+      let published = false;
       try {
-        storage.setItem(ownKey, JSON.stringify(merged));
-        for (const source of sources) {
-          if (storage.getItem(source.key) === source.raw) storage.removeItem(source.key);
-        }
+        publish(merged.patch, merged.baseRevision, merged.resetGeneration);
+        published = true;
       } catch {}
+      if (published) {
+        for (const source of records) {
+          if (source.record.resetGeneration !== merged.resetGeneration) continue;
+          try {
+            if (storage.getItem(source.key) === source.raw) storage.removeItem(source.key);
+          } catch {}
+        }
+      }
       return merged;
     },
-    save: (patch, baseRevision) => {
-      if (Object.keys(patch).length === 0) storage.removeItem(ownKey);
-      else storage.setItem(ownKey, JSON.stringify({ baseRevision, patch }));
+    save: (patch, baseRevision, resetGeneration) => {
+      const previous = lastKey;
+      try {
+        publish(patch, baseRevision, resetGeneration);
+      } catch { return; }
+      if (previous !== undefined) {
+        try { storage.removeItem(previous); } catch {}
+      }
+    },
+    clear: () => {
+      const key = lastKey;
+      lastKey = undefined;
+      if (key !== undefined) {
+        try { storage.removeItem(key); } catch {}
+      }
     },
   };
 }

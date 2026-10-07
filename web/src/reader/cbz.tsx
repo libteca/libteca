@@ -176,6 +176,7 @@ function CbzSession(props: CbzReaderProps) {
   const [tick, bump] = useState(0);
   const saver = useProgressSaver(props.editionId, props.progress?.revision ?? 0, {
     page: props.progress?.page, percent: props.progress?.percent,
+    resetGeneration: props.progress?.resetGeneration,
   });
   const storeRef = useRef<PageStore | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);

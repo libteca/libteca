@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import type { ComponentChildren, CSSProperties } from "preact";
 import { APIError, fetchWithDeadline, getToken, media, normalizeAPIResponse, RequestTimeoutError } from "../api";
 import {
-  createProgressStorage, mergeServerProgress, ProgressQueue,
+  createProgressStorage, mergeServerProgress, ProgressQueue, ResetConflictError,
   type ProgressPatch as QueuePatch, type ServerProgress,
 } from "../progressQueue";
 import { currentUser } from "../user";
@@ -14,11 +14,12 @@ export type FitMode = "width" | "height";
 export type ReadingProgress = {
   position?: number; duration?: number; isFinished?: boolean;
   page?: number; percent?: number; locator?: string; revision?: number;
+  resetGeneration?: number; deleted?: boolean;
 };
 
 export type ProgressPost = { page?: number; percent?: number; locator?: string; finished?: boolean };
 
-export type SaveState = "idle" | "saving" | "saved" | "error";
+export type SaveState = "idle" | "saving" | "saved" | "error" | "reset";
 
 const SAVE_INTERVAL_MS = 5000;
 
@@ -125,23 +126,26 @@ function progressRetryable(error: unknown): boolean {
 }
 
 // One serial, merge-preserving progress queue per (user, edition). The
-// durable record carries the base revision the patch was based on, so an
-// offline patch replayed after another device advanced the server still
-// presents its ORIGINAL base - the conditional write rejects it and the
-// rebase/merge machinery runs instead of the server silently accepting a
-// relabeled stale patch. Storage is scoped to the authenticated user id
-// from /me (never a bearer token, never unscoped): an undelivered patch
-// left by account A cannot replay into account B on a shared browser. Each
-// queue instance owns a private storage record (per-tab key), absorbing
-// and re-publishing any foreign pending records on mount, so two tabs
-// acknowledge only their own operations and cannot erase each other's
-// undelivered work. The sender folds every automatic save through a
-// remote high-water mark (seeded from the loaded server progress and fed
-// by every 409) so the conflict winner's position survives until the
-// reader genuinely passes it. Lifecycle beacons (pagehide/visibility) send
-// the SAME conditional operation (patch + base revision); a rejected
-// beacon is not a loss - the patch stays durably stored and replays on
-// the next open.
+// durable record carries the base revision AND reset generation the patch
+// was based on, so an offline patch replayed after another device advanced
+// the server still presents its ORIGINAL base - the conditional write
+// rejects it and the rebase/merge machinery runs instead of the server
+// silently accepting a relabeled stale patch. A rejected GENERATION never
+// rebases (reset-wins): an operation captured before an explicit reset is
+// quarantined as durable evidence, its delivery stops, and only a
+// deliberate new save establishes a fresh operation on the post-reset
+// lineage. Storage is scoped to the authenticated user id from /me (never
+// a bearer token, never unscoped): an undelivered patch left by account A
+// cannot replay into account B on a shared browser. Each queue instance
+// publishes immutable uniquely keyed records (per-tab writer id), so tabs
+// acknowledge only their own exact versions and a concurrent writer's
+// newer record can never be removed by a racing recovery. The sender folds
+// every automatic save through a remote high-water mark (seeded from the
+// loaded server progress and fed by every 409) so the conflict winner's
+// position survives until the reader genuinely passes it. Lifecycle
+// beacons (pagehide/visibility) send the SAME conditional operation
+// (patch + base revision + generation); a rejected beacon is not a loss -
+// the patch stays durably stored and replays on the next open.
 export function useProgressSaver(editionId: number, baseRevision?: number, initialRemote?: ServerProgress) {
   const [state, setState] = useState<SaveState>("idle");
   const timer = useRef<number | undefined>(undefined);
@@ -155,22 +159,23 @@ export function useProgressSaver(editionId: number, baseRevision?: number, initi
     queueRef.current?.queue.stop();
     const scopeUser = userId;
     const prefix = `libteca-progress-v2-u${scopeUser}-e${editionId}-`;
-    const ownKey = `${prefix}${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    const writerId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
     let queueStorage;
     try {
       localStorage.removeItem(`libteca-progress-queue-${editionId}`);
-      queueStorage = createProgressStorage(localStorage, prefix, ownKey);
+      queueStorage = createProgressStorage(localStorage, prefix, writerId);
     } catch {}
     const remote: ServerProgress = { ...(initialRemote ?? {}) };
-    const send = async (patch: QueuePatch, base: number): Promise<number | void> => {
+    const send = async (patch: QueuePatch, base: number, generation: number): Promise<{ revision?: number; resetGeneration?: number } | void> => {
       if (currentUser() !== scopeUser) throw new AccountPausedError();
       setState("saving");
       let current = { ...patch };
       let revision = base;
+      let lineage = generation;
       if (Object.keys(current).length === 0) {
         setState("saved");
         window.setTimeout(() => setState((s) => (s === "saved" ? "idle" : s)), 1600);
-        return revision;
+        return { revision, resetGeneration: lineage };
       }
       for (let attempt = 0; ; attempt++) {
         const headers = new Headers({ "Content-Type": "application/json" });
@@ -178,7 +183,7 @@ export function useProgressSaver(editionId: number, baseRevision?: number, initi
         if (usedToken) headers.set("Authorization", `Bearer ${usedToken}`);
         const { response, text } = await fetchWithDeadline(
           `/api/core/progress/${editionId}`,
-          { method: "POST", headers, body: JSON.stringify({ ...current, revision }) },
+          { method: "POST", headers, body: JSON.stringify({ ...current, revision, resetGeneration: lineage }) },
           15000,
         );
         const res = normalizeAPIResponse(response, text);
@@ -186,6 +191,21 @@ export function useProgressSaver(editionId: number, baseRevision?: number, initi
           const cur = (res as Record<string, unknown>).current as Record<string, unknown> | undefined;
           if (response.status === 409 && cur !== null && typeof cur === "object" &&
               typeof cur.revision === "number" && attempt < 3) {
+            if (typeof cur.resetGeneration === "number" && cur.resetGeneration !== lineage) {
+              const server: ServerProgress = { revision: cur.revision, resetGeneration: cur.resetGeneration };
+              if (typeof cur.deleted === "boolean") server.deleted = cur.deleted;
+              for (const key of ["page", "percent", "locator", "isFinished"] as const) {
+                if (cur[key] !== undefined) (server as Record<string, unknown>)[key] = cur[key];
+              }
+              const view = remote as Record<string, unknown>;
+              for (const key of ["page", "percent", "locator", "isFinished"]) delete view[key];
+              for (const key of ["page", "percent", "locator", "isFinished"] as const) {
+                if (cur[key] !== undefined) view[key] = cur[key];
+              }
+              remote.revision = cur.revision;
+              remote.resetGeneration = cur.resetGeneration;
+              throw new ResetConflictError(server);
+            }
             revision = cur.revision;
             for (const key of ["page", "percent", "locator", "isFinished"] as const) {
               if (cur[key] !== undefined) (remote as Record<string, unknown>)[key] = cur[key];
@@ -195,21 +215,23 @@ export function useProgressSaver(editionId: number, baseRevision?: number, initi
             if (Object.keys(current).length === 0) {
               setState("saved");
               window.setTimeout(() => setState((s) => (s === "saved" ? "idle" : s)), 1600);
-              return revision;
+              return { revision, resetGeneration: lineage };
             }
             continue;
           }
           throw new APIError(res.error, response.status);
         }
         if (typeof res.revision === "number") revision = res.revision;
+        if (typeof res.resetGeneration === "number") lineage = res.resetGeneration;
         for (const key of ["page", "percent", "locator"] as const) {
           if (current[key] !== undefined) (remote as Record<string, unknown>)[key] = current[key];
         }
         if (current.finished !== undefined) remote.isFinished = current.finished;
         remote.revision = revision;
+        remote.resetGeneration = lineage;
         setState("saved");
         window.setTimeout(() => setState((s) => (s === "saved" ? "idle" : s)), 1600);
-        return revision;
+        return { revision, resetGeneration: lineage };
       }
     };
     queueRef.current = {
@@ -218,9 +240,10 @@ export function useProgressSaver(editionId: number, baseRevision?: number, initi
       queue: new ProgressQueue({
         storage: queueStorage,
         initialBaseRevision: baseRevision ?? 0,
+        initialResetGeneration: initialRemote?.resetGeneration ?? 0,
         send,
         prepare: (patch) => mergeServerProgress(remote, patch),
-        onError: () => setState("error"),
+        onError: (error) => setState(error instanceof ResetConflictError ? "reset" : "error"),
         shouldRetry: progressRetryable,
       }),
     };
@@ -235,7 +258,7 @@ export function useProgressSaver(editionId: number, baseRevision?: number, initi
   // sendBeacon cannot carry headers and the media cookie no longer
   // authorizes writes, so the unload path is a keepalive fetch with the
   // bearer token: it survives pagehide exactly like a beacon.
-  const postBeacon = useCallback(async (body: ProgressPost & { revision?: number }) => {
+  const postBeacon = useCallback(async (body: ProgressPost & { revision?: number; resetGeneration?: number }) => {
     const url = media(`/progress/${editionId}`);
     const token = getToken();
     if (!token) return;
@@ -267,7 +290,7 @@ export function useProgressSaver(editionId: number, baseRevision?: number, initi
     if (currentUser() !== queueUser) return;
     const operation = queue.operation();
     if (Object.keys(operation.patch).length === 0) return;
-    void postBeacon({ ...operation.patch as ProgressPost, revision: operation.baseRevision });
+    void postBeacon({ ...operation.patch as ProgressPost, revision: operation.baseRevision, resetGeneration: operation.resetGeneration });
   }, [postBeacon, queue, queueUser]);
 
   useEffect(() => {
@@ -542,7 +565,7 @@ export function TopBar(props: { title: string; meta?: string; saveState: SaveSta
       <button className={toolBtnCls} style={toolBtn} aria-label="Back" title="Back (Esc)" onClick={props.onBack}><IconArrowLeft size={17} /></button>
       {props.saveState && props.saveState !== "idle" && (
         <span style={{ color: props.saveState === "error" ? c.danger : c.muted, fontSize: "0.72rem", flexShrink: 0 }}>
-          {props.saveState === "saving" ? "saving…" : props.saveState === "saved" ? "saved" : "save failed"}
+          {props.saveState === "saving" ? "saving…" : props.saveState === "saved" ? "saved" : props.saveState === "reset" ? "progress was reset" : "save failed"}
         </span>
       )}
       <div style={{ position: "absolute", left: "50%", top: "50%", transform: "translate(-50%, -50%)", display: "flex", flexDirection: "column", alignItems: "center", gap: "0.12rem", maxWidth: "min(30rem, 55vw)", pointerEvents: "none", textAlign: "center" }}>
