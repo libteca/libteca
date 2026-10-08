@@ -638,12 +638,12 @@ func (a *API) SessionTrack(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (a *API) serveEditionFile(w http.ResponseWriter, r *http.Request, f *store.FileRec, libraryID int64) error {
-	lib, err := a.DB.Library(libraryID)
+func (a *API) serveEditionFile(w http.ResponseWriter, r *http.Request, f *store.FileRec, _ int64) error {
+	root, err := a.DB.LibraryRootForFile(f.ID)
 	if err != nil {
 		return err
 	}
-	fh, fi, err := mediafs.OpenWithin(lib.Path, f.Path)
+	fh, fi, err := mediafs.OpenWithin(root, f.Path)
 	if err != nil {
 		return err
 	}

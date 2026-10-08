@@ -33,6 +33,9 @@ func probeBookFiles(ctx context.Context, root string, group []bookFile, tr *trac
 			return err
 		}
 		probe, perr := audio.ProbeFile(ctx, pf)
+		if perr == nil {
+			f.sha, perr = fullContentDigest(pf)
+		}
 		pf.Close()
 		if perr != nil {
 			return perr

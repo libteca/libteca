@@ -23,6 +23,34 @@ function entry(name: string) {
   } };
 }
 async function settle() { await act(async () => { for (let i = 0; i < 40; i++) await Promise.resolve(); await vi.dynamicImportSettled(); }); }
+function zipDirectory(names: string[]) {
+  const encoder = new TextEncoder();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (const name of names) {
+    const bytes = encoder.encode(name);
+    const entry = new DataView(new ArrayBuffer(46));
+    entry.setUint32(0, 0x02014b50, true);
+    entry.setUint16(4, 0x14, true);
+    entry.setUint16(6, 0x14, true);
+    entry.setUint32(20, 1, true);
+    entry.setUint32(24, 1, true);
+    entry.setUint16(28, bytes.length, true);
+    chunks.push(new Uint8Array(entry.buffer), bytes);
+    size += 46 + bytes.length;
+  }
+  const end = new DataView(new ArrayBuffer(22));
+  end.setUint32(0, 0x06054b50, true);
+  end.setUint16(8, names.length, true);
+  end.setUint16(10, names.length, true);
+  end.setUint32(12, size, true);
+  chunks.push(new Uint8Array(end.buffer));
+  const total = chunks.reduce((n, c) => n + c.length, 0);
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const c of chunks) { out.set(c, at); at += c.length; }
+  return out;
+}
 function observe(observer: typeof observers[number], entries: { page: number; visible: boolean }[]) {
   act(() => observer.callback(entries.map(({ page, visible }) => ({ target: root.querySelector(`[data-page="${page}"]`)!, isIntersecting: visible })) as IntersectionObserverEntry[], {} as IntersectionObserver));
 }
@@ -32,7 +60,8 @@ beforeEach(() => {
   root = document.createElement("div"); document.body.append(root);
   observers = []; mocks.saves.length = 0; localStorage.clear();
   mocks.files = Object.fromEntries(Array.from({ length: 8 }, (_, i) => { const name = `${i + 1}.jpg`; return [name, entry(name)]; }));
-  vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(new Uint8Array([1])))));
+  const archive = zipDirectory(Array.from({ length: 8 }, (_, i) => `${i + 1}.jpg`));
+  vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(archive))));
   vi.stubGlobal("URL", { createObjectURL: vi.fn(() => `blob:${Math.random()}`), revokeObjectURL: vi.fn() });
   vi.stubGlobal("IntersectionObserver", class {
     constructor(callback: IntersectionObserverCallback, options: IntersectionObserverInit) { observers.push({ callback, options }); }

@@ -8,10 +8,12 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/libteca/libteca/internal/resourcebudget"
 	"github.com/libteca/libteca/internal/store"
 )
 
@@ -191,14 +193,16 @@ func TestProbeCBRDeadline(t *testing.T) {
 	for _, tool := range []string{"unrar", "unar"} {
 		t.Run(tool, func(t *testing.T) {
 			archive, pidFile, dirFile := blockingCBRFixture(t, tool)
-			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-			defer cancel()
+			ctx := &startedCBRDeadline{Context: context.Background(), done: make(chan struct{})}
+			defer ctx.stop()
 			done := make(chan error, 1)
 			go func() {
 				_, _, err := probeCBR(ctx, archive, tool)
 				done <- err
 			}()
 			process := waitCBRProcess(t, pidFile)
+			cancel := ctx.arm(500 * time.Millisecond)
+			defer cancel()
 			select {
 			case err := <-done:
 				if !errors.Is(err, context.DeadlineExceeded) {
@@ -333,4 +337,326 @@ func TestScanCBRCancelledBeforeStoreDoesNotPublish(t *testing.T) {
 	if count != 0 {
 		t.Fatalf("cancelled scan stored %d files", count)
 	}
+}
+
+func TestUnarTemporaryLimitStopsBeforeExtractorCompletes(t *testing.T) {
+	script := "#!/bin/sh\nhead -c 20971521 /dev/zero > \"$4/p001.jpg\"\nprintf '%s' \"$4\" > \"$CBR_DIR_FILE\"\nprintf '%s' \"$$\" > \"$CBR_PID_FILE\"\nexec sleep 30\n"
+	fakeExtractor(t, "unar", script)
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	dirFile := filepath.Join(t.TempDir(), "dir")
+	t.Setenv("CBR_PID_FILE", pidFile)
+	t.Setenv("CBR_DIR_FILE", dirFile)
+	t.Setenv("TMPDIR", t.TempDir())
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_, err := cbrExtract(ctx, "unar", "Comic.cbr", "p001.jpg")
+	if err == nil || !strings.Contains(err.Error(), "cap") || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("ongoing output limit: %v", err)
+	}
+	data, err := os.ReadFile(dirFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(string(data)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+	pidData, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(string(pidData))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
+		t.Fatalf("extractor remains alive: %v", err)
+	}
+}
+
+func TestCBRExactCoverBoundary(t *testing.T) {
+	for _, size := range []int{cbrMaxCoverBytes - 1, cbrMaxCoverBytes, cbrMaxCoverBytes + 1} {
+		t.Run(strconv.Itoa(size), func(t *testing.T) {
+			fakeExtractor(t, "unrar", fmt.Sprintf("#!/bin/sh\nexec head -c %d /dev/zero\n", size))
+			data, err := cbrExtract(context.Background(), "unrar", "Comic.cbr", "page.jpg")
+			if size > cbrMaxCoverBytes {
+				if err == nil || data != nil {
+					t.Fatalf("size=%d err=%v", len(data), err)
+				}
+				return
+			}
+			if err != nil || len(data) != size {
+				t.Fatalf("size=%d err=%v", len(data), err)
+			}
+		})
+	}
+}
+
+func TestBookPhysicalFileSourceKeys(t *testing.T) {
+	db := openScanDB(t)
+	root := t.TempDir()
+	libID, err := db.AddLibrary("Books", "books", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lib := &store.Library{ID: libID, Type: "books", Path: root}
+	for _, name := range []string{"first.pdf", "second.pdf"} {
+		path := filepath.Join(root, name)
+		if err := os.WriteFile(path, []byte(name), 0600); err != nil {
+			t.Fatal(err)
+		}
+		doc := &bookDoc{path: path, name: name, format: "pdf", title: "Same title", size: int64(len(name)), mtime: 1, mtimeNs: 1}
+		if err := storeBook(db, lib, doc, t.TempDir(), newTracker(nil)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := db.Query(`SELECT e.id,e.source_library_id,e.source_key,f.source_library_id FROM editions e JOIN files f ON f.edition_id=e.id ORDER BY e.source_key`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id, editionSource, fileSource int64
+		var key string
+		if err := rows.Scan(&id, &editionSource, &key, &fileSource); err != nil {
+			t.Fatal(err)
+		}
+		if editionSource != libID || fileSource != libID || (key != "first.pdf" && key != "second.pdf") {
+			t.Fatalf("sources: %d %d %q", editionSource, fileSource, key)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 2 || ids[0] == ids[1] {
+		t.Fatalf("physical sources collapsed: %v", ids)
+	}
+	rows.Close()
+	doc := &bookDoc{path: filepath.Join(root, "first.pdf"), name: "first.pdf", format: "pdf", title: "Retitled", size: 9, mtime: 2, mtimeNs: 2}
+	if err := storeBook(db, lib, doc, t.TempDir(), newTracker(nil)); err != nil {
+		t.Fatal(err)
+	}
+	var id int64
+	if err := db.QueryRow(`SELECT id FROM editions WHERE source_library_id=? AND source_key='first.pdf'`, libID).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	if id != ids[0] {
+		t.Fatalf("retitle replaced source ID %d with %d", ids[0], id)
+	}
+	var workCount int
+	if err := db.QueryRow("SELECT count(*) FROM works").Scan(&workCount); err != nil {
+		t.Fatal(err)
+	}
+	if workCount != 1 {
+		t.Fatalf("retitle created %d works", workCount)
+	}
+}
+
+func TestCBRAggregateTemporaryReservationAndCancellation(t *testing.T) {
+	archive, pidFile, dirFile := blockingCBRFixture(t, "unar")
+	t.Setenv("LIBTECA_CBR_TEMP_BYTES", strconv.Itoa(cbrMaxCoverBytes))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { _, err := cbrExtract(ctx, "unar", archive, "p001.jpg"); done <- err }()
+	process := waitCBRProcess(t, pidFile)
+	if _, err := cbrExtract(context.Background(), "unar", archive, "p001.jpg"); !errors.Is(err, resourcebudget.ErrLimit) {
+		t.Fatalf("aggregate admission: %v", err)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("extractor cancellation stalled")
+	}
+	assertCBRStopped(t, process, dirFile)
+	budget, err := resourcebudget.ConfiguredBudget("LIBTECA_CBR_TEMP_BYTES", "aggregate CBR temporary disk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservation, err := budget.Reserve(cbrMaxCoverBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservation.Release()
+}
+
+func TestCBRMalformedListingReservesBeforeNamesAllocation(t *testing.T) {
+	fakeExtractor(t, "unrar", "#!/bin/sh\nhead -c 1000000 /dev/zero | tr '\\000' '\\n'\n")
+	t.Setenv("LIBTECA_ARCHIVE_MEMORY_BYTES", strconv.Itoa(5<<20))
+	names, err := cbrList(context.Background(), "Comic.cbr", "unrar")
+	if !errors.Is(err, resourcebudget.ErrLimit) || names != nil {
+		t.Fatalf("names=%d error=%v", len(names), err)
+	}
+	budget, err := resourcebudget.ArchiveBudget()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservation, err := budget.Reserve(5 << 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservation.Release()
+}
+
+func TestBookSameStampReplacementReprobesAndPublishesDigest(t *testing.T) {
+	db := openScanDB(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "Book.pdf")
+	if err := os.WriteFile(path, []byte("/Type /Page original"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	libID, err := db.AddLibrary("Books", "books", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lib := &store.Library{ID: libID, Type: "books", Path: root}
+	covers := t.TempDir()
+	if _, err := Library(context.Background(), db, lib, covers, nil); err != nil {
+		t.Fatal(err)
+	}
+	var fileID, editionID int64
+	var before string
+	if err := db.QueryRow("SELECT id,edition_id,sha256 FROM files WHERE path=?", path).Scan(&fileID, &editionID, &before); err != nil {
+		t.Fatal(err)
+	}
+	generation, err := db.TimelineGeneration(editionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, err := Library(context.Background(), db, lib, covers, nil); err != nil || n != 0 {
+		t.Fatalf("warm scan: %d %v", n, err)
+	}
+	if err := os.WriteFile(path, []byte("/Type /Page replaced"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, st.ModTime(), st.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := Library(context.Background(), db, lib, covers, nil); err != nil || n != 1 {
+		t.Fatalf("replacement scan: %d %v", n, err)
+	}
+	var after string
+	var afterFile, afterEdition int64
+	if err := db.QueryRow("SELECT id,edition_id,sha256 FROM files WHERE path=?", path).Scan(&afterFile, &afterEdition, &after); err != nil {
+		t.Fatal(err)
+	}
+	if after == before || afterFile != fileID || afterEdition != editionID {
+		t.Fatalf("digest/identity: %s %s %d %d", before, after, afterFile, afterEdition)
+	}
+	afterGeneration, err := db.TimelineGeneration(editionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterGeneration == generation {
+		t.Fatal("replacement did not invalidate content generation")
+	}
+}
+
+func TestBookRenameKeepsManuallyGroupedSourceAndMetadata(t *testing.T) {
+	db := openScanDB(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "Book.pdf")
+	if err := os.WriteFile(path, []byte("/Type /Page"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	libID, err := db.AddLibrary("Books", "books", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lib := &store.Library{ID: libID, Type: "books", Path: root}
+	covers := t.TempDir()
+	if _, err := Library(context.Background(), db, lib, covers, nil); err != nil {
+		t.Fatal(err)
+	}
+	var fileID, editionID int64
+	if err := db.QueryRow("SELECT id,edition_id FROM files WHERE path=?", path).Scan(&fileID, &editionID); err != nil {
+		t.Fatal(err)
+	}
+	otherLib, err := db.AddLibrary("Grouped", "books", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	description := "curated sibling description"
+	grouped, err := db.UpsertWork(&store.Work{LibraryID: otherLib, Title: "Manual grouping", Description: &description})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("UPDATE editions SET work_id=? WHERE id=?", grouped, editionID); err != nil {
+		t.Fatal(err)
+	}
+	renamed := filepath.Join(root, "Renamed.pdf")
+	if err := os.Rename(path, renamed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Library(context.Background(), db, lib, covers, nil); err != nil {
+		t.Fatal(err)
+	}
+	var afterFile, afterEdition, afterWork, source int64
+	var key, desc string
+	if err := db.QueryRow(`SELECT f.id,e.id,e.work_id,f.source_library_id,e.source_key,w.description FROM files f JOIN editions e ON e.id=f.edition_id JOIN works w ON w.id=e.work_id WHERE f.path=?`, renamed).Scan(&afterFile, &afterEdition, &afterWork, &source, &key, &desc); err != nil {
+		t.Fatal(err)
+	}
+	if afterFile != fileID || afterEdition != editionID || afterWork != grouped || source != libID || key != "Renamed.pdf" || desc != description {
+		t.Fatalf("renamed identity: %d %d %d %d %s %s", afterFile, afterEdition, afterWork, source, key, desc)
+	}
+}
+
+type startedCBRDeadline struct {
+	context.Context
+	mu        sync.Mutex
+	timed     context.Context
+	done      chan struct{}
+	cancel    context.CancelFunc
+	closeOnce sync.Once
+}
+
+func (c *startedCBRDeadline) Done() <-chan struct{} { return c.done }
+func (c *startedCBRDeadline) Err() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.timed == nil {
+		return nil
+	}
+	return c.timed.Err()
+}
+func (c *startedCBRDeadline) Deadline() (time.Time, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.timed == nil {
+		return time.Time{}, false
+	}
+	return c.timed.Deadline()
+}
+func (c *startedCBRDeadline) arm(duration time.Duration) context.CancelFunc {
+	timed, cancel := context.WithTimeout(context.Background(), duration)
+	c.mu.Lock()
+	c.timed = timed
+	c.cancel = cancel
+	c.mu.Unlock()
+	go func() { <-timed.Done(); c.closeOnce.Do(func() { close(c.done) }) }()
+	return cancel
+}
+
+func (c *startedCBRDeadline) stop() {
+	c.mu.Lock()
+	cancel := c.cancel
+	if cancel == nil {
+		timed, stop := context.WithCancel(context.Background())
+		stop()
+		c.timed = timed
+	}
+	c.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	c.closeOnce.Do(func() { close(c.done) })
 }

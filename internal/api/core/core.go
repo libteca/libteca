@@ -128,6 +128,7 @@ func (a *API) Mount(r *neutron.Router) {
 	r.HandleFunc("GET /subtitles/{fileId}", a.subtitles)
 	r.HandleFunc("GET /progress/{editionId}", a.getProgress)
 	r.HandleFunc("POST /progress/{editionId}", a.setProgress)
+	r.HandleFunc("POST /progress/{editionId}/playtime", a.gamePlaytime)
 	r.HandleFunc("GET /stream/{fileId}", a.stream)
 	r.HandleFunc("GET /covers/{cover}", a.cover)
 	a.MountReading(r)
@@ -137,6 +138,7 @@ func (a *API) Mount(r *neutron.Router) {
 	a.MountImport(r)
 	a.MountProviders(r)
 	a.MountPodcasts(r)
+	a.mountMediaOperations(r)
 	a.MountHLS(r)
 }
 
@@ -1014,15 +1016,6 @@ func (a *API) work(w http.ResponseWriter, r *http.Request) {
 	if lib.Type == "games" {
 		backfillSHA256(r.Context(), a.DB, lib.Path, full.Editions)
 	}
-	progress, err := a.DB.UserProgressList(auth.UserID(r))
-	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": "internal error"})
-		return
-	}
-	pmap := map[int64]*store.Progress{}
-	for i := range progress {
-		pmap[progress[i].EditionID] = &progress[i]
-	}
 	pageCounts, err := a.DB.PageCountsByWork(id)
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": "internal error"})
@@ -1035,17 +1028,39 @@ func (a *API) work(w http.ResponseWriter, r *http.Request) {
 	}
 	eds := make([]map[string]any, 0, len(full.Editions))
 	for _, ev := range full.Editions {
-		chapters := []map[string]any{}
-		cum := 0.0
-		for _, f := range ev.Files {
-			var ch []audioChapter
-			json.Unmarshal([]byte(f.Chapters), &ch)
-			for _, c := range ch {
-				chapters = append(chapters, map[string]any{
-					"title": c.Title, "start": cum + c.Start, "end": cum + c.End, "fileId": f.ID,
-				})
+		timeline, terr := a.DB.EditionTimeline(ev.ID)
+		available := terr == nil
+		unavailableReason := ""
+		if terr != nil {
+			if !errors.Is(terr, store.ErrNotFound) && !errors.Is(terr, store.ErrTimelineUnavailable) {
+				writeJSON(w, 500, map[string]string{"error": "timeline unavailable"})
+				return
 			}
-			cum += f.DurationSecs
+			unavailableReason = "This edition has no available media files"
+			if errors.Is(terr, store.ErrTimelineUnavailable) {
+				unavailableReason = "One or more parts of this edition are unavailable"
+			}
+			generation, gerr := a.DB.TimelineGeneration(ev.ID)
+			if gerr != nil && !errors.Is(gerr, store.ErrNotFound) {
+				writeJSON(w, 500, map[string]string{"error": "timeline unavailable"})
+				return
+			}
+			timeline = &store.Timeline{Generation: generation, Files: []store.TimelineFile{}}
+		}
+		ev.Files = nil
+		for _, file := range timeline.Files {
+			ev.Files = append(ev.Files, file.File)
+		}
+		chapters := []map[string]any{}
+		for _, tf := range timeline.Files {
+			if tf.Start == nil {
+				continue
+			}
+			var ch []audioChapter
+			json.Unmarshal([]byte(tf.File.Chapters), &ch)
+			for _, c := range ch {
+				chapters = append(chapters, map[string]any{"title": c.Title, "start": *tf.Start + c.Start, "end": *tf.Start + c.End, "fileId": tf.FileID})
+			}
 		}
 		files := make([]map[string]any, 0, len(ev.Files))
 		for _, f := range ev.Files {
@@ -1069,9 +1084,32 @@ func (a *API) work(w http.ResponseWriter, r *http.Request) {
 			}
 			files = append(files, file)
 		}
+		generation := timeline.Generation
 		e := map[string]any{
-			"id": ev.ID, "format": ev.Format, "title": ev.Title, "duration": ev.TotalDuration(),
+			"generation": generation,
+			"id":         ev.ID, "format": ev.Format, "title": ev.Title, "duration": 0,
 			"files": files, "chapters": chapters,
+		}
+		e["available"] = available
+		e["durationKnown"] = timeline.Total != nil
+		if timeline.Total != nil {
+			e["duration"] = *timeline.Total
+		}
+		if !available {
+			e["unavailableReason"] = unavailableReason
+		}
+		state, stateErr := a.DB.GetReadingProgress(auth.UserID(r), ev.ID)
+		if stateErr != nil && !errors.Is(stateErr, store.ErrNotFound) {
+			writeJSON(w, 500, map[string]string{"error": "progress unavailable"})
+			return
+		}
+		e["revision"] = int64(0)
+		e["resetGeneration"] = int64(0)
+		e["deleted"] = false
+		if stateErr == nil {
+			e["revision"] = state.Revision
+			e["resetGeneration"] = state.ResetGeneration
+			e["deleted"] = state.Deleted
 		}
 		if ev.SeasonNum != nil {
 			e["seasonNum"] = *ev.SeasonNum
@@ -1082,9 +1120,21 @@ func (a *API) work(w http.ResponseWriter, r *http.Request) {
 		if pc := pageCounts[ev.ID]; pc != nil {
 			e["pageCount"] = *pc
 		}
-		if p, ok := pmap[ev.ID]; ok {
-			e["position"] = p.EditionPositionSecs
-			e["isFinished"] = p.IsFinished
+		if stateErr == nil {
+			e["position"] = state.EditionPositionSecs
+			e["isFinished"] = state.IsFinished
+			if state.Deleted {
+				e["position"] = 0
+				e["isFinished"] = false
+			}
+		}
+		if available && (ev.Format == "video" || ev.Format == "audio" || ev.Format == "mp3" || ev.Format == "m4b" || ev.Format == "m4a" || ev.Format == "flac" || ev.Format == "ogg" || ev.Format == "wav" || ev.Format == "aac" || ev.Format == "opus") {
+			resume, rerr := a.DB.MediaResumeForTarget(auth.UserID(r), "edition", ev.ID, timeline.Generation)
+			if rerr != nil {
+				mediaOperationError(w, rerr)
+				return
+			}
+			attachMediaResume(e, resume)
 		}
 		if rp, ok := rmap[ev.ID]; ok {
 			if rp.Page != nil {
@@ -1156,6 +1206,13 @@ func (a *API) getProgress(w http.ResponseWriter, r *http.Request) {
 	if err := a.DB.QueryRow(`SELECT page_count FROM editions WHERE id = ?`, eid).Scan(&pc); err == nil && pc != nil && *pc > 0 {
 		m["pageCount"] = *pc
 	}
+	resume, rerr := a.DB.MediaResumeForTarget(auth.UserID(r), "edition", eid, "")
+	if rerr == nil {
+		attachMediaResume(m, resume)
+	} else if !errors.Is(rerr, store.ErrNotFound) {
+		mediaOperationError(w, rerr)
+		return
+	}
 	writeJSON(w, 200, m)
 }
 
@@ -1171,19 +1228,32 @@ func (a *API) setProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Position *float64 `json:"position"`
-		Duration *float64 `json:"duration"`
-		Finished *bool    `json:"finished"`
-		Device   *string  `json:"device"`
-		Page     *int64   `json:"page"`
-		Percent  *float64 `json:"percent"`
-		Locator  *string  `json:"locator"`
-		Revision *int64   `json:"revision"`
-		ResetGen *int64   `json:"resetGeneration"`
+		Position           *float64 `json:"position"`
+		Duration           *float64 `json:"duration"`
+		Finished           *bool    `json:"finished"`
+		Device             *string  `json:"device"`
+		Page               *int64   `json:"page"`
+		Percent            *float64 `json:"percent"`
+		Locator            *string  `json:"locator"`
+		Revision           *int64   `json:"revision"`
+		ResetGen           *int64   `json:"resetGeneration"`
+		ExpectedGeneration *string  `json:"expectedGeneration"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, 400, map[string]string{"error": "bad request"})
 		return
+	}
+	timelineGeneration := int64(-1)
+	if body.ExpectedGeneration != nil {
+		var generationEdition int64
+		if body.Revision == nil || body.ResetGen == nil {
+			writeJSON(w, 400, map[string]string{"error": "generation-aware progress requires revision and resetGeneration"})
+			return
+		}
+		if _, err := fmt.Sscanf(*body.ExpectedGeneration, "%d:%d", &generationEdition, &timelineGeneration); err != nil || generationEdition != eid || timelineGeneration < 1 || *body.ExpectedGeneration != fmt.Sprintf("%d:%d", eid, timelineGeneration) {
+			writeJSON(w, 400, map[string]string{"error": "invalid expectedGeneration"})
+			return
+		}
 	}
 	validateNum := func(v float64) bool {
 		return !math.IsNaN(v) && !math.IsInf(v, 0) && v >= 0
@@ -1256,12 +1326,23 @@ func (a *API) setProgress(w http.ResponseWriter, r *http.Request) {
 		if body.ResetGen != nil {
 			baseGeneration = *body.ResetGen
 		}
-		revision, generation, applied, err := a.DB.SetReadingProgressRevision(p, fields, *body.Revision, baseGeneration)
+		revision, generation, applied, err := a.DB.SetReadingProgressTimelineRevision(p, fields, *body.Revision, baseGeneration, timelineGeneration)
 		if err != nil {
 			writeJSON(w, 500, map[string]string{"error": "internal error"})
 			return
 		}
 		if !applied {
+			if body.ExpectedGeneration != nil {
+				currentGeneration, gerr := a.DB.TimelineGeneration(eid)
+				if gerr != nil {
+					writeJSON(w, 503, map[string]string{"error": "timeline unavailable"})
+					return
+				}
+				if currentGeneration != *body.ExpectedGeneration {
+					writeJSON(w, 409, map[string]any{"error": "generation_mismatch", "generation": currentGeneration})
+					return
+				}
+			}
 			cur, err := a.DB.GetReadingProgress(auth.UserID(r), eid)
 			if err != nil && !errors.Is(err, store.ErrNotFound) {
 				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "progress temporarily unavailable"})
@@ -1294,11 +1375,31 @@ func (a *API) setProgress(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"ok": true, "revision": revision, "resetGeneration": generation})
 		return
 	}
-	if err := a.DB.SetReadingProgressFields(p, fields); err != nil {
+	var writeErr error
+	if body.Position != nil && strings.HasPrefix(ed.Format, "game-") {
+		writeErr = a.DB.SetLegacyGameProgressFields(p, fields)
+	} else {
+		writeErr = a.DB.SetReadingProgressFields(p, fields)
+	}
+	if errors.Is(writeErr, store.ErrPlaytimeConflict) {
+		writeJSON(w, 409, map[string]string{"error": "playtime sessions require revision-aware absolute writes"})
+		return
+	}
+	if writeErr != nil {
 		writeJSON(w, 500, map[string]string{"error": "internal error"})
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+func (a *API) confinedFileRoot(file *store.FileRec) (string, error) {
+	if file.SourceLibraryID != 0 {
+		return a.DB.LibraryRootForFile(file.ID)
+	}
+	if file.EditionID == 0 {
+		return filepath.Join(a.DataDir, "podcasts"), nil
+	}
+	return a.DB.LibraryRootForFile(file.ID)
 }
 
 func (a *API) confinedRoot(editionID int64) (string, error) {
@@ -1315,7 +1416,7 @@ func (a *API) openEditionFile(ed *store.EditionView) (func() (*os.File, error), 
 	if len(ed.Files) == 0 {
 		return nil, store.ErrNotFound
 	}
-	root, err := a.confinedRoot(ed.ID)
+	root, err := a.confinedFileRoot(&ed.Files[0])
 	if err != nil {
 		return nil, err
 	}
@@ -1340,7 +1441,28 @@ func (a *API) stream(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 404, map[string]string{"error": "file not found"})
 		return
 	}
-	root, err := a.confinedRoot(f.EditionID)
+	if expected := r.URL.Query().Get("generation"); expected != "" {
+		timeline, terr := a.DB.EditionTimeline(f.EditionID)
+		if terr != nil {
+			if errors.Is(terr, store.ErrNotFound) || errors.Is(terr, store.ErrTimelineUnavailable) {
+				writeJSON(w, 409, map[string]string{"error": "generation_mismatch"})
+			} else {
+				writeJSON(w, 500, map[string]string{"error": "timeline unavailable"})
+			}
+			return
+		}
+		if timeline.Generation != expected {
+			writeJSON(w, 409, map[string]string{"error": "generation_mismatch"})
+			return
+		}
+		selected, _, serr := timeline.Select(fid, 0)
+		if serr != nil {
+			writeJSON(w, 409, map[string]string{"error": "generation_mismatch"})
+			return
+		}
+		f = &selected.File
+	}
+	root, err := a.confinedFileRoot(f)
 	if err != nil {
 		writeJSON(w, 404, map[string]string{"error": "file not found"})
 		return

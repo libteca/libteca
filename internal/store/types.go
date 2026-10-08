@@ -33,41 +33,46 @@ type Work struct {
 }
 
 type Edition struct {
-	ID           int64
-	WorkID       int64
-	Format       string
-	Title        string
-	Language     *string
-	Abridged     bool
-	DurationSecs *float64
-	Position     int64
-	CreatedAt    int64
-	SeasonNum    *int
-	EpisodeNum   *int
+	SourceLibraryID int64
+	SourceKey       string
+	SourcePaths     []string
+	SourceDigests   []string
+	ID              int64
+	WorkID          int64
+	Format          string
+	Title           string
+	Language        *string
+	Abridged        bool
+	DurationSecs    *float64
+	Position        int64
+	CreatedAt       int64
+	SeasonNum       *int
+	EpisodeNum      *int
 }
 
 type FileRec struct {
-	ID           int64
-	EditionID    int64
-	Path         string
-	Seq          int
-	SizeBytes    int64
-	MtimeSecs    int64
-	MtimeNS      int64
-	Hash         *string
-	SHA256       *string
-	Codec        *string
-	VideoCodec   *string
-	Width        *int
-	Height       *int
-	Container    *string
-	Bitrate      *int64
-	Channels     *int
-	SampleRate   *int
-	DurationSecs float64
-	Chapters     string
-	Missing      bool
-	Inserted     bool
+	SourceLibraryID int64
+	ID              int64
+	EditionID       int64
+	Path            string
+	Seq             int
+	SizeBytes       int64
+	MtimeSecs       int64
+	MtimeNS         int64
+	Hash            *string
+	SHA256          *string
+	Codec           *string
+	VideoCodec      *string
+	Width           *int
+	Height          *int
+	Container       *string
+	Bitrate         *int64
+	Channels        *int
+	SampleRate      *int
+	DurationSecs    float64
+	Chapters        string
+	Missing         bool
+	Inserted        bool
 }
 
 type Progress struct {

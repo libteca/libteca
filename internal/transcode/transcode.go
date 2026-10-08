@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/libteca/libteca/internal/procfd"
+	"github.com/libteca/libteca/internal/resourcebudget"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -73,10 +74,12 @@ func (p *realProcess) kill() {
 }
 
 type Session struct {
-	ID      string
-	Edition int64
-	Dir     string
-	Source  string
+	diskLease *resourcebudget.DiskLease
+	budgetErr error
+	ID        string
+	Edition   int64
+	Dir       string
+	Source    string
 
 	StartSecs       float64
 	accel           string
@@ -96,7 +99,9 @@ type Session struct {
 }
 
 type Manager struct {
-	DataDir string
+	diskPool  *resourcebudget.DiskPool
+	configErr error
+	DataDir   string
 
 	mu       sync.Mutex
 	sessions map[string]*Session
@@ -133,7 +138,13 @@ func New(dataDir string) *Manager {
 		}
 		return string(out), err
 	}
-	os.RemoveAll(filepath.Join(dataDir, "transcode"))
+	if err := os.RemoveAll(filepath.Join(dataDir, "transcode")); err != nil {
+		m.configErr = err
+	}
+	per, perErr := resourcebudget.Env("LIBTECA_HLS_SESSION_BYTES")
+	total, totalErr := resourcebudget.Env("LIBTECA_HLS_TOTAL_BYTES")
+	m.configErr = errors.Join(m.configErr, perErr, totalErr)
+	m.diskPool = resourcebudget.NewDiskPool(filepath.Join(dataDir, "transcode"), per, total)
 	go m.reaper()
 	return m
 }
@@ -165,6 +176,9 @@ func (m *Manager) Get(sessionID string, edition int64, source string, startSecs 
 	// that is not a single safe path component, before any map or disk work.
 	if sessionID == "" || sessionID == "." || sessionID == ".." || strings.ContainsAny(sessionID, `/\`) {
 		return nil, fmt.Errorf("invalid transcode session id")
+	}
+	if m.configErr != nil {
+		return nil, m.configErr
 	}
 	for {
 		m.mu.Lock()
@@ -218,6 +232,17 @@ func (m *Manager) Get(sessionID string, edition int64, source string, startSecs 
 			spawn:     m.spawn,
 			fdArgs:    m.fdArgs,
 		}
+		var leaseErr error
+		if m.diskPool != nil {
+			s.diskLease, leaseErr = m.diskPool.Acquire(s.Dir)
+		}
+		if leaseErr != nil {
+			m.mu.Unlock()
+			for _, e := range expired {
+				m.finalize(e)
+			}
+			return nil, leaseErr
+		}
 		s.lastHit.Store(time.Now().UnixNano())
 		m.sessions[sessionID] = s
 		m.mu.Unlock()
@@ -231,6 +256,7 @@ func (m *Manager) Get(sessionID string, edition int64, source string, startSecs 
 				delete(m.sessions, sessionID)
 			}
 			m.mu.Unlock()
+			s.diskLease.Release()
 			return nil, err
 		}
 		s.mu.Lock()
@@ -243,6 +269,7 @@ func (m *Manager) Get(sessionID string, edition int64, source string, startSecs 
 			}
 			m.mu.Unlock()
 			s.releaseInput()
+			s.diskLease.Release()
 			return nil, err
 		}
 		if err := s.start(startSecs); err != nil {
@@ -252,7 +279,9 @@ func (m *Manager) Get(sessionID string, edition int64, source string, startSecs 
 			}
 			m.mu.Unlock()
 			s.releaseInput()
-			os.RemoveAll(s.Dir)
+			if cleanupErr := os.RemoveAll(s.Dir); cleanupErr == nil {
+				s.diskLease.Release()
+			}
 			return nil, err
 		}
 		return s, nil
@@ -326,8 +355,22 @@ func (s *Session) launch(startSecs float64, accel string) error {
 	s.done = done
 	s.exitErr = nil
 	s.mu.Unlock()
+	monitorCtx, monitorCancel := context.WithCancel(context.Background())
+	var finish func() error
+	if s.diskLease != nil && s.diskLease.Limit() > 0 {
+		finish = resourcebudget.Monitor(monitorCtx, s.Dir, s.diskLease.Limit(), func() { p.kill() })
+	}
 	go func() {
 		err := p.wait()
+		if finish != nil {
+			if limitErr := finish(); limitErr != nil {
+				s.mu.Lock()
+				s.budgetErr = limitErr
+				s.mu.Unlock()
+				err = limitErr
+			}
+		}
+		monitorCancel()
 		s.mu.Lock()
 		if s.done == done {
 			s.exitErr = err
@@ -360,7 +403,7 @@ func (s *Session) watchFallback(startSecs float64) {
 	exitErr := s.exitErr
 	stillCurrent := s.done == first
 	s.mu.Unlock()
-	if killed || !stillCurrent || exitErr == nil {
+	if killed || !stillCurrent || exitErr == nil || errors.Is(exitErr, resourcebudget.ErrLimit) {
 		return
 	}
 	s.mu.Lock()
@@ -402,8 +445,11 @@ func (s *Session) kill() bool {
 		slog.Warn("transcode cleanup failed", "session", s.ID, "err", err)
 		return false
 	}
+	s.diskLease.Release()
 	return true
 }
+
+func (s *Session) ResourceError() error { s.mu.Lock(); defer s.mu.Unlock(); return s.budgetErr }
 
 func (s *Session) releaseInput() {
 	s.mu.Lock()

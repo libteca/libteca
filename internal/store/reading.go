@@ -128,14 +128,18 @@ func setReadingProgressFields(q dbtx, p *ReadingProgress, fields ProgressFields)
 // through tombstone clears and row recreation and advances only on
 // DeleteProgress.
 func (d *DB) SetReadingProgressRevision(p *ReadingProgress, fields ProgressFields, baseRevision, baseGeneration int64) (int64, int64, bool, error) {
+	return d.SetReadingProgressTimelineRevision(p, fields, baseRevision, baseGeneration, -1)
+}
+
+func (d *DB) SetReadingProgressTimelineRevision(p *ReadingProgress, fields ProgressFields, baseRevision, baseGeneration, timelineGeneration int64) (int64, int64, bool, error) {
 	var revision, generation int64
 	var err error
 	if baseRevision == 0 {
 		err = d.QueryRow(`INSERT INTO progress (user_id, edition_id, file_id, file_offset_secs, edition_position_secs, duration_secs, is_finished, device, updated_at, page, percent, locator, revision)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1)
+			SELECT ?,?,?,?,?,?,?,?,?,?,?,?,1 WHERE EXISTS (SELECT 1 FROM editions WHERE id=? AND (?<0 OR timeline_generation=?))
 			ON CONFLICT(user_id, edition_id) DO NOTHING
 			RETURNING revision, reset_generation`,
-			p.UserID, p.EditionID, p.FileID, p.FileOffsetSecs, p.EditionPositionSecs, p.DurationSecs, p.IsFinished, p.Device, nowMilli(), p.Page, p.Percent, p.Locator).Scan(&revision, &generation)
+			p.UserID, p.EditionID, p.FileID, p.FileOffsetSecs, p.EditionPositionSecs, p.DurationSecs, p.IsFinished, p.Device, nowMilli(), p.Page, p.Percent, p.Locator, p.EditionID, timelineGeneration, timelineGeneration).Scan(&revision, &generation)
 	} else {
 		query := `UPDATE progress SET
 			file_id = CASE WHEN ? THEN ? ELSE progress.file_id END,
@@ -164,6 +168,10 @@ func (d *DB) SetReadingProgressRevision(p *ReadingProgress, fields ProgressField
 		if baseGeneration >= 0 {
 			query += ` AND reset_generation = ?`
 			args = append(args, baseGeneration)
+		}
+		if timelineGeneration >= 0 {
+			query += ` AND EXISTS (SELECT 1 FROM editions WHERE id = progress.edition_id AND timeline_generation = ?)`
+			args = append(args, timelineGeneration)
 		}
 		err = d.QueryRow(query+` RETURNING revision, reset_generation`, args...).Scan(&revision, &generation)
 	}
@@ -198,6 +206,14 @@ func (t *Tx) UpsertEditionPages(e *EditionPages) (int64, error) {
 }
 
 func upsertEditionPages(q dbtx, e *EditionPages) (int64, error) {
+	if e.SourceKey != "" {
+		id, err := upsertSourceEdition(q, &e.Edition)
+		if err != nil {
+			return 0, err
+		}
+		_, err = q.Exec(`UPDATE editions SET page_count=? WHERE id=?`, e.PageCount, id)
+		return id, err
+	}
 	var id int64
 	err := q.QueryRow(`SELECT id FROM editions WHERE work_id = ? AND format = ? AND lower(title) = lower(?) AND season_num IS NULL`,
 		e.WorkID, e.Format, e.Title).Scan(&id)

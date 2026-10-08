@@ -1,6 +1,9 @@
+import { mediaOperationId } from "../mediaProgressLock";
+import { getMediaIdentity } from "../mediaProgressIdentity";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { api, apiChecked, getToken, media, type EditionDetail, type PlaybackInfo, type WorkDetail } from "../api";
 import { fmtClock } from "../util";
+import { createMediaTimeline, resolveEditionPosition, resolveEndedFile, resolveFilePosition } from "../contracts/mediaTimeline";
 import { VideoProgressSaver } from "./videoProgress";
 import { c, ghostBtn, muted } from "../styles";
 import {
@@ -51,13 +54,68 @@ type VideoPlayerProps = {
   editionId: number;
   onClose: () => void;
   onSelectEdition: (id: number) => void;
+  timelineContext?: { generation: string; start: number; total: number; onSeek: (position: number) => void; onEnded: () => boolean; saver: VideoProgressSaver };
   localProgress?: Map<number, { position: number; isFinished: boolean }>;
   onProgress?: (editionId: number, patch: { position: number; duration: number; finished: boolean }) => void;
 };
 
 export function VideoPlayer(props: VideoPlayerProps) {
+  const edition = props.w.editions.find((e) => e.id === props.editionId);
+  if (edition?.available === false || edition?.files.length === 0) return <div role="alert">{edition.unavailableReason ?? "This edition has no available media files"}<button onClick={props.onClose}>Close</button></div>;
+  if (edition?.generation) return <TimelineVideoPlayer key={`${edition.id}:${edition.generation}`} {...props} />;
   const fileId = props.w.editions.find((edition) => edition.id === props.editionId)?.files[0]?.id ?? 0;
   return <VideoPlayerSession key={`${props.editionId}:${fileId}`} {...props} />;
+}
+
+function TimelineVideoPlayer(props: VideoPlayerProps) {
+  const edition = props.w.editions.find((e) => e.id === props.editionId)!;
+  const timeline = createMediaTimeline(edition.id, edition.generation!, edition.files.map((f) => ({ fileId: f.id, durationSecs: f.duration > 0 ? f.duration : null })));
+  const local = props.localProgress?.get(edition.id) ?? { position: edition.position ?? 0, isFinished: !!edition.isFinished };
+  const version = useRef(0);
+  const [position, setPosition] = useState(() => {
+    try {
+      if (!edition.isFinished && edition.resumeFileId !== undefined && edition.resumeFileOffset !== undefined && edition.progressGeneration !== edition.generation) return resolveFilePosition(timeline,timeline.generation,edition.resumeFileId,edition.resumeFileOffset);
+      return resolveEditionPosition(timeline, timeline.generation, local.isFinished ? 0 : local.position);
+    }
+    catch { return resolveFilePosition(timeline,timeline.generation,timeline.files[0].fileId,0); }
+  });
+  const shared = useRef<VideoProgressSaver | null>(null);
+  const base = useRef<Promise<{revision:number;resetGeneration:number}> | null>(null);
+  if (!shared.current) shared.current = new VideoProgressSaver(`/progress/${edition.id}`, timeline.totalDurationSecs ?? 0, async (patch) => {
+    let body: object = { ...patch, expectedGeneration: timeline.generation };
+    if (!getMediaIdentity().ownerId) {
+      base.current ??= apiChecked(`/progress/${edition.id}`);
+      const current = await base.current;
+      body = { ...patch, expectedGeneration: timeline.generation, revision: current.revision, resetGeneration: current.resetGeneration };
+    }
+    const result = await apiChecked<{revision:number;resetGeneration:number}>(`/progress/${edition.id}`, {method:"POST",body:JSON.stringify(body)});
+    if (!getMediaIdentity().ownerId && result) base.current = Promise.resolve(result);
+    return result;
+  });
+  const [problem,setProblem] = useState("");
+  const [resumeBlocked, setResumeBlocked] = useState(!!edition.resumeConflict);
+  if (resumeBlocked) return <div role="alert">Saved progress refers to changed media. Choose a new starting point.<button onClick={() => { void shared.current!.save(0, false, true); setPosition(resolveFilePosition(timeline,timeline.generation,timeline.files[0].fileId,0)); setResumeBlocked(false); }}>Start from beginning</button><button onClick={props.onClose}>Close</button></div>;
+  const selected = edition.files.find((f) => f.id === position.fileId)!;
+  const timelineFile = timeline.files.find((f) => f.fileId === position.fileId)!;
+  const start = timelineFile.startSecs;
+  if (start === null) return <div role="alert">This part has no known timeline offset. Rescan the edition before playing it.<button onClick={props.onClose}>Close</button></div>;
+  const detail = { ...edition, position: position.fileOffsetSecs, files: [selected], chapters: edition.chapters };
+  const w = { ...props.w, editions: props.w.editions.map((e) => e.id === edition.id ? detail : e) };
+  const seek = (n: number) => {
+    try { const resolved = resolveEditionPosition(timeline,timeline.generation,n); version.current++; setPosition(resolved); }
+    catch { setProblem("That position needs a known duration. Rescan the edition before seeking there."); }
+  };
+  return <>
+    {problem && <div role="alert">{problem}</div>}
+    <VideoPlayerSession key={`${edition.id}:${timeline.generation}:${selected.id}:${version.current}`} {...props} w={w}
+      localProgress={new Map([[edition.id,{position:position.fileOffsetSecs,isFinished:false}]])}
+      timelineContext={{ generation:timeline.generation,start,total:timeline.totalDurationSecs ?? 0,saver:shared.current!,onSeek:seek,onEnded:() => {
+        const index=timeline.files.findIndex((f)=>f.fileId===selected.id);
+        if (index+1>=timeline.files.length) return false;
+        try { const resolved = resolveEndedFile(timeline,timeline.generation,selected.id).position; version.current++; setPosition(resolved); return true; }
+        catch { setProblem("The next part needs a known duration. Rescan the edition before continuing."); return true; }
+      } }} />
+  </>;
 }
 
 function VideoPlayerSession(props: VideoPlayerProps) {
@@ -65,6 +123,8 @@ function VideoPlayerSession(props: VideoPlayerProps) {
   const ed: EditionDetail = found ?? { id: props.editionId, format: "video", title: props.w.title, duration: 0, files: [], chapters: [] };
   const ref = useRef<HTMLVideoElement | null>(null);
   const saved = useRef(0);
+  const sessionAlive = useRef(true);
+  const completed = useRef(false);
   const live = useRef(false);
   const edRef = useRef(ed);
   edRef.current = ed;
@@ -93,6 +153,8 @@ function VideoPlayerSession(props: VideoPlayerProps) {
   const [bootKey, setBootKey] = useState(0);
   const modeRef = useRef<"direct" | "hls">("direct");
   const resumeRef = useRef(0);
+  const baseProgress = useRef<Promise<{revision:number; resetGeneration:number}> | null>(null);
+  const selectedMode = useRef<"auto" | "hls">("auto");
   const [pip, setPip] = useState(false);
   const [fsOn, setFsOn] = useState(false);
   const pipOK = typeof document !== "undefined" && document.pictureInPictureEnabled;
@@ -102,13 +164,24 @@ function VideoPlayerSession(props: VideoPlayerProps) {
     const editionId = ed.id;
     progressRef.current = {
       key: progressKey,
-      saver: new VideoProgressSaver(`/progress/${editionId}`, ed.duration, async (patch) => {
+      saver: props.timelineContext?.saver ?? new VideoProgressSaver(`/progress/${editionId}`, ed.duration, async (patch) => {
         const controller = new AbortController();
         const timer = window.setTimeout(() => controller.abort(), 15000);
         try {
-          await apiChecked(`/progress/${editionId}`, {
-            method: "POST", body: JSON.stringify(patch), signal: controller.signal,
+          let body: object = patch;
+          if (props.timelineContext && getMediaIdentity().ownerId) {
+            body = { ...patch, position: patch.position + props.timelineContext.start, duration: props.timelineContext.total, expectedGeneration: props.timelineContext.generation };
+          } else if (props.timelineContext) {
+            baseProgress.current ??= apiChecked(`/progress/${editionId}`);
+            const base = await baseProgress.current;
+            body = { ...patch, position: patch.position + props.timelineContext.start, duration: props.timelineContext.total,
+              revision: base.revision, resetGeneration: base.resetGeneration, expectedGeneration: props.timelineContext.generation };
+          }
+          const result = await apiChecked<{revision:number;resetGeneration:number}>(`/progress/${editionId}`, {
+            method: "POST", body: JSON.stringify(body), signal: controller.signal,
           });
+          if (props.timelineContext && result) baseProgress.current = Promise.resolve(result);
+          return result;
         } finally {
           clearTimeout(timer);
         }
@@ -122,11 +195,13 @@ function VideoPlayerSession(props: VideoPlayerProps) {
   durRef.current = dur;
 
   const report = (position: number, finished: boolean) => {
-    propsRef.current.onProgress?.(edRef.current.id, { position, duration: durRef.current || edRef.current.duration || 0, finished });
+    propsRef.current.onProgress?.(edRef.current.id, { position: position + (props.timelineContext?.start ?? 0), duration: props.timelineContext?.total || durRef.current || edRef.current.duration || 0, finished });
   };
 
   const save = (pos: number, finished = false, explicit = false) => {
+    if (completed.current && !finished) return Promise.resolve();
     report(pos, finished);
+    if (props.timelineContext) return props.timelineContext.saver.save(pos + props.timelineContext.start, finished, explicit);
     return progressRef.current!.saver.save(pos, finished, explicit);
   };
 
@@ -135,23 +210,30 @@ function VideoPlayerSession(props: VideoPlayerProps) {
   const chapters = (ed.chapters || []).filter((ch) => ch.end > ch.start && ch.start < total);
 
   useEffect(() => {
+    sessionAlive.current = true;
     let alive = true;
     let hlsSid = "";
     setSrc(undefined);
     setActive(false);
     setFatal("");
+    const retryPosition = bootKey > 0 ? saved.current : null;
     saved.current = 0;
     live.current = false;
     const local = props.localProgress?.get(props.editionId);
     const resumeFrom = local ?? { position: ed.position ?? 0, isFinished: !!ed.isFinished };
-    resumeRef.current = resumeFrom.position > 0 && !resumeFrom.isFinished ? resumeFrom.position : 0;
+    resumeRef.current = retryPosition ?? (resumeFrom.position > 0 && !resumeFrom.isFinished ? resumeFrom.position : 0);
     const boot = async () => {
       let info: PlaybackInfo = { mode: "direct", fileId };
       try {
-        const p = await api(`/editions/${props.editionId}/playback`);
+        const p = props.timelineContext
+          ? await apiChecked(`/editions/${props.editionId}/playback-sessions`, { method:"POST", body:JSON.stringify({contractVersion:1,requestId:mediaOperationId(),generation:props.timelineContext.generation,fileId,fileOffsetSecs:resumeRef.current,mode:selectedMode.current}) })
+          : await api(`/editions/${props.editionId}/playback`);
         if (p && (p.mode === "direct" || p.mode === "hls")) info = p;
-      } catch {}
-      if (!alive) return;
+      } catch (error) { if (props.timelineContext) throw error; }
+      if (!alive) {
+        if (info.sessionId) void apiChecked(`/hls/${info.sessionId}`,{method:"DELETE"}).catch(() => {});
+        return;
+      }
       modeRef.current = info.mode;
       setActive(true);
       if (info.mode === "hls" && info.sessionId) {
@@ -195,7 +277,7 @@ function VideoPlayerSession(props: VideoPlayerProps) {
         setSrc(url);
         return;
       }
-      setSrc(media(`/stream/${info.fileId || fileId}`));
+      setSrc(media(`/stream/${info.fileId || fileId}${props.timelineContext ? `?generation=${encodeURIComponent(props.timelineContext.generation)}` : ""}`));
     };
     boot().catch((error: unknown) => {
       if (!alive) return;
@@ -217,7 +299,7 @@ function VideoPlayerSession(props: VideoPlayerProps) {
 
   useEffect(() => {
     let alive = true;
-    fetch(media(`/subtitles/${fileId}`), { method: "HEAD" })
+    fetch(media(`/subtitles/${fileId}${props.timelineContext ? `?generation=${encodeURIComponent(props.timelineContext.generation)}` : ""}`), { method: "HEAD" })
       .then((r) => { if (alive) setSubs(r.ok); })
       .catch(() => {});
     return () => { alive = false; };
@@ -227,7 +309,7 @@ function VideoPlayerSession(props: VideoPlayerProps) {
     setThumbs(null);
     if (!ed.files[0]?.videoCodec) return;
     let alive = true;
-    api(`/editions/${props.editionId}/thumbs`)
+    api(`/editions/${props.editionId}/thumbs${props.timelineContext ? `?fileId=${fileId}&generation=${encodeURIComponent(props.timelineContext.generation)}` : ""}`)
       .then((m) => { if (alive && m && m.TileCount > 0 && m.Width > 0 && m.Height > 0 && m.Interval > 0) setThumbs(m as Thumbs); })
       .catch(() => {});
     return () => { alive = false; };
@@ -262,14 +344,18 @@ function VideoPlayerSession(props: VideoPlayerProps) {
 
   useEffect(() => {
     const t = window.setInterval(() => { if (ref.current) saved.current = ref.current.currentTime; }, 1000);
+    const leave = () => { if (sessionAlive.current && live.current && !completed.current) void save(ref.current?.currentTime ?? saved.current); };
+    addEventListener("pagehide", leave);
     const p = window.setInterval(() => {
       const v = ref.current;
       if (v && !v.paused && live.current) void save(v.currentTime);
     }, 15000);
     return () => {
+      removeEventListener("pagehide", leave);
       clearInterval(t);
       clearInterval(p);
-      if (live.current) {
+      sessionAlive.current = false;
+      if (live.current && !completed.current) {
         const pos = ref.current?.currentTime ?? saved.current;
         void save(pos);
       }
@@ -308,8 +394,9 @@ function VideoPlayerSession(props: VideoPlayerProps) {
     const v = ref.current;
     if (!v) return;
     const lim = total > 0 ? total : v.duration;
-    let t = v.currentTime + delta;
+    let t = v.currentTime + (props.timelineContext?.start ?? 0) + delta;
     if (isFinite(lim) && lim > 0) t = Math.min(t, lim);
+    if (props.timelineContext) { seekTo(Math.max(0,t));flashSkip(delta < 0 ? "back" : "fwd");return; }
     v.currentTime = Math.max(0, t);
     saved.current = v.currentTime;
     setTime(v.currentTime);
@@ -322,9 +409,19 @@ function VideoPlayerSession(props: VideoPlayerProps) {
     if (!v || !isFinite(t)) return;
     const lim = total > 0 ? total : v.duration;
     if (isFinite(lim) && lim > 0) t = Math.min(t, lim);
+    if (props.timelineContext) {
+      const start=props.timelineContext.start;
+      const duration=ed.files[0]?.duration || 0;
+      if (!duration) { props.timelineContext.onSeek(Math.max(0,t)); return; }
+      if (t < start || (duration>0 && t >= start+duration && t<total)) {
+        void save(v.currentTime,false);
+        props.timelineContext.onSeek(Math.max(0,t));return;
+      }
+      t-=start;
+    }
     v.currentTime = Math.max(0, t);
     saved.current = v.currentTime;
-    setTime(v.currentTime);
+    setTime(v.currentTime + (props.timelineContext?.start ?? 0));
     if (live.current) void save(v.currentTime, false, true);
   };
 
@@ -412,7 +509,7 @@ function VideoPlayerSession(props: VideoPlayerProps) {
     ms.setActionHandler("pause", () => { ref.current?.pause(); });
     ms.setActionHandler("seekbackward", () => seekBy(-10));
     ms.setActionHandler("seekforward", () => seekBy(10));
-    try { ms.setActionHandler("seekto", (d) => { if (ref.current && d.seekTime != null) ref.current.currentTime = d.seekTime; }); } catch { /* older browsers */ }
+    try { ms.setActionHandler("seekto", (d) => { if (ref.current && d.seekTime != null) seekTo(d.seekTime); }); } catch { /* older browsers */ }
     return () => {
       ms.metadata = null;
       for (const a of ["play", "pause", "seekbackward", "seekforward", "seekto"] as const) {
@@ -454,9 +551,9 @@ function VideoPlayerSession(props: VideoPlayerProps) {
   };
 
   const thumbBox = (() => {
-    if (!thumbs || hoverT == null || total <= 0) return null;
+    if (!thumbs || hoverT == null || total <= 0 || (props.timelineContext && (hoverT < props.timelineContext.start || hoverT >= props.timelineContext.start + (ed.files[0]?.duration || 0)))) return null;
     const perSheet = thumbs.TileWidth * thumbs.TileHeight;
-    const frame = Math.max(0, Math.min(Math.floor(hoverT / thumbs.Interval), thumbs.TileCount * perSheet - 1));
+    const frame = Math.max(0, Math.min(Math.floor((hoverT - (props.timelineContext?.start ?? 0)) / thumbs.Interval), thumbs.TileCount * perSheet - 1));
     const sheet = Math.floor(frame / perSheet);
     const inSheet = frame % perSheet;
     const col = inSheet % thumbs.TileWidth;
@@ -467,7 +564,7 @@ function VideoPlayerSession(props: VideoPlayerProps) {
       left: `clamp(0px, calc(${(hoverT / total) * 100}% - ${w / 2}px), calc(100% - ${w}px))`,
       width: `${w}px`,
       height: `${h}px`,
-      backgroundImage: `url(${media(`/editions/${props.editionId}/thumbs/${sheet}.jpg`)})`,
+      backgroundImage: `url(${media(`/editions/${props.editionId}/thumbs/${sheet}.jpg${props.timelineContext ? `?fileId=${fileId}&generation=${encodeURIComponent(props.timelineContext.generation)}` : ""}`)})`,
       backgroundSize: `${w * thumbs.TileWidth}px ${h * thumbs.TileHeight}px`,
       backgroundPosition: `-${col * w}px -${row * h}px`,
     };
@@ -546,17 +643,18 @@ function VideoPlayerSession(props: VideoPlayerProps) {
           src={src}
           style={{ width: "100%", height: "100%", background: "#000", display: "block", objectFit: "contain" }}
           onLoadedMetadata={() => {
+            if (!sessionAlive.current) return;
             const v = ref.current;
             if (!v) return;
             live.current = true;
-            setDur(v.duration || ed.duration || 0);
+            setDur(props.timelineContext?.total || (v.duration ? v.duration + (props.timelineContext?.start ?? 0) : ed.duration) || 0);
             const target = resumeRef.current;
             if (target <= 0) return;
             if (modeRef.current === "direct") {
               // Direct files resume on EVERY browser: the old condition
               // consulted the browser's unrelated HLS capability instead of
               // the mode actually selected for this resource.
-              if (target < (v.duration || Infinity) - 5) {
+              if (target < (v.duration || Infinity)) {
                 v.currentTime = target;
                 resumeRef.current = 0;
               }
@@ -578,13 +676,14 @@ function VideoPlayerSession(props: VideoPlayerProps) {
             tryRestore();
           }}
           onTimeUpdate={() => {
+            if (!sessionAlive.current) return;
             const v = ref.current;
             if (!v) return;
             live.current = true;
             saved.current = v.currentTime;
-            setTime(v.currentTime);
+            setTime(v.currentTime + (props.timelineContext?.start ?? 0));
             try {
-              if (v.buffered.length > 0) setBuffered(v.buffered.end(v.buffered.length - 1));
+              if (v.buffered.length > 0) setBuffered(v.buffered.end(v.buffered.length - 1) + (props.timelineContext?.start ?? 0));
             } catch { /* noop */ }
             if ("mediaSession" in navigator && navigator.mediaSession.setPositionState) {
               try {
@@ -596,22 +695,35 @@ function VideoPlayerSession(props: VideoPlayerProps) {
           onPlaying={() => setWaiting(false)}
           onCanPlay={() => setWaiting(false)}
           onError={() => {
+            if (!sessionAlive.current) return;
             setWaiting(false);
             setPlaying(false);
-            if (src) setFatal("Playback failed — the stream could not be loaded.");
+            if (src && props.timelineContext && modeRef.current === "direct") {
+              resumeRef.current = ref.current?.currentTime ?? saved.current;
+              selectedMode.current = "hls";
+              setBootKey((n)=>n+1);
+            } else if (src) setFatal("Playback failed — the stream could not be loaded.");
           }}
           onPlay={() => { setPlaying(true); setWaiting(false); showUI(); if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "playing"; }}
-          onPause={() => { setPlaying(false); setUiVis(true); if (live.current) void save(saved.current); if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "paused"; }}
+          onPause={() => { if (!sessionAlive.current || completed.current) return; setPlaying(false); setUiVis(true); if (live.current) void save(saved.current); if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "paused"; }}
           onSeeked={() => {
+            if (!sessionAlive.current) return;
             const v = ref.current;
             if (!v || !live.current) return;
             saved.current = v.currentTime;
-            setTime(v.currentTime);
+            setTime(v.currentTime + (props.timelineContext?.start ?? 0));
             void save(v.currentTime, false, true);
           }}
-          onEnded={() => { setPlaying(false); setUiVis(true); void save(total, true); if (next) props.onSelectEdition(next.id); else props.onClose(); }}
+          onEnded={() => {
+            if (!sessionAlive.current || completed.current) return;
+            setPlaying(false); setUiVis(true);
+            const finalPosition = props.timelineContext ? ref.current?.currentTime ?? saved.current : total;
+            if (props.timelineContext?.onEnded()) { void save(finalPosition); completed.current = true; return; }
+            void save(finalPosition, true); completed.current = true;
+            if (next) props.onSelectEdition(next.id); else props.onClose();
+          }}
         >
-          {subs ? <track kind="subtitles" src={media(`/subtitles/${fileId}`)} srcLang="en" label="Subtitles" /> : null}
+          {subs ? <track kind="subtitles" src={media(`/subtitles/${fileId}${props.timelineContext ? `?generation=${encodeURIComponent(props.timelineContext.generation)}` : ""}`)} srcLang="en" label="Subtitles" /> : null}
         </video>
 
         {waiting && active && (

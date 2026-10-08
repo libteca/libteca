@@ -50,7 +50,10 @@ func buildABSReleasedFixture(t *testing.T) string {
 	writeReleasedAudio(t, a2, 4096)
 	b1 := filepath.Join(bookDirB, "single.m4b")
 	writeReleasedAudio(t, b1, 4096)
-	epFile := filepath.Join(root, "media", "ep1.mp3")
+	epFile := filepath.Join(root, "pods", "ep1.mp3")
+	if err := os.MkdirAll(filepath.Join(root, "pods"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	writeReleasedAudio(t, epFile, 2048)
 
 	absDir := filepath.Join(root, "abs")
@@ -76,7 +79,7 @@ func buildABSReleasedFixture(t *testing.T) string {
 		`CREATE TABLE playlists (id TEXT PRIMARY KEY, userId TEXT, name TEXT)`,
 		`CREATE TABLE playlistMediaItems (id TEXT PRIMARY KEY, playlistId TEXT, mediaItemId TEXT, mediaItemType TEXT)`,
 		`INSERT INTO libraries VALUES ('lib-1', 'Audiobooks', 'book'), ('lib-2', 'Pods', 'podcast')`,
-		`INSERT INTO libraryFolders VALUES ('f-1', 'lib-1', '` + filepath.Join(root, "media") + `')`,
+		`INSERT INTO libraryFolders VALUES ('f-1', 'lib-1', '` + filepath.Join(root, "media") + `'), ('f-2', 'lib-2', '` + filepath.Join(root, "pods") + `')`,
 		`INSERT INTO users VALUES ('user-1', 'tyler', 'bcrypt-hash', 'admin'), ('user-2', 'guest', 'bcrypt-hash', 'user')`,
 		`INSERT INTO libraryItems VALUES
 			('item-a', 'lib-1', 'book-a', 'book', 'Novel A', '` + bookDirA + `'),

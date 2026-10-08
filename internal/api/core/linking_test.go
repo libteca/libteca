@@ -211,58 +211,42 @@ func TestWorkMergeEndpointGuards(t *testing.T) {
 }
 
 func TestCrossLibraryLinkingEndpointsPreserveSourcePlayback(t *testing.T) {
-	env := newLinkingEnv(t)
-	lib, err := env.db.Library(env.libID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	otherLib, err := env.db.AddLibrary("Books", "books", t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	source := linkSeedWork(t, env.db, env.libID, "Source")
-	target := linkSeedWork(t, env.db, otherLib, "Target")
-	edition := linkSeedEdition(t, env.db, source, "Audio")
-	path := filepath.Join(lib.Path, "book.m4b")
-	if err := os.WriteFile(path, []byte("source media"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	fileID := seedFile(t, env.db, edition, path)
-	checkStream := func(t *testing.T) {
-		t.Helper()
-		resp := authedGet(t, env.base+"/stream/"+itoa(fileID), env.adminToken)
-		if body := bodyStr(t, resp); resp.StatusCode != 200 || body != "source media" {
-			t.Fatalf("stream = %d %q", resp.StatusCode, body)
-		}
-	}
-	checkStream(t)
-	for _, tc := range []struct {
-		name, path, body string
-	}{
-		{"existing target", "/editions/" + itoa(edition) + "/move", `{"workId":` + itoa(target) + `}`},
-		{"new target", "/editions/" + itoa(edition) + "/move", `{"newTitle":"Must not exist","libraryId":` + itoa(otherLib) + `}`},
-		{"merge", "/works/" + itoa(source) + "/merge", `{"intoWorkId":` + itoa(target) + `}`},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			code, body := env.do(t, "POST", tc.path, env.adminToken, tc.body)
-			if code != 400 || body["error"] == nil {
-				t.Fatalf("cross-library request = %d %v", code, body)
+	for _, operation := range []string{"move", "new", "merge"} {
+		t.Run(operation, func(t *testing.T) {
+			env := newLinkingEnv(t)
+			lib, err := env.db.Library(env.libID)
+			if err != nil {
+				t.Fatal(err)
 			}
-			var count int
-			if err := env.db.QueryRow(`SELECT count(*) FROM works`).Scan(&count); err != nil || count != 2 {
-				t.Fatalf("works = %d, %v", count, err)
+			other, err := env.db.AddLibrary("Books", "books", t.TempDir())
+			if err != nil {
+				t.Fatal(err)
 			}
-			ed, err := env.db.EditionRow(edition)
-			if err != nil || ed.WorkID != source {
-				t.Fatalf("edition changed = %+v, %v", ed, err)
+			source := linkSeedWork(t, env.db, env.libID, "Source")
+			target := linkSeedWork(t, env.db, other, "Target")
+			edition := linkSeedEdition(t, env.db, source, "Audio")
+			path := filepath.Join(lib.Path, "book.m4b")
+			if err := os.WriteFile(path, []byte("source media"), 0600); err != nil {
+				t.Fatal(err)
 			}
-			checkStream(t)
+			file := seedFile(t, env.db, edition, path)
+			endpoint := "/editions/" + itoa(edition) + "/move"
+			body := `{"workId":` + itoa(target) + `}`
+			if operation == "new" {
+				body = `{"newTitle":"New target","libraryId":` + itoa(other) + `}`
+			}
+			if operation == "merge" {
+				endpoint = "/works/" + itoa(source) + "/merge"
+				body = `{"intoWorkId":` + itoa(target) + `}`
+			}
+			code, response := env.do(t, "POST", endpoint, env.adminToken, body)
+			if code != 200 {
+				t.Fatal(code, response)
+			}
+			resp := authedGet(t, env.base+"/stream/"+itoa(file), env.adminToken)
+			if content := bodyStr(t, resp); resp.StatusCode != 200 || content != "source media" {
+				t.Fatal(resp.StatusCode, content)
+			}
 		})
 	}
-	localTarget := linkSeedWork(t, env.db, env.libID, "Local target")
-	code, body := env.do(t, "POST", "/editions/"+itoa(edition)+"/move", env.adminToken, `{"workId":`+itoa(localTarget)+`}`)
-	if code != 200 || body["sourceDeleted"] != true {
-		t.Fatalf("same-library move = %d %v", code, body)
-	}
-	checkStream(t)
 }

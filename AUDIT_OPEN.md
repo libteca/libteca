@@ -1097,3 +1097,183 @@ acceptance gate for both importers.
 Verification: go vet ./... clean; go test ./... -count=1 green; go test
 -race on store/scan/watch/importer/core/abs green; web tsc + vitest 335/335
 in 25 files + build clean.
+
+## Runtime architecture integration (2026-10-07)
+
+LT-P01 now has physical file roots, physical edition keys, selected-file serving,
+source-aware deletion and a reviewed repair CLI. LT-P02 now publishes atomic
+observed timeline generations and fences selected playback/progress; scanner
+full-content verification detects same-stamp replacement and forces reprobe when a legacy digest is absent.
+LT-P05 now has selected-file playback sessions and multipart video runtime
+integration. LT-P06 now has opt-in reservation/lifetime budgets and incremental
+output cancellation. See DECISIONS.md 56–62 and source-repair-command.md for
+operator contracts. These implementations do not substitute for the real-data,
+real-browser/codec, extractor, hardware or deployment acceptance in LT-P08/P10.
+
+The current lockfile upgrades source-map-js to its patched release; the runtime
+npm audit high-severity gate is rerun during validation. Moderate findings in
+upstream Neutron dependency paths remain an upstream responsibility. The
+historical LT-P07 statement that no dependencies were upgraded is superseded.
+LT-P09 retains its explicitly excluded focused-review status; ordinary existing
+tests do not provide that sign-off.
+
+LT-P04 now has durable immutable media operations, atomic receipts, edition and
+podcast reset/revision fences, owner-scoped replay and retained conflicts. Native
+Chromium fixtures cover lost acknowledgement/reload, offline completion, quota
+refusal and reset quarantine. Saved file provenance maps resume across reorder
+and requires explicit start after content replacement or unproven legacy state.
+Direct stream and subtitle requests can carry generation fences. Unknown
+durations and unavailable alternates remain explicit in work detail. Broader
+real-device eviction/crash/upgrade acceptance remains pending.
+
+Final integration verification (2026-10-07): full Go suite with and without
+-race, go vet, 385 web tests in 29 files, TypeScript and web build pass. The
+CGO-free Linux amd64 build embeds those generated assets. Runtime npm audit
+passes its high-severity gate with six moderate upstream Neutron dependency
+findings. These receipts retain the external acceptance boundaries above.
+
+
+## 2026-10-07 — Focused security repair candidates
+
+Independent LT-P09 source review found missing live Jellyfin owner filtering,
+device-only session collisions, an unconfined podcast stream and sockets that
+retained explicitly revoked credentials. Repair candidates now route live
+updates per authenticated owner, key session state and play-session lookup by
+owner, open podcast files under physical sources (native fallback under
+data/podcasts) without descendant symlinks, and fence socket commands and
+actual delivery against the existing token/user revocation methods. The fence
+holds through admitted command handling and socket writes; revocation completion
+follows those admitted actions. A socket write has a ten-second deadline, and
+idle sockets revalidate each second with a two-second lookup deadline. Already
+written transport bytes cannot be recalled. No token expiry policy was added.
+
+The prior F03 processor closure covers primary descriptor admission only. It
+does not demonstrate confinement of secondary demuxer file opens. Processor
+input now restricts descriptor protocols and self-contained supported container
+families and disables MOV external references/absolute alias paths. Caller
+output needs no longer widen input protocols. This is not a process filesystem
+sandbox; binary/corpus validation and native parser isolation remain separate.
+See docs/processor-input-security.md. No outside-resource disclosure was
+executed or proven by this source review.
+
+Core writes retain explicit query-token compatibility. Media cookies authorize
+only classified GET/HEAD reads; first-party writes use Authorization. The older
+claim that every write requires that header was too strong. Compatibility-face
+credentials, independent-token logout, ABS possession capabilities, Subsonic
+credential storage and expiry deferrals remain qualified as before.
+
+Focused production-route HTTP/socket, revocation-fence and adversarial processor
+regressions are prepared but unrun under the shared heavy-execution hold.
+Formatting and source whitespace checks passed. Independent review of this
+exact repair snapshot is required before landing. LT-P09 security acceptance,
+real engine/corpus/device/deployment gates remain open.
+
+## 2026-10-07 — Recovery finisher: assembled-tree validation, R3-01 closure, architecture r3 completion
+
+The shared tree at base 853ddc6 carries two stacked candidates: the security
+repair (reviewed r3, patch 9dea5eb1, 20 owned paths) and the architecture
+aggregate plus its unreviewed fix-r3 delta. This pass segmented the dirty tree,
+executed the never-run security tests, closed the surviving security bound,
+completed the architecture objections and validated the assembled whole. No
+commit was made; the tree stays dirty for orchestrator slicing.
+
+Segmentation is byte-proven, not inferred: all 20 security-owned paths match
+the reviewed security receipt exactly; every other changed file matches the
+architecture r2 freeze except 27 edited files plus 8 new files that constitute
+the architecture fix-r3 delta. The three registers are shared by both lanes.
+The finisher's own edits listed below extend the security slice (fence repair
+plus argv/test corrections) and the architecture slice (adoption completion).
+
+Security tests were run for the first time against the assembled tree with
+ffmpeg/ffprobe 9.0.1 present. The first run failed five ways, all real:
+the mov-private `-enable_drefs 0 -use_absolute_path 0` options broke the WAV
+capability probe (every processor path refused) and would break every non-MOV
+input at option parsing; the prepared binary-gate positive controls used
+`fd:`-relative and extension-dependent forms ffmpeg 9 rejects for unrelated
+reasons; one security regression helper sent a literal empty `Authorization:
+Bearer` header that the middleware correctly fails closed on. Repairs: the two
+mov options are removed (both default disabled, so MOV external references and
+absolute alias paths stay refused by default posture; verified against
+`ffmpeg -h demuxer=mov`), the whitelist stays input-side `fd` (or `file` for
+the /dev/fd form) with the format whitelist unchanged — ffmpeg 9 applies
+per-file protocol whitelists, so generated pipe/file outputs work without
+widening input admission (verified empirically), the concat positive control
+uses `file://` entries (escape observed when `file` is admitted, refused with
+"Protocol 'file' not on whitelist" under the production whitelist), and the
+empty-token helper no longer sends header credentials. The startup probe,
+real subtitle extraction over a descriptor, descriptor decoding, input/output
+boundary and confinement subtests now execute against real binaries instead of
+skipping. An HLS unrestricted positive control is not constructible through a
+descriptor input on ffmpeg 9 (the hls demuxer requires extension/mime hints a
+`fd:` URL cannot carry); nested-HLS refusal is still asserted through the
+production argv, and the format whitelist refuses concat content outright.
+MOV external-reference and adversarial-hls corpora remain open exactly as the
+r3 review qualified them.
+
+LT-SEC-R3-01 (finding 04's unbounded survivor) is closed at source:
+SessionsStart no longer runs session detail construction inside the revocation
+fence. Text admission splits into a short fenced subscription, a detail build
+outside the fence under a five-second context that socket shutdown cancels and
+that reaches every store query (users lookup plus new context-aware
+WorkViewByID/EditionByID/Library store reads), and a second short fenced
+revalidation that pushes only to a still-registered subscriber; final writes
+retain sender/recipient validation in writeLoop. Detail construction also
+stops loading whole libraries: it resolves the single matching WorkView. Live
+broadcast fan-out uses the same bounded context. Regression coverage added:
+with the store pool exhausted behind credential admission, explicit revocation
+through a second handle completes promptly, the stalled socket closes without
+delivering a session snapshot, the detail context is provably bounded and
+cancelled by socket shutdown, and a fresh context still produces the owner
+view. Fence-held work is now bounded by construction: the two-second
+credential lookup, hub map operations, non-blocking enqueues and the
+ten-second write deadline. The store fence ordering test from r2 is retained.
+Residual, honestly scoped: the pool-exhaustion bound is demonstrated with a
+second SQLite handle because same-handle revocation necessarily shares the
+exhausted pool; findings 01–03 and 06 now have executed regression evidence;
+05's supported-binary gate ran on 9.0.1 with the corpus gaps above.
+
+Architecture objections LT-ARCH-R2-01..08: all eight now have complete
+in-tree implementations with green focused regressions. 01 (played-game
+deletion) deletes dependent rows before the last physical file of disappearing
+editions, clears file references on survivors, preserves game watermarks for
+mixed sources and adds single/mixed/rollback coverage. 02 (import↔scan
+adoption) adds migration 0024 source aliases, full-content digests computed
+under stat revalidation on import, alias/digest-validated edition resolution,
+physical roots derived from real Kavita paths, and released-fixture
+import→scan/scan→import/repeat tests; the finisher repaired the partial work:
+Kavita libraries without physical files keep the legacy placeholder root,
+provider re-imports keep republishing progress with exactly one revision
+advance (the landed contract; the worker's skip-existing variant is reverted),
+scanner rename re-keying overwrites scanner-owned keys while provider-prefixed
+keys stay canonical, and the atomicity fixtures grow real new books, episodes,
+series and progress so every write stage still executes alongside adoption.
+03 (resume provenance) restricts resume identity to valid full-content SHA-256
+(no stat/sample fallback), refuses unproven resume, and makes seek/read
+failures fail the scan instead of publishing empty digests. 04 (completion
+retry) keeps storage-denied completions in owner/session-scoped volatile state
+with scheduled retry that survives teardown, blocking new saves until the
+completion persists. 05 (intent rules) rejects matching-base heartbeats
+against finished/tombstoned state, backward positions and regressed epochs,
+and the web queue no longer infers seek from a lower position. 06 (trash-left
+trickplay) reclaims incomplete owned output before full-ceiling admission
+under a per-directory flock with OWNED marker validation, refusing complete,
+foreign or malformed directories, with cleanup-failure and concurrency
+coverage. 07 (audio fencing) carries the selected timeline generation through
+primary and edition/playlist audio direct stream requests with stale-timeline
+recovery. 08 (EPUB budgets) routes retained EPUB bytes, ZIP directory parsing
+and dependency/document expansion through the configured shared reader budget
+with bounded adapters and coexistence/release tests. One base CBZ test
+fixture served a one-byte body; it now serves a valid ZIP central directory so
+the production admission path is exercised for what it is.
+
+Assembled-tree validation, all executed this pass with a dedicated cache:
+`go vet ./...` clean, gofmt clean, `go test ./...` 24/24 packages green,
+`go test -race` green on store, api/{core,jellyfin,abs,opds,subsonic},
+importer, scan and trickplay, web `tsc --noEmit` clean, vitest 397/397
+(baseline 349; the two lanes add the remainder), and `make build` produces the
+embedded webdist binary. Logs are sealed under the final audit directory.
+
+Still open, unchanged in kind: security acceptance needs the independent r4
+review of this exact tree; the HLS/MOV adversarial corpora, representative
+format/device corpus, real ABS/Kavita backup acceptance, migration/rollback
+rehearsal, deployment and native-target gates remain as previously qualified.

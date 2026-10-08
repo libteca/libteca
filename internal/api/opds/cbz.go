@@ -2,13 +2,12 @@ package opds
 
 import (
 	"archive/zip"
-	"fmt"
-	"io"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/libteca/libteca/internal/natural"
+	"github.com/libteca/libteca/internal/resourcebudget"
 )
 
 // CBZ page listing/extraction. Mirrors probeCBZ in internal/scan/books.go
@@ -35,17 +34,20 @@ func cbzPageNames(zr *zip.Reader) []string {
 }
 
 func readZipPage(zr *zip.Reader, name string) ([]byte, error) {
+	data, reservation, err := readZipPageReserved(zr, name)
+	reservation.Release()
+	return data, err
+}
+
+func readZipPageReserved(zr *zip.Reader, name string) ([]byte, *resourcebudget.Reservation, error) {
+	budget, err := resourcebudget.ArchiveBudget()
+	if err != nil {
+		return nil, nil, err
+	}
 	rc, err := zr.Open(name)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer rc.Close()
-	data, err := io.ReadAll(io.LimitReader(rc, 20<<20+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(data) > 20<<20 {
-		return nil, fmt.Errorf("page %s exceeds the 20 MB limit", name)
-	}
-	return data, nil
+	return resourcebudget.ReadReserved(rc, 20<<20, budget)
 }

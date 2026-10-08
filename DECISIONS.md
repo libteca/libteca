@@ -761,3 +761,160 @@ backup = `libteca backup` (15g); neutron-go published (17).
     reset; (b) rewritable shared keys restore the cross-tab
     compare-then-delete loss window; (c) merging across generations
     replays positions the owner explicitly discarded.
+
+56. **Physical roots survive logical grouping (2026-10-07).** Files pin
+    source_library_id; new physical editions carry a source-library-scoped
+    source_key. Scanner path evidence and unique missing full-content matches
+    preserve edition and file IDs across metadata changes and renames. Alternate
+    encodings have independent edition keys. Source roots are used by selected
+    media opens in every serving face. Logical regrouping can cross libraries
+    without changing authorization roots. Source deletion removes its own files
+    and rehomes surviving works; changed multipart membership resets affected
+    positions and advances the reset epoch. Legacy roots are pinned to their
+    former authorization scope until an explicit reviewed repair. The repair
+    CLI checks a versioned map, current generations, filesystem identity/stat
+    and full digest proof; physical splits require an explicit progress reset.
+    Downgrade refuses to discard cross-library source ownership. Real-library
+    repair maps and copied-root rehearsals remain operator acceptance.
+
+57. **Timeline generations describe observed physical identity (2026-10-07).**
+    Membership, order, duration, observed hashes, missingness and root changes
+    advance a database generation transactionally. Titles do not. Full hashes
+    are computed outside write transactions; warm scans verify stored digests
+    even when timestamps match. Legacy null digests require a fresh probe and full digest before warm
+    skips resume. Timeline detail and selected
+    playback creation share an atomic membership snapshot, and conditional
+    progress rejects stale generations. HLS binds file and generation;
+    thumbnails carry the snapshot generation, subtitle cache keys include full
+    content evidence, and EPUB location caches already hash downloaded bytes.
+    Unknown durations remain explicit and do not fabricate subsequent starts.
+
+58. **Game sessions accumulate monotonic elapsed reports (2026-10-07).** The
+    additive playtime route uses user, edition, reset epoch and stable session
+    ID. Only elapsed growth contributes to lifetime time; duplicate/reordered
+    watermarks are true no-ops. Different sessions add independently. Session
+    counters remain until edition/user deletion. After session reporting starts,
+    unconditional legacy total writes are rejected atomically. Revision-aware
+    compatibility writes retain their explicit compare-and-swap contract.
+
+59. **Foreign SQLite discovery is a read snapshot (2026-10-07).** A single
+    read-only connection anchors a source transaction before discovery and
+    records its schema generation. Planned media carries filesystem identity
+    and stat evidence checked again before publication. Library matching also
+    checks its configured root. This does not freeze mutable media bytes; a
+    stopped source or consistent database-and-media backup is the supported
+    coherent input. Released-backup acceptance remains separate from fixtures.
+
+60. **Resource limits are opt-in reservations (2026-10-07).** Operator byte
+    limits reserve archive memory and temporary/transcode/trickplay disk before
+    work starts. Reader byte/pixel/decode limits retain leases through actual
+    allocation and release lifetimes. Disk output is checked incrementally and
+    cancelled on overflow; this permits overshoot between checks and is not a
+    filesystem quota. Existing advertised HLS segments are retained. New CBR
+    temporary directories identify their creator process and version; recovery
+    removes only private current-user directories whose creator is no longer
+    alive. Unversioned directories and active creators are left alone. Real
+    extractor, hardware, crash and representative sizing acceptance remains.
+
+61. **Media intent survives delivery failure (2026-10-07).** Each authenticated
+    audio/video save persists an immutable operation before transport, including
+    the original revision/reset/timeline baseline and predecessor identity.
+    Server progress and its operation receipt commit atomically. Receipt lookup
+    settles lost acknowledgements without repeating a write. Owner-scoped Web
+    Locks or transactional IndexedDB expiry leases coordinate replay; server CAS
+    remains the final fence. Conflicts retain their original records and require
+    a deliberate new seek or restart. Storage failure prevents mutation traffic.
+    Operations and receipts are retained until explicit settlement or owner
+    deletion; positions are never maximum-merged. Podcast revisions and reset
+    tombstones follow the same protocol. Broader device acceptance remains.
+
+62. **Resume follows proven content (2026-10-07).** Accepted media operations
+    record selected file identity, relative offset and saved generation. Reorder
+    maps that proven file/offset through current durations. Replaced or missing
+    content, unknown preceding bounds and unproven nonzero legacy state surface
+    an explicit resume conflict rather than guessing a cumulative position.
+    Compatibility writers invalidate provenance; established podcast detail
+    positionSecs/percent fields remain historical values while additive resume
+    fields fence first-party playback. Unknown durations and unavailable editions
+    remain explicit; an unavailable alternate does not hide a whole work. Direct
+    selected streams and subtitles carry optional generation fences, preserving
+    legacy URLs that omit them.
+
+
+## 2026-10-07 — Security repair candidate qualifications
+
+Decision 35's per-user Jellyfin session contract now also applies to live
+Playing/Progress/Stopped broadcasts and owner+device registry keys. Remote
+commands still resolve and deliver to an authenticated owner's socket in one
+hub operation. Long-lived sockets bind to a token digest and current user;
+commands/subscriptions and actual writes validate under a shared store fence
+with explicit logout, token revocation, password rotation and user deletion.
+Revocation completion waits for already admitted actions, including writes
+with a ten-second deadline. Idle sockets revalidate each second. Independent
+tokens retain the existing logout policy. This adds no expiry requirement.
+
+Decision 40's descriptor capability probe demonstrates primary input support,
+not containment of a demuxer's secondary file opens. Input format admission
+is now bounded to the advertised self-contained container families, and MOV
+external references and absolute alias paths are disabled. HLS remains a
+supported generated output. Input protocols are independent of caller output
+requirements. The child retains host filesystem privileges; these restrictions
+are not a native parser sandbox. Supported-binary adversarial execution and
+full advertised-format/corpus/deployment acceptance remain open. Details and
+exact format admission are in docs/processor-input-security.md.
+
+Core mutations continue to accept explicit Authorization or query tokens;
+media cookies remain read-only. First-party mutation clients send Bearer
+headers. No wholesale compatibility credential transport change is made.
+These repair candidates require a new independent review before landing,
+and prepared regressions still require execution when the shared slot opens.
+
+## 2026-10-07 — Recovery-finisher qualifications
+
+63. **Processor input options are default-posture, not global flags
+(2026-10-07).** `-enable_drefs 0 -use_absolute_path 0` are MOV-demuxer private
+options; placed globally they abort option parsing for every non-MOV input and
+broke the WAV capability probe so all processor paths refused. Both default to
+disabled in ffmpeg (verified with `ffmpeg -h demuxer=mov` on 9.0.1), so the
+explicit zeros added no confinement; they are removed. The input protocol
+whitelist stays `fd` (or `file` for the /dev/fd form) plus the format
+whitelist; ffmpeg applies protocol whitelists per file, so pipe/file outputs
+need no input-side admission and caller output extras do not widen input
+protocols (verified by execution against 9.0.1).
+
+64. **Session detail is built outside the revocation fence
+(2026-10-07).** SessionsStart admits a short fenced subscription, builds
+owner-filtered session details outside the fence under a five-second context
+cancelled by socket shutdown and threaded into every store query, then
+revalidates under a second short fence before pushing to the still-subscribed
+socket. Detail lookups resolve a single WorkView instead of loading a
+library's complete works/editions/files. Between admission and revalidation a
+newer broadcast may overtake the initial snapshot; the next live update
+corrects it, and revocation between the phases closes the socket with no
+delivery. This closes LT-SEC-R3-01's unbounded admitted action.
+
+65. **Repeat imports republish progress (2026-10-07).** The landed contract
+stands: a repeat whole-import re-publishes the backup's progress values and
+advances each row exactly one revision. A fix-r3 variant that skipped progress
+rows which already existed (never reviewed) would silently drop backup-side
+progress changes for active listeners and broke the revision contract; it is
+reverted. Provider re-imports preserve physical file/edition identity through
+aliases and digests; they do not freeze progress.
+
+66. **Scanner keys track the filesystem; provider keys stay canonical
+(2026-10-07).** On rename/rescan of a scanner-owned edition the primary source
+key follows the file's current relative path. Editions whose primary key is a
+provider key (`abs/` or `kavita/` prefixed, the same convention the importer
+validation uses) keep that key and gain the scanner key as an alias, so both
+re-import and rescan resolve the same edition. Kavita libraries with no
+physical files keep the legacy placeholder root; only libraries with real
+paths derive a physical root.
+
+67. **Descriptor-input HLS cannot be positively controlled on ffmpeg 9
+(2026-10-07).** The hls demuxer requires extension or MIME hints that a `fd:`
+or `/dev/fd/3` URL cannot carry, so an unrestricted-HLS positive control
+through the descriptor path is not constructible on the supported binary.
+Nested-HLS refusal through the production argv is still asserted (input fails,
+nothing opens) and concat confinement is proven with `file://` entries both
+admitted and refused. MOV external-reference and adversarial-HLS corpora
+remain open acceptance work, not silently closed.

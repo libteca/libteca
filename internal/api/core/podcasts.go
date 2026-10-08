@@ -35,6 +35,26 @@ func (a *API) MountPodcasts(r *neutron.Router) {
 	r.HandleFunc("GET /podcasts/import-opml/status", a.podcastImportOPMLStatus)
 	r.HandleFunc("GET /podcasts/episodes/{epId}/stream", a.podcastEpisodeStream)
 	r.HandleFunc("POST /podcasts/episodes/{epId}/progress", a.podcastEpisodeProgress)
+	r.HandleFunc("GET /podcasts/episodes/{epId}/progress", func(w http.ResponseWriter, r *http.Request) {
+		s, e := a.DB.MediaSnapshot(auth.UserID(r), "podcast-episode", auth.Atoi64(r.PathValue("epId")))
+		if e != nil {
+			mediaOperationError(w, e)
+			return
+		}
+		writeJSON(w, 200, s)
+	})
+	r.HandleFunc("DELETE /podcasts/episodes/{epId}/progress", func(w http.ResponseWriter, r *http.Request) {
+		id := auth.Atoi64(r.PathValue("epId"))
+		if _, e := a.DB.EpisodeByID(id); e != nil {
+			mediaOperationError(w, e)
+			return
+		}
+		if e := a.DB.ResetEpisodeProgress(auth.UserID(r), id); e != nil {
+			mediaOperationError(w, e)
+			return
+		}
+		writeJSON(w, 200, map[string]bool{"ok": true})
+	})
 	r.HandleFunc("GET /podcasts/{id}", a.podcastDetail)
 	r.HandleFunc("POST /podcasts/{id}/refresh", func(w http.ResponseWriter, req *http.Request) { a.podcastRefresh(svc, w, req) })
 	r.HandleFunc("PATCH /podcasts/{id}", a.podcastPatch)
@@ -139,7 +159,13 @@ func (a *API) podcastDetailBody(p *store.Podcast, userID int64) (map[string]any,
 		if eps[i].FileID != nil {
 			downloaded++
 		}
-		epJSON = append(epJSON, episodeJSON(&eps[i], progs[eps[i].ID]))
+		episode := episodeJSON(&eps[i], progs[eps[i].ID])
+		resume, rerr := a.DB.MediaResumeForTarget(userID, "podcast-episode", eps[i].ID, "")
+		if rerr != nil {
+			return nil, rerr
+		}
+		attachMediaResume(episode, resume)
+		epJSON = append(epJSON, episode)
 	}
 	body := podcastJSON(p, len(eps), downloaded)
 	body["episodes"] = epJSON
@@ -378,15 +404,20 @@ func (a *API) podcastEpisodeStream(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 404, map[string]string{"error": "episode not downloaded"})
 		return
 	}
-	path, err := a.DB.FilePath(*ep.FileID)
+	file, err := a.DB.FileByID(*ep.FileID)
 	if err != nil {
 		writeJSON(w, 404, map[string]string{"error": "file not found"})
 		return
 	}
-	if ct := podcastStreamMIME[strings.TrimPrefix(filepath.Ext(path), ".")]; ct != "" {
+	root, err := a.confinedFileRoot(file)
+	if err != nil {
+		writeJSON(w, 404, map[string]string{"error": "file not found"})
+		return
+	}
+	if ct := podcastStreamMIME[strings.TrimPrefix(filepath.Ext(file.Path), ".")]; ct != "" {
 		w.Header().Set("Content-Type", ct)
 	}
-	serveFile(w, r, path)
+	serveConfined(w, r, root, file.Path)
 }
 
 func (a *API) podcastEpisodeProgress(w http.ResponseWriter, r *http.Request) {
@@ -459,6 +490,14 @@ func episodeJSON(e *store.PodcastEpisode, prog *store.EpisodeProgress) map[strin
 		"downloadedAt": e.DownloadedAt, "hasFile": e.FileID != nil,
 	}
 	pct, pos, fin := episodeProgressView(e, prog)
+	m["revision"] = 0
+	m["resetGeneration"] = 0
+	m["deleted"] = false
+	if prog != nil {
+		m["revision"] = prog.Revision
+		m["resetGeneration"] = prog.ResetGeneration
+		m["deleted"] = prog.Deleted
+	}
 	m["positionSecs"] = pos
 	m["percent"] = pct
 	m["isFinished"] = fin
@@ -470,7 +509,7 @@ func episodeJSON(e *store.PodcastEpisode, prog *store.EpisodeProgress) map[strin
 }
 
 func episodeProgressView(e *store.PodcastEpisode, prog *store.EpisodeProgress) (pct, pos float64, fin bool) {
-	if prog == nil {
+	if prog == nil || prog.Deleted {
 		return 0, 0, false
 	}
 	dur := 0.0

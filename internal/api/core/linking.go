@@ -58,7 +58,7 @@ func (a *API) editionMove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		if errors.Is(err, store.ErrCrossLibrary) {
+		if errors.Is(err, store.ErrCrossLibrary) || errors.Is(err, store.ErrSourceConflict) {
 			writeJSON(w, 400, map[string]string{"error": "cannot move editions between libraries"})
 			return
 		}
@@ -128,8 +128,8 @@ func (a *API) workMerge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.DB.MergeWorks(id, body.IntoWorkID); err != nil {
-		if errors.Is(err, store.ErrCrossLibrary) {
-			writeJSON(w, 400, map[string]string{"error": "cannot merge works from different libraries"})
+		if errors.Is(err, store.ErrCrossLibrary) || errors.Is(err, store.ErrSourceConflict) {
+			writeJSON(w, 400, map[string]string{"error": "physical source mapping must be repaired before merging"})
 			return
 		}
 		if errors.Is(err, store.ErrNotFound) {

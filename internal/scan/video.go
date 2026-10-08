@@ -45,6 +45,7 @@ type vidFile struct {
 	bitrate   int64
 	duration  float64
 	hash      string
+	sha       string
 }
 
 func (v *vidFile) probe(ctx context.Context, root string) error {
@@ -57,14 +58,17 @@ func (v *vidFile) probe(ctx context.Context, root string) error {
 	if err != nil {
 		return err
 	}
-	f.Seek(0, 0)
+	if _, err := f.Seek(0, 0); err != nil {
+		return err
+	}
 	v.duration = info.Duration
 	v.bitrate = info.Bitrate
 	v.container = info.Container
 	v.codec = info.Codec
 	v.vcodec, v.width, v.height = probeVideoFile(f)
 	v.hash = hashFile(v.path, v.size)
-	return nil
+	v.sha, err = fullContentDigest(f)
+	return err
 }
 
 func scanVideoLibrary(ctx context.Context, db *store.DB, lib *store.Library, coversDir string, tv bool, tr *tracker) (int, error) {
@@ -218,7 +222,7 @@ func scanVideoLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 		groupCount := 0
 		err := db.Update(func(tx *store.Tx) error {
 			var err error
-			workID, err = tx.UpsertWork(w)
+			workID, err = tx.UpsertSourceWorkDigests(w, []string{probed[0].f.path}, lib.ID, []string{probed[0].f.sha})
 			if err != nil {
 				return err
 			}
@@ -231,7 +235,11 @@ func scanVideoLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 			for _, pv := range probed {
 				f := pv.f
 				dur := f.duration
-				e := &store.Edition{WorkID: workID, Format: "video", Title: pv.edTitle, DurationSecs: &dur}
+				sourceKey, err := store.SourceKey(abs, f.path)
+				if err != nil {
+					return err
+				}
+				e := &store.Edition{WorkID: workID, Format: "video", Title: pv.edTitle, DurationSecs: &dur, SourceLibraryID: lib.ID, SourceKey: sourceKey, SourcePaths: []string{f.path}, SourceDigests: []string{f.sha}}
 				if tv {
 					s, ep := f.season, f.episode
 					e.SeasonNum, e.EpisodeNum = &s, &ep
@@ -246,8 +254,8 @@ func scanVideoLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 				}
 				c, ct, vc, w_, h, br := f.codec, f.container, f.vcodec, f.width, f.height, f.bitrate
 				fr := &store.FileRec{
-					EditionID: editionID, Path: f.path, Seq: 1,
-					SizeBytes: f.size, MtimeSecs: f.mtime, MtimeNS: f.mtimeNs, Hash: &f.hash,
+					EditionID: editionID, SourceLibraryID: lib.ID, Path: f.path, Seq: 1,
+					SizeBytes: f.size, MtimeSecs: f.mtime, MtimeNS: f.mtimeNs, Hash: &f.hash, SHA256: &f.sha,
 					Codec: &c, VideoCodec: &vc, Width: &w_, Height: &h, Container: &ct,
 					Bitrate: &br, DurationSecs: f.duration, Chapters: "[]",
 				}
@@ -468,6 +476,7 @@ func scanMusicLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 			title   string
 			info    *audio.Info
 			hash    string
+			sha     string
 			ordinal int64
 		}
 		var probedTracks []probedTrack
@@ -485,6 +494,10 @@ func scanMusicLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 				continue
 			}
 			info, err := audio.ProbeFile(ctx, tf)
+			sha := ""
+			if err == nil {
+				sha, err = fullContentDigest(tf)
+			}
 			tf.Close()
 			if err != nil {
 				if cerr := ctx.Err(); cerr != nil {
@@ -498,7 +511,7 @@ func scanMusicLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 			if v := info.Meta["title"]; v != "" {
 				trackTitle = v
 			}
-			probedTracks = append(probedTracks, probedTrack{t: t, title: trackTitle, info: info, hash: hashFile(t.path, t.size), ordinal: int64(i + 1)})
+			probedTracks = append(probedTracks, probedTrack{t: t, title: trackTitle, info: info, hash: hashFile(t.path, t.size), sha: sha, ordinal: int64(i + 1)})
 		}
 		if len(probedTracks) == 0 {
 			continue
@@ -508,7 +521,7 @@ func scanMusicLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 		groupCount := 0
 		err := db.Update(func(tx *store.Tx) error {
 			var err error
-			workID, err = tx.UpsertWork(w)
+			workID, err = tx.UpsertSourceWorkDigests(w, []string{probedTracks[0].t.path}, lib.ID, []string{probedTracks[0].sha})
 			if err != nil {
 				return err
 			}
@@ -530,7 +543,11 @@ func scanMusicLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 			}
 			for _, pt := range probedTracks {
 				dur := pt.info.Duration
-				e := &store.Edition{WorkID: workID, Format: "audio", Title: pt.title, DurationSecs: &dur, Position: pt.ordinal}
+				sourceKey, err := store.SourceKey(abs, pt.t.path)
+				if err != nil {
+					return err
+				}
+				e := &store.Edition{WorkID: workID, Format: "audio", Title: pt.title, DurationSecs: &dur, Position: pt.ordinal, SourceLibraryID: lib.ID, SourceKey: sourceKey, SourcePaths: []string{pt.t.path}, SourceDigests: []string{pt.sha}}
 				editionID, err := tx.UpsertEdition(e)
 				if err != nil {
 					return err
@@ -538,8 +555,8 @@ func scanMusicLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 				c, ct, br := pt.info.Codec, pt.info.Container, pt.info.Bitrate
 				hash := pt.hash
 				fr := &store.FileRec{
-					EditionID: editionID, Path: pt.t.path, Seq: 1, SizeBytes: pt.t.size, MtimeSecs: pt.t.mtime, MtimeNS: pt.t.mtimeNs,
-					Hash: &hash, Codec: &c, Container: &ct, Bitrate: &br,
+					EditionID: editionID, SourceLibraryID: lib.ID, Path: pt.t.path, Seq: 1, SizeBytes: pt.t.size, MtimeSecs: pt.t.mtime, MtimeNS: pt.t.mtimeNs,
+					Hash: &hash, SHA256: &pt.sha, Codec: &c, Container: &ct, Bitrate: &br,
 					DurationSecs: pt.info.Duration, Chapters: "[]",
 				}
 				if err := tx.UpsertFile(fr); err != nil {

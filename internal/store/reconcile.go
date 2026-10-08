@@ -11,7 +11,7 @@ func (d *DB) MarkMissingLibraryFiles(libraryID int64) (int, error) {
 		FROM files f
 		JOIN editions e ON e.id = f.edition_id
 		JOIN works w ON w.id = e.work_id
-		WHERE w.library_id = ? AND f.missing = 0`, libraryID)
+		WHERE f.source_library_id = ? AND f.missing = 0`, libraryID)
 	if err != nil {
 		return 0, err
 	}

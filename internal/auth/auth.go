@@ -261,13 +261,6 @@ func Middleware(db *store.DB) func(http.Handler) http.Handler {
 	return middleware(db, nil)
 }
 
-// MiddlewareWithMediaCookie additionally accepts the libteca-media cookie
-// on the caller-defined media routes (read-only: the classifier is expected
-// to gate on GET/HEAD) and rejects query-token authentication there: media
-// element and EventSource URLs carry no credential at all, and the cookie
-// keeps the account bearer token out of URLs (AUD-01). The cookie never
-// authorizes a write; mutations require the Authorization header, which no
-// cross-site request can attach, so no origin checking is needed.
 func MiddlewareWithMediaCookie(db *store.DB, mediaRoute func(*http.Request) bool) func(http.Handler) http.Handler {
 	return middleware(db, mediaRoute)
 }

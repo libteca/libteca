@@ -154,7 +154,7 @@ func TestSameLibraryScanConflict(t *testing.T) {
 
 func TestScanDedupWindowExpires(t *testing.T) {
 	old := scanDedupWindow
-	scanDedupWindow = 30 * time.Millisecond
+	scanDedupWindow = 30 * time.Minute
 	t.Cleanup(func() { scanDedupWindow = old })
 	a, db, libA, _ := newTestAPI(t, func(ctx context.Context, db *store.DB, lib *store.Library, coversDir string, onProgress scan.ProgressFn) (int, error) {
 		return 0, nil
@@ -165,11 +165,14 @@ func TestScanDedupWindowExpires(t *testing.T) {
 		t.Fatalf("first scan = %d %+v, want 202 scanning", code, first)
 	}
 	waitJobDone(t, db, libA)
+	a.jobsWG.Wait()
 	code, dup := postScan(t, a, libA)
 	if code != 409 || dup.Status != "already_done" || dup.JobID != first.JobID {
 		t.Fatalf("scan inside window = %d %+v, want 409 already_done", code, dup)
 	}
-	time.Sleep(60 * time.Millisecond)
+	if _, err := db.Exec(`UPDATE scan_jobs SET finished_at=? WHERE id=?`, time.Now().Add(-scanDedupWindow-time.Second).UnixMilli(), first.JobID); err != nil {
+		t.Fatal(err)
+	}
 	code, next := postScan(t, a, libA)
 	if code != 202 || next.Status != "scanning" || next.JobID == first.JobID {
 		t.Fatalf("scan after window = %d %+v, want 202 scanning with new jobId", code, next)

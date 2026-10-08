@@ -251,63 +251,45 @@ func TestMergeWorksUnknownTargetRollsBack(t *testing.T) {
 	_ = e1
 }
 
-func TestCrossLibraryLinkingRejectsBeforeMutation(t *testing.T) {
-	db := openLinkDB(t)
-	for _, path := range []string{"/audio", "/books"} {
-		if _, err := db.AddLibrary(path, "audiobooks", path); err != nil {
-			t.Fatal(err)
-		}
-	}
-	user := seedLinkUser(t, db)
-	source := seedLinkWork(t, db, "Source", "Author", "keep source")
-	target, err := db.UpsertWork(&Work{LibraryID: 2, Title: "Target"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	edition := seedLinkEdition(t, db, source, "Source audio")
-	seedLinkEdition(t, db, source, "Source alternate")
-	seedLinkFile(t, db, edition, "/audio/book.m4b")
-	if err := db.SetProgress(&Progress{UserID: user, EditionID: edition, EditionPositionSecs: 42}); err != nil {
-		t.Fatal(err)
-	}
-	before, err := db.GetReadingProgress(user, edition)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, tc := range []struct {
-		name      string
-		operation func() error
-	}{
-		{"move", func() error {
-			_, err := db.MoveEditionToWork(edition, target)
-			return err
-		}},
-		{"merge", func() error { return db.MergeWorks(source, target) }},
-		{"new title", func() error {
-			_, err := db.MoveEditionToNewWork(edition, 2, "Must not exist", nil)
-			return err
-		}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if err := tc.operation(); err != ErrCrossLibrary {
-				t.Fatalf("error = %v, want ErrCrossLibrary", err)
+func TestCrossLibraryLinkingKeepsPhysicalRoot(t *testing.T) {
+	for _, operation := range []string{"move", "merge", "new"} {
+		t.Run(operation, func(t *testing.T) {
+			db := openLinkDB(t)
+			db.AddLibrary("source", "audiobooks", "/audio")
+			db.AddLibrary("target", "books", "/books")
+			user := seedLinkUser(t, db)
+			source := seedLinkWork(t, db, "Source", "Author", "")
+			target, _ := db.UpsertWork(&Work{LibraryID: 2, Title: "Target"})
+			edition := seedLinkEdition(t, db, source, "Audio")
+			seedLinkFile(t, db, edition, "/audio/book.m4b")
+			db.SetProgress(&Progress{UserID: user, EditionID: edition, EditionPositionSecs: 42})
+			before, _ := db.GetReadingProgress(user, edition)
+			var err error
+			switch operation {
+			case "move":
+				_, err = db.MoveEditionToWork(edition, target)
+			case "merge":
+				err = db.MergeWorks(source, target)
+			case "new":
+				_, err = db.MoveEditionToNewWork(edition, 2, "New target", nil)
 			}
-			if got := linkCount(t, db, `SELECT count(*) FROM works`); got != 2 {
-				t.Fatalf("work count changed to %d", got)
-			}
-			if got := linkCount(t, db, `SELECT count(*) FROM editions WHERE work_id = ?`, source); got != 2 {
-				t.Fatalf("source edition count changed to %d", got)
-			}
-			if got := linkCount(t, db, `SELECT count(*) FROM files WHERE edition_id = ? AND path = '/audio/book.m4b'`, edition); got != 1 {
-				t.Fatalf("source file changed: %d", got)
+			if err != nil {
+				t.Fatal(err)
 			}
 			root, err := db.LibraryRootForEdition(edition)
 			if err != nil || root != "/audio" {
-				t.Fatalf("source root = %q, %v", root, err)
+				t.Fatal(root, err)
 			}
 			after, err := db.GetReadingProgress(user, edition)
 			if err != nil || after.Revision != before.Revision || after.EditionPositionSecs != 42 {
-				t.Fatalf("progress changed = %+v, %v", after, err)
+				t.Fatal(after, err)
+			}
+			if err := db.DeleteLibrary(2); err != nil {
+				t.Fatal(err)
+			}
+			root, err = db.LibraryRootForEdition(edition)
+			if err != nil || root != "/audio" {
+				t.Fatal("logical library deletion removed physical source", root, err)
 			}
 		})
 	}

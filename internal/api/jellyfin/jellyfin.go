@@ -19,6 +19,7 @@ import (
 
 	"github.com/libteca/libteca/internal/auth"
 	"github.com/libteca/libteca/internal/mediafs"
+	"github.com/libteca/libteca/internal/resourcebudget"
 	"github.com/libteca/libteca/internal/store"
 	"github.com/libteca/libteca/internal/transcode"
 	"github.com/libteca/libteca/internal/trickplay"
@@ -664,7 +665,7 @@ func (a *API) trackItem(userID int64, wv *store.WorkView, ed *store.EditionView)
 func (a *API) itemDetail(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	userID := uid(r)
-	if it, ok := a.detailFor(userID, id); ok {
+	if it, ok := a.detailFor(r.Context(), userID, id); ok {
 		delete(it, "__sort")
 		delete(it, "__created")
 		write(w, 200, it)
@@ -673,61 +674,44 @@ func (a *API) itemDetail(w http.ResponseWriter, r *http.Request) {
 	write(w, 404, map[string]any{"error": "not found"})
 }
 
-func (a *API) detailFor(userID int64, id string) (map[string]any, bool) {
+func (a *API) detailFor(ctx context.Context, userID int64, id string) (map[string]any, bool) {
 	if m := reWorkItem.FindStringSubmatch(id); m != nil {
-		wv, err := a.DB.WorkByID(auth.Atoi64(m[1]))
+		wvv, err := a.DB.WorkViewByIDCtx(ctx, auth.Atoi64(m[1]))
 		if err != nil {
 			return nil, false
 		}
-		works, err := a.DB.WorksInLibrary(wv.LibraryID)
-		for i := range works {
-			if works[i].ID == wv.ID {
-				lib, _ := a.DB.Library(wv.LibraryID)
-				switch lib.Type {
-				case "tv":
-					return a.seriesItem(userID, &works[i]), true
-				case "music":
-					return a.albumItem(&works[i]), true
-				default:
-					return a.movieItem(userID, &works[i], lib.Type), true
-				}
-			}
+		lib, _ := a.DB.LibraryCtx(ctx, wvv.LibraryID)
+		switch lib.Type {
+		case "tv":
+			return a.seriesItem(userID, wvv), true
+		case "music":
+			return a.albumItem(wvv), true
+		default:
+			return a.movieItem(userID, wvv, lib.Type), true
 		}
-		return nil, false
 	}
 	if m := reSeasonItem.FindStringSubmatch(id); m != nil {
-		wv, err := a.DB.WorkByID(auth.Atoi64(m[1]))
-		if err != nil || wv == nil {
-			return nil, false
-		}
 		n, _ := strconv.Atoi(m[2])
-		works, err := a.DB.WorksInLibrary(wv.LibraryID)
+		wvv, err := a.DB.WorkViewByIDCtx(ctx, auth.Atoi64(m[1]))
 		if err != nil {
 			return nil, false
 		}
-		for i := range works {
-			if works[i].ID == wv.ID {
-				return a.seasonItem(&works[i], n), true
-			}
-		}
-		return nil, false
+		return a.seasonItem(wvv, n), true
 	}
 	if m := reEdItem.FindStringSubmatch(id); m != nil {
-		ed, err := a.DB.EditionByID(auth.Atoi64(m[1]))
+		ed, err := a.DB.EditionByIDCtx(ctx, auth.Atoi64(m[1]))
 		if err != nil {
 			return nil, false
 		}
-		wv, _ := a.DB.WorkByID(ed.WorkID)
-		works, _ := a.DB.WorksInLibrary(wv.LibraryID)
-		for i := range works {
-			if works[i].ID == ed.WorkID {
-				lib, _ := a.DB.Library(wv.LibraryID)
-				if lib.Type == "music" {
-					return a.trackItem(userID, &works[i], ed), true
-				}
-				return a.episodeItem(userID, &works[i], ed), true
-			}
+		wvv, err := a.DB.WorkViewByIDCtx(ctx, ed.WorkID)
+		if err != nil {
+			return nil, false
 		}
+		lib, _ := a.DB.LibraryCtx(ctx, wvv.LibraryID)
+		if lib.Type == "music" {
+			return a.trackItem(userID, wvv, ed), true
+		}
+		return a.episodeItem(userID, wvv, ed), true
 	}
 	return nil, false
 }
@@ -813,7 +797,7 @@ func (a *API) resume(w http.ResponseWriter, r *http.Request) {
 	eds, _ := a.DB.EditionsInProgress(uid(r))
 	items := []map[string]any{}
 	for _, eid := range eds {
-		if it, ok := a.detailFor(uid(r), "e"+strconv.FormatInt(eid, 10)); ok {
+		if it, ok := a.detailFor(r.Context(), uid(r), "e"+strconv.FormatInt(eid, 10)); ok {
 			if it["Type"] == "Episode" || it["Type"] == "Movie" || it["Type"] == "Audio" {
 				delete(it, "__sort")
 				delete(it, "__created")
@@ -842,7 +826,7 @@ func (a *API) nextUp(w http.ResponseWriter, r *http.Request) {
 	items := []map[string]any{}
 	if err == nil {
 		for _, row := range rows {
-			if it, ok := a.detailFor(userID, "e"+strconv.FormatInt(row.EditionID, 10)); ok {
+			if it, ok := a.detailFor(r.Context(), userID, "e"+strconv.FormatInt(row.EditionID, 10)); ok {
 				delete(it, "__sort")
 				delete(it, "__created")
 				items = append(items, it)
@@ -1057,7 +1041,7 @@ func (a *API) videoStream(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) serveEditionFile(w http.ResponseWriter, r *http.Request, ed *store.EditionView) {
-	root, err := a.DB.LibraryRootForEdition(ed.ID)
+	root, err := a.DB.LibraryRootForFile(ed.Files[0].ID)
 	if err != nil {
 		http.Error(w, "not found", 404)
 		return
@@ -1078,7 +1062,7 @@ func (a *API) openEditionFile(ed *store.EditionView) (func() (*os.File, error), 
 	if len(ed.Files) == 0 {
 		return nil, store.ErrNotFound
 	}
-	root, err := a.DB.LibraryRootForEdition(ed.ID)
+	root, err := a.DB.LibraryRootForFile(ed.Files[0].ID)
 	if err != nil {
 		return nil, err
 	}
@@ -1145,7 +1129,7 @@ func (a *API) hlsMaster(w http.ResponseWriter, r *http.Request) {
 		s, err = a.TC.Get(sessionID, ed.ID, ed.Files[0].Path, start, open)
 	}
 	if err != nil {
-		if errors.Is(err, transcode.ErrCapacity) {
+		if errors.Is(err, transcode.ErrCapacity) || errors.Is(err, resourcebudget.ErrLimit) {
 			w.Header().Set("Retry-After", "5")
 			http.Error(w, "transcode capacity exhausted", 503)
 			return
@@ -1158,6 +1142,11 @@ func (a *API) hlsMaster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Prebuffer(r.Context(), 2, 10*time.Second)
+	if errors.Is(s.ResourceError(), resourcebudget.ErrLimit) {
+		w.Header().Set("Retry-After", "5")
+		http.Error(w, "transcode resource limit reached", 503)
+		return
+	}
 	for i := 0; i < 100; i++ {
 		if fi, err := os.Stat(s.Playlist()); err == nil && fi.Size() > 0 {
 			break

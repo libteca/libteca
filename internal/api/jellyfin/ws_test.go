@@ -209,17 +209,17 @@ func TestHubUnregisterAndSubscribeGone(t *testing.T) {
 func TestHubSessionsLifecycle(t *testing.T) {
 	h := newHub()
 	h.update(&liveSession{DeviceID: "tv", PlaySessionID: "ps-1", ItemID: "e1"})
-	if d := h.deviceForPlaySession("ps-1"); d != "tv" {
+	if d := h.deviceForPlaySession(0, "ps-1"); d != "tv" {
 		t.Fatalf("deviceForPlaySession = %q", d)
 	}
-	if d := h.deviceForPlaySession("other"); d != "" {
+	if d := h.deviceForPlaySession(0, "other"); d != "" {
 		t.Fatalf("unknown psid matched %q", d)
 	}
 	snap := h.snapshot()
 	if len(snap) != 1 || snap[0].DeviceID != "tv" {
 		t.Fatalf("snapshot = %+v", snap)
 	}
-	h.remove("tv")
+	h.remove(0, "tv")
 	if snap := h.snapshot(); len(snap) != 0 {
 		t.Fatalf("snapshot after remove = %+v", snap)
 	}

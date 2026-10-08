@@ -17,7 +17,9 @@ import (
 // ErrUnavailable means the installed ffmpeg/ffprobe cannot read a passed
 // file descriptor as a protocol-whitelisted input. Every processor path
 // fails closed on it rather than falling back to unconfined pathnames.
-var ErrUnavailable = errors.New("descriptor input confinement unavailable")
+var ErrUnavailable = errors.New("bounded descriptor input unavailable")
+
+const inputFormats = "mov,mp4,m4a,3gp,3g2,mj2,matroska,webm,avi,mp3,flac,ogg,wav,aac,m4v"
 
 const (
 	formOption = iota
@@ -37,11 +39,6 @@ var (
 	ffprobeCap capability
 )
 
-// Args returns the argv fragment that makes bin read its input from the
-// descriptor attached as ExtraFiles[0] (child fd 3) under a protocol
-// whitelist. The whitelist always covers the descriptor protocol itself;
-// extra names the additional protocols the command needs ("file" for local
-// outputs, "pipe" for stdout).
 func Args(bin string, extra ...string) ([]string, error) {
 	switch bin {
 	case "ffmpeg":
@@ -87,19 +84,7 @@ func (c *capability) argv(extra ...string) []string {
 		protos = []string{"file"}
 		input = "/dev/fd/3"
 	}
-	for _, p := range extra {
-		known := false
-		for _, base := range protos {
-			if p == base {
-				known = true
-				break
-			}
-		}
-		if !known {
-			protos = append(protos, p)
-		}
-	}
-	args := []string{"-protocol_whitelist", strings.Join(protos, ",")}
+	args := []string{"-protocol_whitelist", strings.Join(protos, ","), "-format_whitelist", inputFormats}
 	if c.form == formOption {
 		args = append(args, "-fd", "3")
 	}

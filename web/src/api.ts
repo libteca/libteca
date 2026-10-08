@@ -1,3 +1,6 @@
+import { confirmMediaOwner, getMediaIdentity, mediaIdentityReady, mediaProtocolActive, setMediaToken } from "./mediaProgressIdentity";
+export { getMediaIdentity } from "./mediaProgressIdentity";
+import { mediaProgress, isMediaProgressPath } from "./mediaProgress";
 export type Work = {
   id: number; title: string; author: string | null; subtitle: string | null;
   hasCover: boolean; editions: { id: number; format: string; duration: number; files: number }[];
@@ -12,7 +15,8 @@ export type WorkDetail = {
 };
 
 export type EditionDetail = {
-  id: number; format: string; title: string; duration: number; position?: number; isFinished?: boolean;
+  id: number; format: string; title: string; duration: number; generation?: string; revision?: number; resetGeneration?: number; deleted?: boolean; position?: number; isFinished?: boolean;
+  available?: boolean; unavailableReason?: string; durationKnown?: boolean; resumeConflict?: boolean; resumeFileId?: number; resumeFileOffset?: number; progressGeneration?: string;
   seasonNum?: number; episodeNum?: number; page?: number; percent?: number; pageCount?: number;
   files: { id: number; seq: number; duration: number; size: number; videoCodec?: string; codec?: string; width?: number; height?: number; sha256?: string }[];
   chapters: { title: string; start: number; end: number; fileId: number }[];
@@ -57,9 +61,9 @@ let token = "";
 
 export function getToken() { return token; }
 
-export function setToken(t: string) { token = t; }
+export function setToken(t: string) { token = t; setMediaToken(t); }
 
-export const api = async (path: string, opts: RequestInit = {}) => {
+export const apiTransport = async (path: string, opts: RequestInit = {}) => {
   const headers = new Headers(opts.headers);
   if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   // Capture the token used for THIS request: a slow response from before a
@@ -76,7 +80,27 @@ export const api = async (path: string, opts: RequestInit = {}) => {
     throw new Error("unauthorized");
   }
   const text = await res.text();
-  return normalizeAPIResponse(res, text);
+  const value = normalizeAPIResponse(res, text);
+  if (path === "/me" && res.ok && usedToken === token && Number.isSafeInteger(value?.id)) {
+    confirmMediaOwner(value.id);
+    void mediaProgress.replay();
+  }
+  if (res.ok && usedToken === token && /^\/works\/\d+$/.test(path) && Array.isArray(value?.editions)) {
+    for (const edition of value.editions) mediaProgress.rememberEdition(edition);
+  }
+  return value;
+};
+
+export const api = async (path: string, opts: RequestInit = {}) => {
+  if (opts.method === "POST" && isMediaProgressPath(path) && typeof opts.body === "string" && mediaProtocolActive()) {
+    await mediaIdentityReady();
+    const patch = JSON.parse(opts.body);
+    if (typeof patch.position === "number" && patch.page === undefined && patch.percent === undefined && patch.locator === undefined) {
+      if (!getMediaIdentity().ownerId) throw new Error("Progress requires a verified login. Reconnect before saving.");
+      return mediaProgress.enqueue(path, patch);
+    }
+  }
+  return apiTransport(path, opts);
 };
 
 export class RequestTimeoutError extends Error {}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/pressly/goose/v3"
@@ -17,6 +18,7 @@ var migrationsFS embed.FS
 
 type DB struct {
 	*sql.DB
+	socketAuthority sync.RWMutex
 }
 
 func Open(path string) (*DB, error) {
@@ -54,7 +56,7 @@ func Open(path string) (*DB, error) {
 	if err := goose.Up(sdb, "migrations"); err != nil {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
-	d := &DB{sdb}
+	d := &DB{DB: sdb}
 	if err := d.digestTokens(); err != nil {
 		return nil, fmt.Errorf("token digest convergence: %w", err)
 	}

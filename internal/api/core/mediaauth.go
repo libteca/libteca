@@ -5,13 +5,6 @@ import (
 	"strings"
 )
 
-// MediaRequest identifies the core-face read-only routes that media
-// elements and EventSource reach without an Authorization header. The auth
-// middleware accepts the libteca-media cookie only on these GET/HEAD
-// routes and refuses query-token authentication on them, so no credential
-// ever rides in a media URL (AUD-01). The cookie is not a write
-// credential: every mutation, including the progress beacon and the HLS
-// stop, requires the Authorization header.
 func MediaRequest(r *http.Request) bool {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		return false

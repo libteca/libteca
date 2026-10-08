@@ -2,6 +2,7 @@ package scan
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,9 +13,12 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/libteca/libteca/internal/assets"
+	"github.com/libteca/libteca/internal/mediafs"
+	"github.com/libteca/libteca/internal/resourcebudget"
 	"github.com/libteca/libteca/internal/store"
 )
 
@@ -105,10 +109,24 @@ func scanBooksLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 			return count, cerr
 		}
 		d := &docs[i]
-		if size, mtime, mtimeNs, ok, serr := db.FileStatByPath(d.path); serr == nil && ok && size == d.size && mtime == d.mtime && mtimeNs == d.mtimeNs && mtimeNs != 0 {
+		if fileUnchanged(db, d.path, d.size, d.mtime, d.mtimeNs) {
 			continue
 		}
+		budget, berr := resourcebudget.ArchiveBudget()
+		if berr != nil {
+			return count, berr
+		}
+		coverReservationBytes := int64(cbrMaxCoverBytes + 1)
+		if d.format == "epub" {
+			coverReservationBytes *= 2
+		}
+		reservation, berr := budget.Reserve(coverReservationBytes)
+		if berr != nil {
+			return count, berr
+		}
 		if perr := probeBook(ctx, d, cbrTool); perr != nil {
+			d.cover = nil
+			reservation.Release()
 			if cerr := ctx.Err(); cerr != nil {
 				return count, cerr
 			}
@@ -117,11 +135,17 @@ func scanBooksLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 		}
 		tr.probed()
 		if cerr := ctx.Err(); cerr != nil {
+			d.cover = nil
+			reservation.Release()
 			return count, cerr
 		}
 		if serr := storeBook(db, lib, d, coversDir, tr); serr != nil {
+			d.cover = nil
+			reservation.Release()
 			return count, serr
 		}
+		d.cover = nil
+		reservation.Release()
 		count++
 	}
 	return count, errors.Join(itemErrors...)
@@ -165,6 +189,23 @@ func probeBook(ctx context.Context, d *bookDoc, cbrTool string) error {
 }
 
 func storeBook(db *store.DB, lib *store.Library, d *bookDoc, coversDir string, tr *tracker) error {
+	hash := hashFile(d.path, d.size)
+	source, err := mediafs.Open(lib.Path, d.path)
+	if err != nil {
+		return err
+	}
+	sha := SHA256Content(source)
+	closeErr := source.Close()
+	if sha == "" {
+		return fmt.Errorf("hash book content: %s", d.path)
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	relative, err := filepath.Rel(lib.Path, d.path)
+	if err != nil {
+		return err
+	}
 	authorPtr := nullable(d.author)
 	var descPtr *string
 	if d.description != "" {
@@ -172,11 +213,15 @@ func storeBook(db *store.DB, lib *store.Library, d *bookDoc, coversDir string, t
 	}
 	var workID int64
 	groupWorks, groupAdded, groupUpdated := 0, 0, 0
-	err := db.Update(func(tx *store.Tx) error {
+	err = db.Update(func(tx *store.Tx) error {
 		// Files without their own metadata (cbz/pdf beside an epub) must not
 		// clobber the work metadata a sibling edition already set, so they link
 		// to the existing work without running the unconditional UPDATE.
-		if descPtr == nil {
+		var sourceMatches int
+		if err := tx.QueryRow(`SELECT count(*) FROM files WHERE source_library_id=? AND (path=? OR (missing=1 AND sha256=?))`, lib.ID, d.path, sha).Scan(&sourceMatches); err != nil {
+			return err
+		}
+		if descPtr == nil && sourceMatches == 0 {
 			if id, ok := tx.FindWorkID(lib.ID, d.title, &authorPtr); ok {
 				workID = id
 			}
@@ -184,7 +229,7 @@ func storeBook(db *store.DB, lib *store.Library, d *bookDoc, coversDir string, t
 		if workID == 0 {
 			w := &store.Work{LibraryID: lib.ID, Title: d.title, Author: &authorPtr, Description: descPtr}
 			var err error
-			workID, err = tx.UpsertWork(w)
+			workID, err = tx.UpsertSourceWorkDigests(w, []string{d.path}, lib.ID, []string{sha})
 			if err != nil {
 				return err
 			}
@@ -198,16 +243,15 @@ func storeBook(db *store.DB, lib *store.Library, d *bookDoc, coversDir string, t
 			langPtr = &d.language
 		}
 		pages := d.pageCount
-		e := &store.EditionPages{Edition: store.Edition{WorkID: workID, Format: d.format, Title: d.title, Language: langPtr}, PageCount: &pages}
+		e := &store.EditionPages{Edition: store.Edition{WorkID: workID, Format: d.format, Title: d.title, Language: langPtr, SourceLibraryID: lib.ID, SourceKey: filepath.ToSlash(relative), SourcePaths: []string{d.path}, SourceDigests: []string{sha}}, PageCount: &pages}
 		editionID, err := tx.UpsertEditionPages(e)
 		if err != nil {
 			return err
 		}
 
-		hash := hashFile(d.path, d.size)
 		fr := &store.FileRec{
-			EditionID: editionID, Path: d.path, Seq: 1,
-			SizeBytes: d.size, MtimeSecs: d.mtime, MtimeNS: d.mtimeNs, Hash: &hash,
+			EditionID: editionID, Path: d.path, Seq: 1, SourceLibraryID: lib.ID,
+			SizeBytes: d.size, MtimeSecs: d.mtime, MtimeNS: d.mtimeNs, Hash: &hash, SHA256: &sha,
 			DurationSecs: 0, Chapters: "[]",
 		}
 		if err := tx.UpsertFile(fr); err != nil {
@@ -243,7 +287,7 @@ func readSidecar(path string) ([]byte, error) {
 		return nil, err
 	}
 	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, sidecarCoverMax+1))
+	data, err := readCoverBytes(f, sidecarCoverMax)
 	if err != nil {
 		return nil, err
 	}
@@ -328,7 +372,7 @@ func probeCBZ(p string) (int, []byte, error) {
 		return 0, nil, err
 	}
 	defer rc.Close()
-	cover, err := io.ReadAll(io.LimitReader(rc, 20<<20+1))
+	cover, err := readCoverBytes(rc, 20<<20)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -404,7 +448,10 @@ func cbrExtractor() string {
 // page as the cover (unrar p / unar into a temp dir). Zero deps: the archive
 // itself is never parsed in-process.
 func probeCBR(ctx context.Context, p, tool string) (int, []byte, error) {
-	names, err := cbrList(ctx, p, tool)
+	names, releaseListing, err := cbrListReserved(ctx, p, tool)
+	if releaseListing != nil {
+		defer releaseListing()
+	}
 	if err != nil {
 		return 0, nil, err
 	}
@@ -420,56 +467,81 @@ func probeCBR(ctx context.Context, p, tool string) (int, []byte, error) {
 }
 
 func cbrList(ctx context.Context, p, tool string) ([]string, error) {
+	names, release, err := cbrListReserved(ctx, p, tool)
+	if release != nil {
+		release()
+	}
+	return names, err
+}
+func cbrListReserved(ctx context.Context, p, tool string) ([]string, func(), error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	var cmd *exec.Cmd
 	if tool == "unrar" {
-		cmd = exec.CommandContext(ctx, tool, "lb", p)
+		cmd = cbrCommand(ctx, tool, "lb", p)
 	} else {
-		cmd = exec.CommandContext(ctx, "lsar", p)
+		cmd = cbrCommand(ctx, "lsar", p)
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	stopClose := context.AfterFunc(ctx, func() { _ = stdout.Close() })
 	defer stopClose()
 	if err := cmd.Start(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	const limit = 4 << 20
-	listing, rerr := io.ReadAll(io.LimitReader(stdout, limit+1))
-	oversized := len(listing) > limit
+	budget, budgetErr := resourcebudget.ArchiveBudget()
+	if budgetErr != nil {
+		_ = cmd.Cancel()
+		_ = cmd.Wait()
+		return nil, nil, budgetErr
+	}
+	listing, listingReservation, rerr := resourcebudget.ReadReserved(stdout, limit, budget)
+	defer listingReservation.Release()
+	oversized := len(listing) > limit || errors.Is(rerr, resourcebudget.ErrLimit)
 	if oversized || rerr != nil {
 		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
+			_ = cmd.Cancel()
 		}
 	}
 	werr := cmd.Wait()
 	if ctx.Err() != nil {
-		return nil, ctx.Err()
+		return nil, nil, ctx.Err()
 	}
 	if oversized {
-		return nil, fmt.Errorf("archive listing exceeds %d bytes", limit)
+		return nil, nil, fmt.Errorf("archive listing exceeds resource cap: %w", rerr)
 	}
 	if rerr != nil {
-		return nil, rerr
+		return nil, nil, rerr
 	}
 	if werr != nil {
-		return nil, werr
+		return nil, nil, werr
 	}
-	out := listing
-	var names []string
-	for _, line := range strings.Split(string(out), "\n") {
-		if line = strings.TrimSpace(line); line != "" {
+	entryCount := bytes.Count(listing, []byte{'\n'}) + 1
+	namesReservation, err := budget.Reserve(int64(len(listing)) + int64(entryCount)*16)
+	if err != nil {
+		return nil, nil, err
+	}
+	names := make([]string, 0, entryCount)
+	remaining := string(listing)
+	for len(remaining) > 0 {
+		line, rest, found := strings.Cut(remaining, "\n")
+		remaining = rest
+		line = strings.TrimSpace(line)
+		if line != "" {
 			names = append(names, line)
+		}
+		if !found {
+			break
 		}
 	}
 	// lsar prints the archive's own name as a header line before the entries
 	if tool == "unar" && len(names) > 0 && names[0] == filepath.Base(p) {
 		names = names[1:]
 	}
-	return names, nil
+	return names, namesReservation.Release, nil
 }
 
 func cbrPageNames(names []string) []string {
@@ -490,7 +562,7 @@ func cbrPageNames(names []string) []string {
 	return out
 }
 
-func cbrExtract(ctx context.Context, tool, archive, name string) ([]byte, error) {
+func cbrExtract(ctx context.Context, tool, archive, name string) (result []byte, resultErr error) {
 	// The cap is enforced WHILE READING and REJECTED when exceeded: the
 	// previous shape buffered the full page (Output / ReadFile) first, and
 	// truncating at exactly the cap silently produced corrupt covers.
@@ -503,7 +575,7 @@ func cbrExtract(ctx context.Context, tool, archive, name string) ([]byte, error)
 	}
 	var data []byte
 	if tool == "unrar" {
-		cmd := exec.CommandContext(ctx, tool, "p", "-inul", archive, name)
+		cmd := cbrCommand(ctx, tool, "p", "-inul", archive, name)
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
 			return nil, err
@@ -513,11 +585,11 @@ func cbrExtract(ctx context.Context, tool, archive, name string) ([]byte, error)
 		if err := cmd.Start(); err != nil {
 			return nil, err
 		}
-		buf, rerr := io.ReadAll(io.LimitReader(stdout, cbrMaxCoverBytes+1))
+		buf, rerr := readCoverBytes(stdout, cbrMaxCoverBytes)
 		oversized := len(buf) > cbrMaxCoverBytes
 		if oversized || rerr != nil {
 			if cmd.Process != nil {
-				_ = cmd.Process.Kill()
+				_ = cmd.Cancel()
 			}
 		}
 		waitErr := cmd.Wait()
@@ -525,7 +597,7 @@ func cbrExtract(ctx context.Context, tool, archive, name string) ([]byte, error)
 			return nil, err
 		}
 		if oversized {
-			return nil, fmt.Errorf("cbr page %s decompresses past the %d MB cap", name, cbrMaxCoverBytes>>20)
+			return nil, &resourcebudget.LimitError{Resource: "CBR page " + name, Limit: cbrMaxCoverBytes, Requested: int64(len(buf))}
 		}
 		if rerr != nil {
 			return nil, rerr
@@ -535,12 +607,34 @@ func cbrExtract(ctx context.Context, tool, archive, name string) ([]byte, error)
 		}
 		data = buf
 	} else {
-		dir, err := os.MkdirTemp("", "libteca-cbr-")
+		tempBudget, budgetErr := resourcebudget.ConfiguredBudget("LIBTECA_CBR_TEMP_BYTES", "aggregate CBR temporary disk")
+		if budgetErr != nil {
+			return nil, budgetErr
+		}
+		tempReservation, budgetErr := tempBudget.Reserve(cbrMaxCoverBytes)
+		if budgetErr != nil {
+			return nil, budgetErr
+		}
+		dir, err := resourcebudget.OwnedTemporaryDirectory()
 		if err != nil {
+			tempReservation.Release()
 			return nil, err
 		}
-		defer os.RemoveAll(dir)
-		err = exec.CommandContext(ctx, tool, "-q", "-f", "-o", dir, archive, name).Run()
+		defer func() {
+			if cleanupErr := os.RemoveAll(dir); cleanupErr != nil {
+				result = nil
+				resultErr = errors.Join(resultErr, cleanupErr)
+			} else {
+				tempReservation.Release()
+			}
+		}()
+		runCtx, stop := context.WithCancel(ctx)
+		defer stop()
+		finish := resourcebudget.Monitor(runCtx, dir, cbrMaxCoverBytes, stop)
+		err = cbrCommand(runCtx, tool, "-q", "-f", "-o", dir, archive, name).Run()
+		if budgetErr := finish(); budgetErr != nil {
+			return nil, budgetErr
+		}
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
@@ -582,7 +676,7 @@ func cbrExtract(ctx context.Context, tool, archive, name string) ([]byte, error)
 				return ferr
 			}
 			defer f.Close()
-			data, ferr = io.ReadAll(io.LimitReader(f, cbrMaxCoverBytes+1))
+			data, ferr = readCoverBytes(f, cbrMaxCoverBytes)
 			if ferr != nil {
 				return ferr
 			}
@@ -596,7 +690,7 @@ func cbrExtract(ctx context.Context, tool, archive, name string) ([]byte, error)
 			return nil, err
 		}
 		if tooBig {
-			return nil, fmt.Errorf("cbr page %s exceeds the %d MB cap", name, cbrMaxCoverBytes>>20)
+			return nil, &resourcebudget.LimitError{Resource: "CBR temporary output " + name, Limit: cbrMaxCoverBytes, Requested: extractedTotal}
 		}
 		if data == nil {
 			return nil, fmt.Errorf("unar extracted nothing for %s", name)
@@ -614,4 +708,33 @@ func fileTitleAuthor(name string) (string, string) {
 		return strings.TrimSpace(base[i+3:]), strings.TrimSpace(base[:i])
 	}
 	return base, ""
+}
+
+func readCoverBytes(r io.Reader, max int) ([]byte, error) {
+	if configured := os.Getenv("LIBTECA_ARCHIVE_MEMORY_BYTES"); configured == "" || configured == "0" {
+		return io.ReadAll(io.LimitReader(r, int64(max+1)))
+	}
+	data := make([]byte, max+1)
+	n, err := io.ReadFull(r, data)
+	if err == io.EOF || err == io.ErrUnexpectedEOF {
+		err = nil
+	}
+	return data[:n], err
+}
+
+func cbrCommand(ctx context.Context, name string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		if err == syscall.ESRCH {
+			return os.ErrProcessDone
+		}
+		return err
+	}
+	cmd.WaitDelay = time.Second
+	return cmd
 }

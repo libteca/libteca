@@ -6,11 +6,13 @@ package importer
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -40,15 +42,17 @@ type LibraryPlan struct {
 }
 
 type Plan struct {
-	Source       string        `json:"source"`
-	Libraries    []LibraryPlan `json:"libraries"`
-	Works        int           `json:"works"`
-	Editions     int           `json:"editions"`
-	Files        int           `json:"files"`
-	Users        []UserPlan    `json:"users"`
-	ProgressRows int           `json:"progressRows"`
-	Playlists    int           `json:"playlists"`
-	Warnings     []string      `json:"warnings"`
+	Source              string        `json:"source"`
+	SourceSchemaVersion int64         `json:"sourceSchemaVersion"`
+	SourceConsistency   string        `json:"sourceConsistency"`
+	Libraries           []LibraryPlan `json:"libraries"`
+	Works               int           `json:"works"`
+	Editions            int           `json:"editions"`
+	Files               int           `json:"files"`
+	Users               []UserPlan    `json:"users"`
+	ProgressRows        int           `json:"progressRows"`
+	Playlists           int           `json:"playlists"`
+	Warnings            []string      `json:"warnings"`
 }
 
 func (p *Plan) warnf(format string, args ...any) {
@@ -76,6 +80,17 @@ func openForeign(path string) (*sql.DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("cannot open %s read-only (stop the source server or import a copy): %w", path, err)
 	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	if _, err := db.Exec(`BEGIN`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("begin source snapshot: %w", err)
+	}
+	var version int
+	if err := db.QueryRow(`PRAGMA schema_version`).Scan(&version); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("read source snapshot: %w", err)
+	}
 	return db, nil
 }
 
@@ -90,6 +105,8 @@ func schemaErr(err error) bool {
 type fileSpec struct {
 	Path     string
 	Duration float64
+	Snapshot os.FileInfo
+	Digest   string
 }
 
 var audioExts = map[string]string{
@@ -232,7 +249,7 @@ func ensureLibrary(db libraryStore, name, typ, fallbackPath string, plan *Plan, 
 		return 0, err
 	}
 	for _, l := range libs {
-		if l.Name == name && l.Type == typ {
+		if l.Name == name && l.Type == typ && sameLibraryRoot(l.Path, fallbackPath) {
 			return l.ID, nil
 		}
 	}
@@ -272,10 +289,33 @@ func applyFilesTx(tx *store.Tx, editionID int64, files []fileSpec) ([]int64, err
 		if !fi.Mode().IsRegular() {
 			return nil, fmt.Errorf("planned file is not a regular media file: %s", f.Path)
 		}
+		if f.Snapshot != nil && (!os.SameFile(fi, f.Snapshot) || fi.Size() != f.Snapshot.Size() || fi.ModTime() != f.Snapshot.ModTime()) {
+			return nil, fmt.Errorf("planned file changed during import: %s", f.Path)
+		}
+		var existing, owner int64
+		var digest *string
+		var missing bool
+		err = tx.QueryRow(`SELECT id,edition_id,sha256,missing FROM files WHERE path=?`, f.Path).Scan(&existing, &owner, &digest, &missing)
+		if err == nil {
+			if owner != editionID {
+				return nil, store.ErrSourceConflict
+			}
+			if !missing && (digest == nil || *digest == "" || *digest == f.Digest) {
+				if digest == nil || *digest == "" {
+					if _, err := tx.Exec(`UPDATE files SET sha256=?,size_bytes=?,mtime_secs=?,mtime_ns=? WHERE id=?`, f.Digest, fi.Size(), fi.ModTime().Unix(), fi.ModTime().UnixNano(), existing); err != nil {
+						return nil, err
+					}
+				}
+				ids = append(ids, existing)
+				continue
+			}
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
 		fr := &store.FileRec{
 			EditionID: editionID, Path: f.Path, Seq: i + 1,
 			SizeBytes: fi.Size(), MtimeSecs: fi.ModTime().Unix(), MtimeNS: fi.ModTime().UnixNano(),
-			DurationSecs: f.Duration, Chapters: "[]",
+			DurationSecs: f.Duration, Chapters: "[]", SHA256: strPtr(f.Digest),
 		}
 		if err := tx.UpsertFile(fr); err != nil {
 			return nil, err
@@ -304,4 +344,110 @@ func locate(files []fileSpec, ids []int64, pos float64) (*int64, float64) {
 	}
 	id := ids[0]
 	return &id, 0
+}
+
+func snapshotFiles(files []fileSpec) error {
+	for i := range files {
+		fi, err := os.Stat(files[i].Path)
+		if err != nil {
+			return err
+		}
+		if !fi.Mode().IsRegular() {
+			return fmt.Errorf("not a regular media file")
+		}
+		input, err := os.Open(files[i].Path)
+		if err != nil {
+			return err
+		}
+		h := sha256.New()
+		_, readErr := io.Copy(h, input)
+		after, statErr := input.Stat()
+		closeErr := input.Close()
+		if err := errors.Join(readErr, statErr, closeErr); err != nil {
+			return err
+		}
+		if !os.SameFile(fi, after) || fi.Size() != after.Size() || fi.ModTime() != after.ModTime() {
+			return fmt.Errorf("file changed during content proof")
+		}
+		files[i].Digest = fmt.Sprintf("%x", h.Sum(nil))
+		files[i].Snapshot = fi
+	}
+	return nil
+}
+
+func sourcePaths(files []fileSpec) []string {
+	paths := make([]string, len(files))
+	for i := range files {
+		paths[i] = files[i].Path
+	}
+	return paths
+}
+
+func sameLibraryRoot(a, b string) bool {
+	a, _ = filepath.Abs(a)
+	b, _ = filepath.Abs(b)
+	if ar, err := filepath.EvalSymlinks(a); err == nil {
+		a = ar
+	}
+	if br, err := filepath.EvalSymlinks(b); err == nil {
+		b = br
+	}
+	return filepath.Clean(a) == filepath.Clean(b)
+}
+
+func sourceDigests(files []fileSpec) []string {
+	digests := make([]string, len(files))
+	for i := range files {
+		digests[i] = files[i].Digest
+	}
+	return digests
+}
+
+func physicalImportRoot(db libraryStore, name, typ string, paths []string) (string, error) {
+	if len(paths) == 0 {
+		return "", fmt.Errorf("no physical files for imported library")
+	}
+	libraries, err := db.Libraries()
+	if err != nil {
+		return "", err
+	}
+	root := ""
+	for _, library := range libraries {
+		if library.Name != name || library.Type != typ {
+			continue
+		}
+		contains := true
+		for _, path := range paths {
+			if _, err := store.SourceKey(library.Path, path); err != nil {
+				contains = false
+				break
+			}
+		}
+		if contains {
+			if root != "" {
+				return "", store.ErrSourceConflict
+			}
+			root = library.Path
+		}
+	}
+	if root != "" {
+		return root, nil
+	}
+	root = filepath.Dir(paths[0])
+	for _, path := range paths[1:] {
+		for {
+			if _, err := store.SourceKey(root, path); err == nil {
+				break
+			}
+			parent := filepath.Dir(root)
+			if parent == root {
+				return "", store.ErrSourceConflict
+			}
+			root = parent
+		}
+	}
+	if root == filepath.VolumeName(root)+string(filepath.Separator) || !filepath.IsAbs(root) {
+		return "", store.ErrSourceConflict
+	}
+	return root, nil
 }

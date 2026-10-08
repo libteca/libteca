@@ -202,7 +202,7 @@ func scanGamesLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 		// Warm-skip requires a stored sha256 as well as matching stat: a row
 		// left NULL by a failed read (or predating migration 0016) must be
 		// re-hashed, or the stale/missing value would survive forever (C-02).
-		if size, mtime, mtimeNs, hasSHA, ok, serr := db.FileStatByPathWithSHA(d.path); serr == nil && ok && hasSHA && size == d.size && mtime == d.mtime && mtimeNs == d.mtimeNs && mtimeNs != 0 {
+		if size, mtime, mtimeNs, hasSHA, ok, serr := db.FileStatByPathWithSHA(d.path); serr == nil && ok && hasSHA && size == d.size && mtime == d.mtime && mtimeNs == d.mtimeNs && mtimeNs != 0 && fileUnchanged(db, d.path, d.size, d.mtime, d.mtimeNs) {
 			continue
 		}
 		if serr := storeGame(db, lib, d, coversDir, tr); serr != nil {
@@ -227,9 +227,14 @@ func storeGame(db *store.DB, lib *store.Library, d *gameDoc, coversDir string, t
 		fileSHA = &sum
 	}
 	err := db.Update(func(tx *store.Tx) error {
+		var existingEdition int64
+		lookupErr := tx.QueryRow(`SELECT e.id,e.work_id FROM files f JOIN editions e ON e.id=f.edition_id WHERE f.path=? AND f.source_library_id=?`, d.path, lib.ID).Scan(&existingEdition, &workID)
+		if lookupErr != nil && !errors.Is(lookupErr, sql.ErrNoRows) {
+			return lookupErr
+		}
 		// Games set no work metadata of their own (providers fill it in G2),
 		// so every file links to the shared work without unconditional updates.
-		if id, ok := tx.FindWorkID(lib.ID, d.title, nil); ok {
+		if id, ok := tx.FindWorkID(lib.ID, d.title, nil); ok && workID == 0 {
 			workID = id
 		}
 		if workID == 0 {
@@ -245,9 +250,13 @@ func storeGame(db *store.DB, lib *store.Library, d *gameDoc, coversDir string, t
 		}
 
 		e := &store.Edition{WorkID: workID, Format: "game-" + d.platform.Tag, Title: d.platform.Name}
-		editionID, err := tx.UpsertEdition(e)
-		if err != nil {
-			return err
+		editionID := existingEdition
+		var err error
+		if editionID == 0 {
+			editionID, err = tx.UpsertEdition(e)
+			if err != nil {
+				return err
+			}
 		}
 
 		var seq int64
@@ -259,7 +268,7 @@ func storeGame(db *store.DB, lib *store.Library, d *gameDoc, coversDir string, t
 			return err
 		}
 		fr := &store.FileRec{
-			EditionID: editionID, Path: d.path, Seq: int(seq),
+			EditionID: editionID, SourceLibraryID: lib.ID, Path: d.path, Seq: int(seq),
 			SizeBytes: d.size, MtimeSecs: d.mtime, MtimeNS: d.mtimeNs, Hash: &hash, SHA256: fileSHA,
 			Container: &d.platform.Tag, DurationSecs: 0, Chapters: "[]",
 		}

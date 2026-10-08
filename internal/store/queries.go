@@ -137,7 +137,7 @@ func (d *DB) DeleteLibrary(id int64) error {
 		return err
 	}
 
-	if err := deleteEditionBackedLibraryRows(tx, id); err != nil {
+	if err := deletePhysicalLibraryRows(tx, id); err != nil {
 		return err
 	}
 	if err := deleteLibraryScanJobs(tx, id); err != nil {
@@ -289,6 +289,9 @@ func (t *Tx) UpsertEdition(e *Edition) (int64, error) {
 }
 
 func upsertEdition(q dbtx, e *Edition) (int64, error) {
+	if e.SourceKey != "" {
+		return upsertSourceEdition(q, e)
+	}
 	var id int64
 	var err error
 	if e.SeasonNum != nil && e.EpisodeNum != nil {
@@ -328,6 +331,11 @@ func (t *Tx) UpsertFile(f *FileRec) error {
 }
 
 func upsertFile(q dbtx, f *FileRec) error {
+	if f.SourceLibraryID == 0 && f.EditionID != 0 {
+		if err := q.QueryRow(`SELECT coalesce(e.source_library_id,w.library_id) FROM editions e JOIN works w ON w.id=e.work_id WHERE e.id=?`, f.EditionID).Scan(&f.SourceLibraryID); err != nil {
+			return err
+		}
+	}
 	var id int64
 	err := q.QueryRow(`SELECT id FROM files WHERE path = ?`, f.Path).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -340,9 +348,9 @@ func upsertFile(q dbtx, f *FileRec) error {
 				return nil
 			}
 		}
-		res, ierr := q.Exec(`INSERT INTO files (edition_id, path, seq, size_bytes, mtime_secs, mtime_ns, hash, sha256, codec, video_codec, width, height, container, bitrate, channels, sample_rate, duration_secs, chapters, embedded_meta, missing, probed_at)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)`,
-			f.EditionID, f.Path, f.Seq, f.SizeBytes, f.MtimeSecs, f.MtimeNS, f.Hash, f.SHA256, f.Codec, f.VideoCodec, f.Width, f.Height, f.Container, f.Bitrate, f.Channels, f.SampleRate, f.DurationSecs, f.Chapters, "{}", nowMilli())
+		res, ierr := q.Exec(`INSERT INTO files (edition_id, path, seq, size_bytes, mtime_secs, mtime_ns, hash, sha256, codec, video_codec, width, height, container, bitrate, channels, sample_rate, duration_secs, chapters, embedded_meta, missing, probed_at, source_library_id)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?)`,
+			f.EditionID, f.Path, f.Seq, f.SizeBytes, f.MtimeSecs, f.MtimeNS, f.Hash, f.SHA256, f.Codec, f.VideoCodec, f.Width, f.Height, f.Container, f.Bitrate, f.Channels, f.SampleRate, f.DurationSecs, f.Chapters, "{}", nowMilli(), nullSource(f.SourceLibraryID))
 		if ierr != nil {
 			return ierr
 		}
@@ -370,14 +378,14 @@ func relinkFile(q dbtx, hash string, f *FileRec) (bool, error) {
 
 func relinkableFileID(q dbtx, hash string, f *FileRec) (int64, bool, error) {
 	var libID int64
-	if err := q.QueryRow(`SELECT w.library_id FROM editions e JOIN works w ON w.id = e.work_id WHERE e.id = ?`, f.EditionID).Scan(&libID); err != nil {
+	if err := q.QueryRow(`SELECT coalesce(e.source_library_id,w.library_id) FROM editions e JOIN works w ON w.id = e.work_id WHERE e.id = ?`, f.EditionID).Scan(&libID); err != nil {
 		return 0, false, err
 	}
-	rows, err := q.Query(`SELECT f.id, f.path, f.missing, f.size_bytes
+	rows, err := q.Query(`SELECT f.id, f.path, f.missing, f.size_bytes,f.edition_id,f.sha256
 		FROM files f
 		JOIN editions e ON e.id = f.edition_id
 		JOIN works w ON w.id = e.work_id
-		WHERE f.hash = ? AND f.path != ? AND w.library_id = ?
+		WHERE f.hash = ? AND f.path != ? AND f.source_library_id = ?
 		ORDER BY f.missing DESC, f.id ASC`, hash, f.Path, libID)
 	if err != nil {
 		return 0, false, err
@@ -388,9 +396,13 @@ func relinkableFileID(q dbtx, hash string, f *FileRec) (int64, bool, error) {
 		var id int64
 		var oldPath string
 		var missing int
-		var size int64
-		if err := rows.Scan(&id, &oldPath, &missing, &size); err != nil {
+		var size, edition int64
+		var sha *string
+		if err := rows.Scan(&id, &oldPath, &missing, &size, &edition, &sha); err != nil {
 			return 0, false, err
+		}
+		if edition != f.EditionID || (f.SHA256 != nil && sha != nil && *f.SHA256 != *sha) {
+			continue
 		}
 		if size != f.SizeBytes {
 			continue
@@ -426,8 +438,15 @@ func relinkableFileID(q dbtx, hash string, f *FileRec) (int64, bool, error) {
 // by construction, so the direct write only ever replaces a games value the
 // same scan just re-derived.
 func updateFileRow(q dbtx, id int64, f *FileRec) error {
-	_, err := q.Exec(`UPDATE files SET edition_id = ?, path = ?, seq = ?, size_bytes = ?, mtime_secs = ?, mtime_ns = ?, hash = ?, sha256 = ?, codec = ?, video_codec = ?, width = ?, height = ?, container = ?, bitrate = ?, channels = ?, sample_rate = ?, duration_secs = ?, chapters = ?, missing = 0, probed_at = ? WHERE id = ?`,
-		f.EditionID, f.Path, f.Seq, f.SizeBytes, f.MtimeSecs, f.MtimeNS, f.Hash, f.SHA256, f.Codec, f.VideoCodec, f.Width, f.Height, f.Container, f.Bitrate, f.Channels, f.SampleRate, f.DurationSecs, f.Chapters, nowMilli(), id)
+	var source int64
+	if err := q.QueryRow(`SELECT coalesce(source_library_id,0) FROM files WHERE id=?`, id).Scan(&source); err != nil {
+		return err
+	}
+	if source != 0 && f.SourceLibraryID != 0 && source != f.SourceLibraryID {
+		return ErrSourceConflict
+	}
+	_, err := q.Exec(`UPDATE files SET edition_id = ?, path = ?, seq = ?, size_bytes = ?, mtime_secs = ?, mtime_ns = ?, hash = ?, sha256 = ?, codec = ?, video_codec = ?, width = ?, height = ?, container = ?, bitrate = ?, channels = ?, sample_rate = ?, duration_secs = ?, chapters = ?, missing = 0, probed_at = ?, source_library_id=coalesce(source_library_id,?) WHERE id = ?`,
+		f.EditionID, f.Path, f.Seq, f.SizeBytes, f.MtimeSecs, f.MtimeNS, f.Hash, f.SHA256, f.Codec, f.VideoCodec, f.Width, f.Height, f.Container, f.Bitrate, f.Channels, f.SampleRate, f.DurationSecs, f.Chapters, nowMilli(), nullSource(f.SourceLibraryID), id)
 	f.ID = id
 	f.Inserted = false
 	return err

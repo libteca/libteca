@@ -71,11 +71,29 @@ func newAtomicImportFixture(t *testing.T, format string) atomicImportFixture {
 			run:    func(db *store.DB, dry bool) (*Plan, error) { return ABS(dir, db, dry) },
 			stages: stages,
 			grow: func(t *testing.T) {
+				bookTwo := filepath.Join(dir, "media", "Book Two")
+				if err := os.MkdirAll(bookTwo, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(bookTwo, "book2.m4b"), make([]byte, 4096), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				epsTwo := filepath.Join(dir, "media", "eps2")
+				if err := os.MkdirAll(epsTwo, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(epsTwo, "ep1.mp3"), make([]byte, 2048), 0o644); err != nil {
+					t.Fatal(err)
+				}
 				sourceExec(t, source, func(db *sql.DB) {
 					importExec(t, db, `INSERT INTO users VALUES (10, 'rollback-first-user', '', 'user'), (11, 'rollback-last-user', '', 'user')`)
 					importExec(t, db, `INSERT INTO libraries VALUES (10, 'Rollback First Library', 'book'), (11, 'Rollback Last Library', 'book')`)
 					importExec(t, db, `INSERT INTO playlists VALUES (10, 1, 'Rollback Playlist')`)
 					importExec(t, db, `INSERT INTO playlistMediaItems VALUES (10, 10, 1, 'book')`)
+					importExec(t, db, `INSERT INTO libraryItems VALUES (4, 1, 4, 'book', 'Book Two', '`+filepath.Join(dir, "media", "Book Two")+`')`)
+					importExec(t, db, `INSERT INTO books VALUES (4, 'Book Two', '["Ann Auth"]', 'Second book', 2400)`)
+					importExec(t, db, `INSERT INTO mediaProgress VALUES (4, 2, 4, 'book', 300, 0.125, 0, 0), (5, 1, 8, 'podcastEpisode', 60, 0.1, 0, 0)`)
+					importExec(t, db, `INSERT INTO podcastEpisodes VALUES (8, 2, 1, 2, 'Ep One', 900, '{"duration":900,"metadata":{"path":"`+filepath.Join(dir, "media", "eps2", "ep1.mp3")+`"}}')`)
 				})
 			},
 		}
@@ -97,9 +115,21 @@ func newAtomicImportFixture(t *testing.T, format string) atomicImportFixture {
 		run:    func(db *store.DB, dry bool) (*Plan, error) { return Kavita(path, db, dry) },
 		stages: stages,
 		grow: func(t *testing.T) {
+			spinoff := filepath.Join(filepath.Dir(path), "spinoff")
+			if err := os.MkdirAll(spinoff, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(spinoff, "Saga 002.cbz"), []byte("spinoff comic"), 0o644); err != nil {
+				t.Fatal(err)
+			}
 			sourceExec(t, path, func(db *sql.DB) {
 				importExec(t, db, `INSERT INTO AspNetUsers VALUES ('u-10', 'rollback-first-user', ''), ('u-11', 'rollback-last-user', '')`)
 				importExec(t, db, `INSERT INTO Library VALUES (10, 'Rollback First Library', 2), (11, 'Rollback Last Library', 2)`)
+				importExec(t, db, `INSERT INTO Series VALUES (7, 1, 'Saga Spinoff')`)
+				importExec(t, db, `INSERT INTO Volume VALUES (10, 7, '1')`)
+				importExec(t, db, `INSERT INTO Chapter VALUES (13, 10, 1, '', '', 20)`)
+				importExec(t, db, `INSERT INTO MangaFile VALUES (3, 13, '`+filepath.Join(spinoff, "Saga 002.cbz")+`', 1)`)
+				importExec(t, db, `INSERT INTO AppUserProgresses VALUES (3, 'u-1', 13, 5)`)
 			})
 		},
 	}

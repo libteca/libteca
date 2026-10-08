@@ -58,6 +58,8 @@ func (d *DB) RotatePassword(id int64, passwordHash string) error {
 var ErrCredentialsChanged = errors.New("credentials changed; authenticate again")
 
 func (d *DB) RotatePasswordChecked(id int64, expected *string, passwordHash string) error {
+	d.socketAuthority.Lock()
+	defer d.socketAuthority.Unlock()
 	return d.Update(func(tx *Tx) error {
 		now := nowMilli()
 		var res sql.Result
@@ -94,6 +96,8 @@ func (d *DB) RotatePasswordChecked(id int64, expected *string, passwordHash stri
 }
 
 func (d *DB) RevokeTokenByValue(value string) error {
+	d.socketAuthority.Lock()
+	defer d.socketAuthority.Unlock()
 	if value == "" {
 		return nil
 	}
@@ -114,6 +118,8 @@ var ErrLastAdmin = errors.New("cannot delete last admin")
 // in one transaction: checking admin count separately from deleting let two
 // concurrent admin deletions both pass and leave the install adminless.
 func (d *DB) DeleteUserGuarded(id int64) ([]string, error) {
+	d.socketAuthority.Lock()
+	defer d.socketAuthority.Unlock()
 	tx, err := d.Begin()
 	if err != nil {
 		return nil, err
@@ -185,6 +191,8 @@ func (d *DB) DeleteUserGuarded(id int64) ([]string, error) {
 // stored token values (digests at rest). The last-admin guarantee is the
 // caller's business; admins go through DeleteUserGuarded.
 func (d *DB) DeleteUser(id int64) ([]string, error) {
+	d.socketAuthority.Lock()
+	defer d.socketAuthority.Unlock()
 	tx, err := d.Begin()
 	if err != nil {
 		return nil, err
@@ -250,6 +258,8 @@ func (d *DB) UserTokenValues(id int64) ([]string, error) {
 }
 
 func (d *DB) RevokeUserTokens(id int64) error {
+	d.socketAuthority.Lock()
+	defer d.socketAuthority.Unlock()
 	_, err := d.Exec(`UPDATE tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`, nowMilli(), id)
 	return err
 }
@@ -286,6 +296,8 @@ func (d *DB) TokenByID(id int64) (*Token, error) {
 // RevokeToken marks a token revoked and returns its stored value (the
 // digest at rest). The stored value must never be sent to clients.
 func (d *DB) RevokeToken(id int64) (string, error) {
+	d.socketAuthority.Lock()
+	defer d.socketAuthority.Unlock()
 	var value string
 	err := d.QueryRow(`SELECT value FROM tokens WHERE id = ?`, id).Scan(&value)
 	if errors.Is(err, sql.ErrNoRows) {

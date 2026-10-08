@@ -33,6 +33,7 @@ import (
 
 	"github.com/libteca/libteca/internal/auth"
 	"github.com/libteca/libteca/internal/mediafs"
+	"github.com/libteca/libteca/internal/resourcebudget"
 	"github.com/libteca/libteca/internal/store"
 	"github.com/neutron-build/neutron/go/neutron"
 )
@@ -508,7 +509,7 @@ func (a *API) download(w http.ResponseWriter, r *http.Request, _ int64) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	root, rerr := a.DB.LibraryRootForEdition(eid)
+	root, rerr := a.DB.LibraryRootForFile(f.ID)
 	if rerr != nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
@@ -702,7 +703,7 @@ func (a *API) psePage(w http.ResponseWriter, r *http.Request, _ int64) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	root, rerr := a.DB.LibraryRootForEdition(eid)
+	root, rerr := a.DB.LibraryRootForFile(f.ID)
 	if rerr != nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
@@ -724,7 +725,13 @@ func (a *API) psePage(w http.ResponseWriter, r *http.Request, _ int64) {
 		return
 	}
 	name := names[page-1]
-	data, err := readZipPage(zr, name)
+	data, reservation, err := readZipPageReserved(zr, name)
+	defer reservation.Release()
+	if errors.Is(err, resourcebudget.ErrLimit) {
+		w.Header().Set("Retry-After", "5")
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
 	if err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return

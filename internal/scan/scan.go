@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -31,6 +32,7 @@ type bookFile struct {
 	track   int
 	info    *audio.Info
 	hash    string
+	sha     string
 	size    int64
 	mtime   int64
 	mtimeNs int64
@@ -179,7 +181,8 @@ func scanAudioLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 
 	groups := map[string][]bookFile{}
 	for _, f := range files {
-		groups[f.top] = append(groups[f.top], f)
+		key := audioSourceGroup(f)
+		groups[key] = append(groups[key], f)
 	}
 	topFolders := make([]string, 0, len(groups))
 	for k := range groups {
@@ -194,6 +197,7 @@ func scanAudioLibrary(ctx context.Context, db *store.DB, lib *store.Library, cov
 			return count, cerr
 		}
 		group := groups[top]
+		top = group[0].top
 		sort.Slice(group, func(i, j int) bool { return natLess(relPath(top, group[i].path), relPath(top, group[j].path)) })
 		if err := scanBook(ctx, db, lib, abs, top, group, coversDir, tr); err != nil {
 			if cerr := ctx.Err(); cerr != nil {
@@ -285,7 +289,13 @@ func scanBook(ctx context.Context, db *store.DB, lib *store.Library, root, top s
 			return err
 		}
 		var err error
-		workID, err = tx.UpsertWork(w)
+		paths := make([]string, len(group))
+		digests := make([]string, len(group))
+		for i := range group {
+			paths[i] = group[i].path
+			digests[i] = group[i].sha
+		}
+		workID, err = tx.UpsertSourceWorkDigests(w, paths, lib.ID, digests)
 		if err != nil {
 			return err
 		}
@@ -300,7 +310,11 @@ func scanBook(ctx context.Context, db *store.DB, lib *store.Library, root, top s
 		for _, f := range group {
 			total += f.info.Duration
 		}
-		e := &store.Edition{WorkID: workID, Format: format, Title: title, DurationSecs: &total}
+		sourceKey, err := store.SourceKey(root, audioSourceGroup(group[0]))
+		if err != nil {
+			return err
+		}
+		e := &store.Edition{WorkID: workID, Format: format, Title: title, DurationSecs: &total, SourceLibraryID: lib.ID, SourceKey: sourceKey, SourcePaths: paths, SourceDigests: digests}
 		editionID, err := tx.UpsertEdition(e)
 		if err != nil {
 			return err
@@ -321,8 +335,8 @@ func scanBook(ctx context.Context, db *store.DB, lib *store.Library, root, top s
 				chap, _ = marshalChapters([]audio.Chapter{{ID: int64(seq), Start: 0, End: f.info.Duration, Title: chTitle}})
 			}
 			fr := &store.FileRec{
-				EditionID: editionID, Path: f.path, Seq: seq + 1,
-				SizeBytes: f.size, MtimeSecs: f.mtime, MtimeNS: f.mtimeNs, Hash: &f.hash,
+				EditionID: editionID, SourceLibraryID: lib.ID, Path: f.path, Seq: seq + 1,
+				SizeBytes: f.size, MtimeSecs: f.mtime, MtimeNS: f.mtimeNs, Hash: &f.hash, SHA256: &f.sha,
 				Codec: &c, Container: &ct, Bitrate: &br, Channels: &ch, SampleRate: &sr,
 				DurationSecs: f.info.Duration, Chapters: chap,
 			}
@@ -419,6 +433,17 @@ func SHA256File(path string) string {
 	return SHA256Content(f)
 }
 
+func fullContentDigest(r io.ReadSeeker) (string, error) {
+	if _, err := r.Seek(0, io.SeekStart); err != nil {
+		return "", err
+	}
+	h := sha256.New()
+	if _, err := io.Copy(h, r); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
+}
+
 func SHA256Content(r io.Reader) string {
 	h := sha256.New()
 	if _, err := io.Copy(h, r); err != nil {
@@ -463,4 +488,24 @@ func nullable(s string) string {
 		return ""
 	}
 	return s
+}
+
+var multipartAudioName = regexp.MustCompile(`(?i)(?:part|disc|cd)[ _.-]*[0-9]+`)
+var audioDiscDirectory = regexp.MustCompile(`(?i)^(?:disc|disk|cd|part)[ _.-]*[0-9]+$`)
+
+func audioSourceGroup(f bookFile) string {
+	ext := strings.ToLower(filepath.Ext(f.path))
+	base := f.top
+	if relative, err := filepath.Rel(f.top, filepath.Dir(f.path)); err == nil && relative != "." && filepath.IsLocal(relative) {
+		for _, part := range strings.Split(relative, string(filepath.Separator)) {
+			if audioDiscDirectory.MatchString(part) {
+				break
+			}
+			base = filepath.Join(base, part)
+		}
+	}
+	if ext == ".m4b" && !multipartAudioName.MatchString(strings.TrimSuffix(f.name, filepath.Ext(f.name))) {
+		base = f.path
+	}
+	return filepath.Join(base, "audio-"+strings.TrimPrefix(ext, "."))
 }

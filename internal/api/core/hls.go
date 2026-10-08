@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/libteca/libteca/internal/auth"
+	"github.com/libteca/libteca/internal/resourcebudget"
 	"github.com/libteca/libteca/internal/store"
 	"github.com/libteca/libteca/internal/transcode"
 	"github.com/libteca/libteca/internal/trickplay"
@@ -28,6 +29,8 @@ var (
 
 func (a *API) MountHLS(r *neutron.Router) {
 	r.HandleFunc("GET /editions/{id}/playback", a.editionPlayback)
+	r.HandleFunc("GET /editions/{id}/timeline", a.editionTimeline)
+	r.HandleFunc("POST /editions/{id}/playback-sessions", a.selectedPlayback)
 	r.HandleFunc("GET /editions/{id}/thumbs", a.editionThumbs)
 	r.HandleFunc("GET /editions/{id}/thumbs/{file}", a.editionThumbTile)
 	r.HandleFunc("GET /hls/{sid}/{file}", a.hlsFile)
@@ -65,7 +68,34 @@ func (a *API) editionThumbSource(id int64) (*store.EditionView, error) {
 	return ed, nil
 }
 
+func (a *API) selectedThumbSource(r *http.Request) (*store.EditionView, error) {
+	id := auth.Atoi64(r.PathValue("id"))
+	timeline, err := a.DB.EditionTimeline(id)
+	if err != nil {
+		return nil, err
+	}
+	if expected := r.URL.Query().Get("generation"); expected != "" && expected != timeline.Generation {
+		return nil, store.ErrTimelineUnavailable
+	}
+	file := timeline.Files[0]
+	if raw := r.URL.Query().Get("fileId"); raw != "" {
+		selected, _, err := timeline.Select(auth.Atoi64(raw), 0)
+		if err != nil {
+			return nil, err
+		}
+		file = *selected
+	}
+	if file.File.VideoCodec == nil || *file.File.VideoCodec == "" {
+		return nil, store.ErrNotFound
+	}
+	return &store.EditionView{Edition: timeline.Edition, Generation: timeline.Generation, Files: []store.FileRec{file.File}}, nil
+}
+
 func writeEditionLookupError(w http.ResponseWriter, err error) {
+	if errors.Is(err, store.ErrTimelineUnavailable) {
+		writeJSON(w, 409, map[string]string{"error": "timeline_unavailable"})
+		return
+	}
 	if errors.Is(err, store.ErrNotFound) {
 		writeJSON(w, 404, map[string]string{"error": "not found"})
 		return
@@ -74,12 +104,13 @@ func writeEditionLookupError(w http.ResponseWriter, err error) {
 }
 
 func (a *API) editionThumbs(w http.ResponseWriter, r *http.Request) {
-	ed, err := a.editionThumbSource(auth.Atoi64(r.PathValue("id")))
+	ed, err := a.selectedThumbSource(r)
 	if err != nil {
 		writeEditionLookupError(w, err)
 		return
 	}
-	itemID := "e" + strconv.FormatInt(ed.ID, 10)
+	generation := ed.Generation
+	itemID := "f" + strconv.FormatInt(ed.Files[0].ID, 10) + "-" + strings.ReplaceAll(generation, ":", "-")
 	open, oerr := a.openEditionFile(ed)
 	if oerr != nil {
 		writeJSON(w, 404, map[string]string{"error": "not found"})
@@ -99,7 +130,7 @@ func (a *API) editionThumbs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) editionThumbTile(w http.ResponseWriter, r *http.Request) {
-	ed, err := a.editionThumbSource(auth.Atoi64(r.PathValue("id")))
+	ed, err := a.selectedThumbSource(r)
 	if err != nil {
 		writeEditionLookupError(w, err)
 		return
@@ -109,7 +140,8 @@ func (a *API) editionThumbTile(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "bad tile"})
 		return
 	}
-	itemID := "e" + strconv.FormatInt(ed.ID, 10)
+	generation := ed.Generation
+	itemID := "f" + strconv.FormatInt(ed.Files[0].ID, 10) + "-" + strings.ReplaceAll(generation, ":", "-")
 	open, oerr := a.openEditionFile(ed)
 	if oerr != nil {
 		writeJSON(w, 404, map[string]string{"error": "not found"})
@@ -125,7 +157,7 @@ func (a *API) editionThumbTile(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 503, map[string]string{"error": "ffmpeg unavailable"})
 		return
 	}
-	if errors.Is(err, trickplay.ErrBusy) {
+	if errors.Is(err, trickplay.ErrBusy) || errors.Is(err, resourcebudget.ErrLimit) {
 		w.Header().Set("Retry-After", "10")
 		writeJSON(w, 503, map[string]string{"error": "trickplay capacity exhausted"})
 		return
@@ -147,9 +179,11 @@ func webSessionID(editionID int64) (string, error) {
 }
 
 type webTicket struct {
-	userID    int64
-	editionID int64
-	expires   time.Time
+	userID     int64
+	editionID  int64
+	fileID     int64
+	generation string
+	expires    time.Time
 }
 
 const (
@@ -158,6 +192,10 @@ const (
 )
 
 func (a *API) issueWebTicket(userID, editionID int64) (string, error) {
+	return a.issueSelectedWebTicket(userID, editionID, 0, "")
+}
+
+func (a *API) issueSelectedWebTicket(userID, editionID, fileID int64, generation string) (string, error) {
 	sid, err := webSessionID(editionID)
 	if err != nil {
 		return "", err
@@ -176,7 +214,7 @@ func (a *API) issueWebTicket(userID, editionID int64) (string, error) {
 	if len(a.tickets) >= webTicketsMax {
 		return "", fmt.Errorf("playback ticket capacity exhausted")
 	}
-	a.tickets[sid] = webTicket{userID: userID, editionID: editionID, expires: now.Add(webTicketTTL)}
+	a.tickets[sid] = webTicket{userID: userID, editionID: editionID, fileID: fileID, generation: generation, expires: now.Add(webTicketTTL)}
 	return sid, nil
 }
 
@@ -336,6 +374,31 @@ func (a *API) hlsFile(w http.ResponseWriter, r *http.Request) {
 		writeEditionLookupError(w, err)
 		return
 	}
+	a.ticketMu.Lock()
+	ticket := a.tickets[sid]
+	a.ticketMu.Unlock()
+	if ticket.fileID != 0 {
+		current, gerr := a.DB.TimelineGeneration(eid)
+		if gerr != nil || current != ticket.generation {
+			a.checkWebTicket(sid, auth.UserID(r), true)
+			a.TC.Close(sid)
+			writeJSON(w, 409, map[string]string{"error": "generation_mismatch"})
+			return
+		}
+		var selected *store.FileRec
+		for i := range ed.Files {
+			if ed.Files[i].ID == ticket.fileID {
+				selected = &ed.Files[i]
+				break
+			}
+		}
+		if selected == nil {
+			writeJSON(w, 404, map[string]string{"error": "file_not_in_edition"})
+			return
+		}
+		ed.Files = []store.FileRec{*selected}
+		ed.CumDurations = []float64{selected.DurationSecs}
+	}
 	if len(ed.Files) == 0 || !streamable(ed) {
 		writeJSON(w, 404, map[string]string{"error": "edition not found"})
 		return
@@ -347,6 +410,11 @@ func (a *API) hlsFile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !a.TC.WaitForSegmentFile(r.Context(), sid, file, 10*time.Second) {
+			if current, ok := a.TC.Existing(sid, ed.ID); ok && errors.Is(current.ResourceError(), resourcebudget.ErrLimit) {
+				w.Header().Set("Retry-After", "5")
+				writeJSON(w, 503, map[string]string{"error": "transcode resource limit reached"})
+				return
+			}
 			writeJSON(w, 404, map[string]string{"error": "segment not found"})
 			return
 		}
@@ -378,7 +446,7 @@ func (a *API) hlsFile(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusGone, map[string]string{"error": "playback session expired"})
 			return
 		}
-		if errors.Is(err, transcode.ErrCapacity) {
+		if errors.Is(err, transcode.ErrCapacity) || errors.Is(err, resourcebudget.ErrLimit) {
 			w.Header().Set("Retry-After", "5")
 			writeJSON(w, 503, map[string]string{"error": "transcode capacity exhausted"})
 			return
@@ -391,6 +459,11 @@ func (a *API) hlsFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Prebuffer(r.Context(), 2, 10*time.Second)
+	if errors.Is(s.ResourceError(), resourcebudget.ErrLimit) {
+		w.Header().Set("Retry-After", "5")
+		writeJSON(w, 503, map[string]string{"error": "transcode resource limit reached"})
+		return
+	}
 	wait := time.NewTicker(200 * time.Millisecond)
 	defer wait.Stop()
 	for i := 0; i < 100; i++ {

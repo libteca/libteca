@@ -481,7 +481,7 @@ func (a *API) stream(w http.ResponseWriter, r *http.Request, _ int64) {
 		http.Error(w, "not found", 404)
 		return
 	}
-	root, rerr := a.DB.LibraryRootForEdition(song.Edition.ID)
+	root, rerr := a.DB.LibraryRootForFile(song.File.ID)
 	if rerr != nil {
 		http.Error(w, "gone", 404)
 		return

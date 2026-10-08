@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import type { CSSProperties } from "preact";
 import { media } from "../api";
 import { c } from "../styles";
-import { extractCapped, readBoundedBody, type ZipEntryLike } from "./resources";
+import { extractReserved, readBoundedBodyReserved, type ZipEntryLike } from "./resources";
 import {
   clamp01, IconChevLeft, IconChevRight, IconFitHeight, IconFitWidth, IconPageDouble,
   IconPageSingle, IconRtl, IconWebtoon, isTypingTarget, loadPref, pageImageNames, pagePercent,
@@ -10,6 +10,9 @@ import {
   TopBar, TapZones, toolBtn, toolBtnActive, toolBtnCls, useProgressSaver,
   type FitMode, type ProgressPost, type ReaderMode, type ReadingProgress,
 } from "./shared";
+
+import { admitZipDirectory } from "./archiveAdmission";
+import { blobDimensions, ReaderResourceBudget, sharedReaderBudget, withDecode } from "./resourceBudget";
 
 const MODE_KEY = "libteca-cbz-mode";
 const FIT_KEY = "libteca-cbz-fit";
@@ -34,13 +37,17 @@ function typedBlob(entry: ZipEntryLike, blob: Blob): Blob {
 
 export class PageStore {
   private urls: (string | null)[] = [];
+  private releases = new Map<number, () => void>();
+  private errors = new Map<number, string>();
   private queue: number[] = [];
   private running = false;
   private revoked = false;
   private center = 0;
   private active: { index: number; controller: AbortController } | null = null;
 
-  constructor(private entries: ZipEntryLike[], private notify: () => void) {}
+  constructor(private entries: ZipEntryLike[], private notify: () => void, private budget: ReaderResourceBudget = sharedReaderBudget(), private releaseArchive: () => void = () => {}) {}
+
+  error(i: number): string | undefined { return this.errors.get(i); }
 
   get count(): number { return this.entries.length; }
 
@@ -97,6 +104,7 @@ export class PageStore {
         continue;
       }
       if (typeof u === "string") URL.revokeObjectURL(u);
+      this.releases.get(j)?.(); this.releases.delete(j); this.errors.delete(j);
       delete this.urls[j];
       evicted = true;
     }
@@ -109,6 +117,8 @@ export class PageStore {
     this.queue = [];
     for (const u of this.urls) if (typeof u === "string") URL.revokeObjectURL(u);
     this.urls = [];
+    for (const release of this.releases.values()) release();
+    this.releases.clear(); this.errors.clear(); this.entries = []; this.releaseArchive();
   }
 
   private async drain(): Promise<void> {
@@ -121,18 +131,42 @@ export class PageStore {
         if (this.urls[i] !== undefined || Math.abs(i - this.center) > EVICT_RADIUS) continue;
         const controller = new AbortController();
         this.active = { index: i, controller };
+let releasePage: (() => void) | undefined;
+        let releasePixels: (() => void) | undefined;
+        let url: string | undefined;
         try {
-          const blob = typedBlob(this.entries[i], await extractCapped(this.entries[i], PAGE_MAX_BYTES, controller.signal));
+          const result = await extractReserved(this.entries[i], PAGE_MAX_BYTES, this.budget, controller.signal);
+          releasePage = result.release;
+          const blob = typedBlob(this.entries[i], result.blob);
           if (this.revoked) return;
           if (controller.signal.aborted || Math.abs(i - this.center) > EVICT_RADIUS) continue;
-          this.urls[i] = URL.createObjectURL(blob);
+          if (this.budget.enabled("decodedPixels") || this.budget.enabled("activeDecodes")) {
+            const dimensions = await blobDimensions(blob, this.budget);
+            const decoded = await withDecode(this.budget, dimensions.width, dimensions.height, async () => {
+              url = URL.createObjectURL(blob);
+              const image = new Image();
+              image.src = url;
+              await image.decode();
+            }, controller.signal);
+            releasePixels = decoded.release;
+          }
+          if (this.revoked || controller.signal.aborted || Math.abs(i - this.center) > EVICT_RADIUS) continue;
+          url ??= URL.createObjectURL(blob);
+          this.urls[i] = url;
+          const pageRelease = releasePage, pixelRelease = releasePixels;
+          this.releases.set(i, () => { pageRelease?.(); pixelRelease?.(); });
+          releasePage = undefined; releasePixels = undefined; url = undefined;
+          this.errors.delete(i);
           this.notify();
-        } catch {
+        } catch (error) {
           if (!this.revoked && !controller.signal.aborted) {
             this.urls[i] = null;
+            this.errors.set(i, (error as Error).message || "This page could not be decoded.");
             this.notify();
           }
         } finally {
+          if (url) URL.revokeObjectURL(url);
+          releasePage?.(); releasePixels?.();
           this.active = null;
         }
       }
@@ -142,11 +176,11 @@ export class PageStore {
   }
 }
 
-function PageImg(props: { i: number; url: string | null; status: "loading" | "error" | "ready"; onRetry?: () => void; style?: CSSProperties }) {
+function PageImg(props: { i: number; url: string | null; status: "loading" | "error" | "ready"; onRetry?: () => void; error?: string; style?: CSSProperties }) {
   if (props.status === "error") {
     return (
       <div role="alert" style={{ ...props.style, display: "flex", flexDirection: "column", gap: "0.6rem", alignItems: "center", justifyContent: "center", color: c.muted, fontSize: "0.82rem", background: c.bgRaised, minHeight: "45vh" }}>
-        <span>This page could not be decoded.</span>
+        <span>{props.error || "This page could not be decoded."}</span>
         {props.onRetry && <button style={{ ...toolBtn, border: `1px solid ${c.line}`, width: "auto", padding: "0.3rem 0.9rem", fontSize: "0.78rem", color: c.textDim }} onClick={props.onRetry}>Retry page</button>}
       </div>
     );
@@ -188,9 +222,15 @@ function CbzSession(props: CbzReaderProps) {
     let alive = true;
     const controller = new AbortController();
     (async () => {
+      let releaseArchive: (() => void) | undefined;
       try {
         const res = await fetch(media(`/editions/${props.editionId}/download`), { signal: controller.signal });
-        const buf = await readBoundedBody(res, ARCHIVE_MAX_BYTES, controller.signal);
+        const budget = sharedReaderBudget();
+        const downloaded = await readBoundedBodyReserved(res, ARCHIVE_MAX_BYTES, budget, controller.signal);
+        releaseArchive = downloaded.release;
+        const directory = admitZipDirectory(downloaded.buffer, budget, MAX_ENTRIES);
+        releaseArchive = () => { directory.release(); downloaded.release(); };
+        const buf = downloaded.buffer;
         if (!alive) return;
         const JSZip = (await import("jszip")).default;
         if (!alive) return;
@@ -198,7 +238,8 @@ function CbzSession(props: CbzReaderProps) {
         if (!alive) return;
         const names = pageImageNames(Object.keys(zip.files));
         if (names.length > MAX_ENTRIES) throw new Error("Archive has too many pages");
-        const store = new PageStore(names.map((n) => zip.files[n] as unknown as ZipEntryLike), () => bump((n) => n + 1));
+        const store = new PageStore(names.map((n) => zip.files[n] as unknown as ZipEntryLike), () => bump((n) => n + 1), budget, releaseArchive);
+        releaseArchive = undefined;
         storeRef.current = store;
         setCount(store.count);
         const p = props.progress;
@@ -216,7 +257,7 @@ function CbzSession(props: CbzReaderProps) {
           setError(String((err as Error)?.message || err));
           setPhase("error");
         }
-      }
+      } finally { releaseArchive?.(); }
     })();
     return () => { alive = false; controller.abort(); storeRef.current?.revoke(); storeRef.current = null; };
   }, [props.editionId]);
@@ -375,7 +416,7 @@ function CbzSession(props: CbzReaderProps) {
           >
             {Array.from({ length: count }, (_, i) => (
               <div key={i} data-page={i} ref={(el) => { if (el) pageEls.current.set(i, el); else pageEls.current.delete(i); }} style={{ width: "100%", maxWidth: "56rem", minHeight: "40vh", display: "flex", justifyContent: "center" }}>
-                <PageImg i={i} url={pageUrl(i)} status={pageStatus(i)} onRetry={() => retryPage(i)} style={{ width: "100%", height: "auto", objectFit: "contain", display: "block" }} />
+                <PageImg i={i} url={pageUrl(i)} status={pageStatus(i)} error={storeRef.current?.error(i)} onRetry={() => retryPage(i)} style={{ width: "100%", height: "auto", objectFit: "contain", display: "block" }} />
               </div>
             ))}
           </div>
@@ -390,8 +431,8 @@ function CbzSession(props: CbzReaderProps) {
               }}
             >
               {mode === "double"
-                ? (pairStart(page) + 1 < count ? [pairStart(page), pairStart(page) + 1] : [pairStart(page)]).map((i) => <PageImg key={i} i={i} url={pageUrl(i)} status={pageStatus(i)} onRetry={() => retryPage(i)} style={pageStyle} />)
-                : <PageImg i={page} url={pageUrl(page)} status={pageStatus(page)} onRetry={() => retryPage(page)} style={pageStyle} />}
+                ? (pairStart(page) + 1 < count ? [pairStart(page), pairStart(page) + 1] : [pairStart(page)]).map((i) => <PageImg key={i} i={i} url={pageUrl(i)} status={pageStatus(i)} error={storeRef.current?.error(i)} onRetry={() => retryPage(i)} style={pageStyle} />)
+                : <PageImg i={page} url={pageUrl(page)} status={pageStatus(page)} error={storeRef.current?.error(page)} onRetry={() => retryPage(page)} style={pageStyle} />}
             </div>
             <TapZones onLeft={() => (rtl ? go(1) : go(-1))} onRight={() => (rtl ? go(-1) : go(1))} leftLabel={rtl ? "Next page" : "Previous page"} rightLabel={rtl ? "Previous page" : "Next page"} />
             <button aria-label={rtl ? "Next page" : "Previous page"} className="lt-edge" style={{ position: "absolute", left: "0.55rem", top: "50%", transform: "translateY(-50%)", zIndex: 6, ...toolBtn, background: "rgba(12,13,15,0.72)" }} onClick={() => (rtl ? go(1) : go(-1))}><IconChevLeft size={18} /></button>

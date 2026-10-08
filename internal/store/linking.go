@@ -92,7 +92,13 @@ func moveEditionToWork(q dbtx, editionID, targetWorkID int64) (MoveResult, error
 		return MoveResult{}, err
 	}
 	if source.LibraryID != target.LibraryID {
-		return MoveResult{}, ErrCrossLibrary
+		var unresolved int
+		if err := q.QueryRow(`SELECT count(*) FROM files WHERE edition_id=? AND source_library_id IS NULL`, editionID).Scan(&unresolved); err != nil {
+			return MoveResult{}, err
+		}
+		if unresolved != 0 {
+			return MoveResult{}, ErrSourceConflict
+		}
 	}
 	if _, err := q.Exec(`UPDATE editions SET work_id = ? WHERE id = ?`, targetWorkID, editionID); err != nil {
 		return MoveResult{}, err
@@ -132,7 +138,13 @@ func (d *DB) MergeWorks(sourceID, targetID int64) error {
 		return err
 	}
 	if source.LibraryID != target.LibraryID {
-		return ErrCrossLibrary
+		var unresolved int
+		if err := tx.QueryRow(`SELECT count(*) FROM files WHERE edition_id IN (SELECT id FROM editions WHERE work_id=?) AND source_library_id IS NULL`, sourceID).Scan(&unresolved); err != nil {
+			return err
+		}
+		if unresolved != 0 {
+			return ErrSourceConflict
+		}
 	}
 	if _, err := tx.Exec(`UPDATE editions SET work_id = ? WHERE work_id = ?`, targetID, sourceID); err != nil {
 		return err
@@ -197,10 +209,10 @@ func (d *DB) MoveEditionToNewWork(editionID, libraryID int64, title string, auth
 	if err != nil {
 		return MoveResult{}, err
 	}
-	if libraryID != 0 && libraryID != source.LibraryID {
-		return MoveResult{}, ErrCrossLibrary
+	if libraryID == 0 {
+		libraryID = source.LibraryID
 	}
-	w := &Work{LibraryID: source.LibraryID, Title: title, Author: author}
+	w := &Work{LibraryID: libraryID, Title: title, Author: author}
 	targetID, err := ensureWorkInLibrary(tx, w)
 	if err != nil {
 		return MoveResult{}, err

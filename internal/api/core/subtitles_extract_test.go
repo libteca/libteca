@@ -138,10 +138,16 @@ func TestSubtitlesExtractWritesCache(t *testing.T) {
 		t.Fatalf("body = %q", got)
 	}
 	joined := strings.Join(gotArgs, " ")
-	for _, want := range []string{"-protocol_whitelist", "fd,pipe", "-map", "0:s:0", "-f", "webvtt", "-"} {
+	if !strings.Contains(joined, "-protocol_whitelist fd ") && !strings.Contains(joined, "-protocol_whitelist file ") {
+		t.Fatalf("args %q must whitelist only the descriptor input protocol", joined)
+	}
+	for _, want := range []string{"-format_whitelist ", "-map", "0:s:0", "-f", "webvtt", "-"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("args %q missing %q", joined, want)
 		}
+	}
+	if strings.Contains(joined, "enable_drefs") || strings.Contains(joined, "use_absolute_path") {
+		t.Fatalf("args %q must not pass mov-private options globally", joined)
 	}
 	if !strings.Contains(joined, "-i fd:") && !strings.Contains(joined, "-i /dev/fd/3") {
 		t.Fatalf("args %q must take the input from a descriptor", joined)

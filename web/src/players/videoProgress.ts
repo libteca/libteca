@@ -1,3 +1,5 @@
+import { getMediaIdentity } from "../mediaProgressIdentity";
+import { mediaProgress } from "../mediaProgress";
 import { getToken, APIError } from "../api";
 
 export type VideoProgressPatch = { position: number; duration: number; finished: boolean };
@@ -24,6 +26,7 @@ export class VideoProgressSaver {
     token = getToken(),
   ) {
     this.token = token;
+    if (getMediaIdentity().ownerId) void mediaProgress.prepare(endpoint);
     const key = `${token}\n${endpoint}`;
     this.scope = scopes.get(key) ?? { tail: Promise.resolve(), generation: 0 };
     scopes.set(key, this.scope);
@@ -43,6 +46,13 @@ export class VideoProgressSaver {
 
   save(position: number, finished = false, explicit = false): Promise<void> {
     if (!Number.isFinite(position) || position < 0) return Promise.resolve();
+    if (getMediaIdentity().ownerId) {
+      if (this.stale()) return Promise.resolve();
+      if (this.acknowledged?.finished && !finished && !explicit) return Promise.resolve();
+      if (explicit) this.acknowledged = null;
+      const patch = { position, duration: this.duration, finished };
+      return this.send(explicit ? { ...patch, mediaIntent: "seek" } as VideoProgressPatch : patch).then((result) => { if ((result as { queued?: boolean })?.queued) this.acknowledged = patch; }).catch(() => {});
+    }
     const next = this.scope.tail.then(async () => {
       if (this.stale()) {
         this.pending = null;
@@ -57,7 +67,7 @@ export class VideoProgressSaver {
       this.clearRetry();
       this.pending = patch;
       try {
-        await this.send(patch);
+        await this.send(getMediaIdentity().ownerId && explicit ? { ...patch, mediaIntent: "seek" } as VideoProgressPatch : patch);
         if (this.stale()) return;
         this.acknowledged = patch;
         if (this.pending === patch) this.pending = null;

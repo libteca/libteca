@@ -34,6 +34,10 @@ func ABS(dataDir string, db *store.DB, dryRun bool) (*Plan, error) {
 		return nil, err
 	}
 	defer fdb.Close()
+	if err := fdb.QueryRow(`PRAGMA schema_version`).Scan(&plan.SourceSchemaVersion); err != nil {
+		return nil, err
+	}
+	plan.SourceConsistency = "SQLite read snapshot; media identity and stat revalidated before publication"
 
 	layout, err := detectABSLayout(fdb)
 	if err != nil {
@@ -84,6 +88,9 @@ func ABS(dataDir string, db *store.DB, dryRun bool) (*Plan, error) {
 			plan.warnf("book %q: no audio files found; skipped", b.title)
 			continue
 		}
+		if err := snapshotFiles(files); err != nil {
+			return nil, err
+		}
 		rb := resolvedBook{b: b, files: files, format: format, libPath: snap.libPaths[b.libID]}
 		books = append(books, rb)
 		bookMediaLib[b.mediaID] = b.libID
@@ -126,8 +133,12 @@ func ABS(dataDir string, db *store.DB, dryRun bool) (*Plan, error) {
 			if e.episode.Valid {
 				fallback = fmt.Sprintf("Episode %d", e.episode.Int64)
 			}
+			planned := []fileSpec{{Path: path, Duration: dur}}
+			if err := snapshotFiles(planned); err != nil {
+				return nil, err
+			}
 			rp.episodes = append(rp.episodes, resolvedEpisode{
-				e: e, file: fileSpec{Path: path, Duration: dur},
+				e: e, file: planned[0],
 				format: audioExts[strings.ToLower(filepath.Ext(path))], fallback: fallback,
 			})
 			episodeKnown[e.id] = true
@@ -258,7 +269,7 @@ func ABS(dataDir string, db *store.DB, dryRun bool) (*Plan, error) {
 
 		for _, b := range books {
 			w := &store.Work{LibraryID: libIDs[b.b.libID], Title: b.b.title, Author: strPtr(b.b.author), Description: strPtr(b.b.desc)}
-			wid, err := tx.UpsertWork(w)
+			wid, err := tx.UpsertSourceWork(w, sourcePaths(b.files), libIDs[b.b.libID])
 			if err != nil {
 				return err
 			}
@@ -266,7 +277,7 @@ func ABS(dataDir string, db *store.DB, dryRun bool) (*Plan, error) {
 			for _, f := range b.files {
 				total += f.Duration
 			}
-			e := &store.Edition{WorkID: wid, Format: b.format, Title: b.b.title, DurationSecs: &total}
+			e := &store.Edition{WorkID: wid, Format: b.format, Title: b.b.title, DurationSecs: &total, SourceLibraryID: libIDs[b.b.libID], SourceKey: "abs/book/" + string(b.b.mediaID), SourcePaths: sourcePaths(b.files), SourceDigests: sourceDigests(b.files)}
 			eid, err := tx.UpsertEdition(e)
 			if err != nil {
 				return err
@@ -296,7 +307,7 @@ func ABS(dataDir string, db *store.DB, dryRun bool) (*Plan, error) {
 				}
 				dur := e.file.Duration
 				ed := &store.Edition{
-					WorkID: wid, Format: e.format, Title: title, DurationSecs: &dur,
+					WorkID: wid, Format: e.format, Title: title, DurationSecs: &dur, SourceLibraryID: libIDs[rp.p.libID], SourceKey: "abs/episode/" + string(e.e.id), SourcePaths: []string{e.file.Path}, SourceDigests: []string{e.file.Digest},
 					SeasonNum: season, EpisodeNum: episode,
 				}
 				eid, err := tx.UpsertEdition(ed)

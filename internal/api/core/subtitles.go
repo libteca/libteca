@@ -91,7 +91,14 @@ func (a *API) subtitles(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 404, map[string]string{"error": "file not found"})
 		return
 	}
-	root, rerr := a.confinedRoot(f.EditionID)
+	if expected := r.URL.Query().Get("generation"); expected != "" {
+		current, err := a.DB.TimelineGeneration(f.EditionID)
+		if err != nil || expected != current {
+			writeJSON(w, 409, map[string]string{"error": "generation_mismatch"})
+			return
+		}
+	}
+	root, rerr := a.confinedFileRoot(f)
 	if rerr != nil {
 		writeJSON(w, 404, map[string]string{"error": "file not found"})
 		return
@@ -173,7 +180,15 @@ func sidecarSRT(media string) (string, bool) {
 }
 
 func subtitleCacheKey(f *store.FileRec) string {
-	sum := sha256.Sum256([]byte(fmt.Sprintf("v1\x00%d\x00%s\x00%d\x00%d", f.ID, f.Path, f.MtimeSecs, f.MtimeNS)))
+	digest := ""
+	if f.SHA256 != nil {
+		digest = *f.SHA256
+	}
+	sample := ""
+	if f.Hash != nil {
+		sample = *f.Hash
+	}
+	sum := sha256.Sum256([]byte(fmt.Sprintf("v2\x00%d\x00%s\x00%d\x00%d\x00%s\x00%s\x00%d", f.ID, f.Path, f.MtimeSecs, f.MtimeNS, digest, sample, f.SourceLibraryID)))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -257,7 +272,7 @@ func (a *API) embeddedVTT(ctx context.Context, f *store.FileRec) ([]byte, error)
 		return nil, errSubtitleBusy
 	}
 	data, err := func() ([]byte, error) {
-		root, rerr := a.confinedRoot(f.EditionID)
+		root, rerr := a.confinedFileRoot(f)
 		if rerr != nil {
 			return nil, rerr
 		}

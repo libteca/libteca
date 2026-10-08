@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "preact/hooks";
+import { mediaProgress } from "../mediaProgress";
 import { media } from "../api";
 import { fmtClock } from "../util";
 import { c, mono, playerBar } from "../styles";
 import { toast } from "../toast";
 import { IconBack30, IconFwd30, IconHeadphones, IconMoon, IconPause, IconPlay } from "../components/svg";
 
-export type PlayerFile = { id: number; title: string; duration: number };
+export type PlayerFile = { id: number; title: string; duration: number; generation?: string };
 
 export type AudioController = { playAt: (index: number, offset: number) => void };
 
@@ -27,11 +28,13 @@ type AudioPlayerProps = {
 };
 
 export function AudioPlayer(props: AudioPlayerProps) {
-  const key = props.files.map((file) => file.id).join(",");
-  return <AudioQueuePlayer key={key} {...props} />;
+  const files = props.files.map(file => ({ ...file, generation: file.generation ?? mediaProgress.generationForFile(file.id) }));
+  const key = files.map(file => `${file.id}:${file.generation ?? ""}`).join(",");
+  return <AudioQueuePlayer key={key} {...props} files={files} />;
 }
 
 function AudioQueuePlayer(props: AudioPlayerProps) {
+  const [streamError, setStreamError] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const active = useRef(true);
   const curIdx = useRef(0);
@@ -67,17 +70,18 @@ function AudioQueuePlayer(props: AudioPlayerProps) {
   const onFilePosRef = useRef(props.onFilePos);
   onFilePosRef.current = props.onFilePos;
 
-  const total = props.files.reduce((a, f) => a + f.duration, 0);
+  const total = props.files.every(f => f.duration > 0) ? props.files.reduce((a, f) => a + f.duration, 0) : 0;
   const cumBefore = (i: number) => props.files.slice(0, i).reduce((a, f) => a + f.duration, 0);
 
   const reportPosition = (index: number, offset: number) => {
-    onPosRef.current?.(cumBefore(index) + offset);
+    if (props.files.slice(0,index).every(f => f.duration > 0)) onPosRef.current?.(cumBefore(index) + offset);
     onFilePosRef.current?.(index, offset);
   };
 
   const load = (i: number, offset: number, autoplay = true, explicit = false) => {
     const a = audioRef.current;
     if (!active.current || !a || !props.files[i]) return;
+    if (props.onPos && !props.onFilePos && props.files.slice(0,i).some(f => f.duration <= 0)) { toast("Rescan this edition before playing past a part with unknown duration", "error"); return; }
     if (curIdx.current !== i && a.src && !loading.current && !queueEnded.current) reportPosition(curIdx.current, a.currentTime);
     if (explicit) { queueEnded.current = false; props.onSeek?.(i, offset); }
     if (curIdx.current !== i || !a.src) {
@@ -86,7 +90,7 @@ function AudioQueuePlayer(props: AudioPlayerProps) {
       props.onIndexChange?.(i);
       pendingOffset.current = offset;
       loading.current = true;
-      a.src = media(`/stream/${props.files[i].id}`);
+      a.src = media(`/stream/${props.files[i].id}${props.files[i].generation ? `?generation=${encodeURIComponent(props.files[i].generation!)}` : ""}`);
       if (autoplay) a.play().catch(() => {});
     } else if (a.readyState === 0) {
       pendingOffset.current = offset;
@@ -99,7 +103,7 @@ function AudioQueuePlayer(props: AudioPlayerProps) {
 
   useEffect(() => {
     props.controllerRef && (props.controllerRef.current = { playAt: (i, off) => load(i, off, true, true) });
-    return () => { if (props.controllerRef) props.controllerRef.current = null; };
+  return () => { if (props.controllerRef) props.controllerRef.current = null; };
   });
 
   const filesKey = props.files.map((f) => f.id).join(",");
@@ -151,8 +155,10 @@ function AudioQueuePlayer(props: AudioPlayerProps) {
   }, [chOpen]);
 
   const seekAbs = (target: number) => {
+    if (!Number.isFinite(target)) return;
     let cum = 0;
     for (let i = 0; i < props.files.length; i++) {
+      if (props.files[i].duration <= 0 && target > cum) { toast("Rescan this edition before seeking across an unknown duration", "error"); return; }
       if (cum + props.files[i].duration > target || i === props.files.length - 1) {
         load(i, Math.max(0, target - cum), true, true);
         return;
@@ -229,6 +235,7 @@ function AudioQueuePlayer(props: AudioPlayerProps) {
   const pct = total > 0 ? Math.min(100, (abs / total) * 100) : 0;
   const bufPct = total > 0 ? Math.max(pct, Math.min(100, (bufAbs / total) * 100)) : 0;
 
+  if (streamError) return <div role="alert">Audio could not be opened. Its timeline may have changed.<button onClick={() => location.reload()}>Reload current media</button></div>;
   return (
     <div className="player-bar" style={{
       ...playerBar,
@@ -274,7 +281,7 @@ function AudioQueuePlayer(props: AudioPlayerProps) {
           } catch { /* noop */ }
         }}
         onPlay={() => { if (!active.current) return; queueEnded.current = false; setPlaying(true); if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "playing"; }}
-        onError={() => { if (!active.current) return; setPlaying(false); toast("Playback failed — the audio could not be loaded", "error"); }}
+        onError={() => { if (!active.current) return; loading.current = true; setPlaying(false); setStreamError(true); }}
         onPause={() => {
           if (!active.current) return;
           setPlaying(false);

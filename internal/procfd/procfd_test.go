@@ -25,11 +25,14 @@ func TestArgsShapeCarriesWhitelistAndDescriptorInput(t *testing.T) {
 			t.Fatalf("%s: %v", bin, err)
 		}
 		joined := strings.Join(args, " ")
-		if !strings.Contains(joined, "-protocol_whitelist fd,file") {
-			t.Fatalf("%s args %q must whitelist exactly fd,file", bin, joined)
+		if !strings.Contains(joined, "-protocol_whitelist fd") && !strings.Contains(joined, "-protocol_whitelist file") {
+			t.Fatalf("%s args %q must whitelist the selected descriptor protocol", bin, joined)
 		}
-		if strings.Contains(joined, "fd,file,file") {
-			t.Fatalf("%s args %q must dedupe protocols", bin, joined)
+		if strings.Contains(joined, "fd,file") || !strings.Contains(joined, "-format_whitelist "+inputFormats) {
+			t.Fatalf("%s args %q must restrict input formats and protocols", bin, joined)
+		}
+		if strings.Contains(joined, "enable_drefs") || strings.Contains(joined, "use_absolute_path") {
+			t.Fatalf("%s args %q must not pass mov-private options globally: they are default-disabled and reject non-mov inputs", bin, joined)
 		}
 		if !strings.Contains(joined, "-fd 3 -i fd:") && !strings.Contains(joined, "-i fd:3") && !strings.Contains(joined, "-i /dev/fd/3") {
 			t.Fatalf("%s args %q must read the input from descriptor 3", bin, joined)

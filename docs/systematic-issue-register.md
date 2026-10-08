@@ -1,6 +1,6 @@
 # Libteca systematic review and issue register
 
-Date: 2026-10-03. Baseline: `fbf2f20c291533216cb6a21699e40729622ec4f9`. Local synthetic-fixture work only; no production data, remote publication, merge or deployment.
+Historical review date: 2026-10-03. Baseline: `fbf2f20c291533216cb6a21699e40729622ec4f9`. Local synthetic-fixture work only; no production data, remote publication, merge or deployment.
 
 This records confirmed repairs and remaining work. A mapped review and passing tests are not a promise of zero defects. Status means: confirmed = supported by source/evidence; reproduced = exercised by a failing fixture where noted; fixed = local code changed; tested = applicable regression passed; remaining/unverified = not closed. Severity describes user impact, not a security certification.
 
@@ -26,7 +26,7 @@ This records confirmed repairs and remaining work. A mapped review and passing t
 - Reproduce: Switch edition/file with delayed save or failed completion
 - Change: Key media sessions, serialize writes within a session, retain unacknowledged completion
 - Regression evidence: videoPlayer.test.ts; videoProgress.test.ts
-- Limits: Durable offline media queue and content-order generations remain separate open work
+- Limits: Wider native device and cross-device acceptance remains separate from the implemented durable queue and generation protocol
 
 ### LT-004 — Reset progress remained visible in discovery
 - Severity/status: Medium; fixed; tested
@@ -47,9 +47,9 @@ This records confirmed repairs and remaining work. A mapped review and passing t
 - Severity/status: High; fixed; tested
 - Source: internal/store/linking.go; internal/api/core/linking.go
 - Reproduce: Move/merge editions into a work in a different library
-- Change: Reject cross-library moves in the transaction; create new targets atomically
+- Change: Preserve physical file ownership during cross-library logical moves; create new targets atomically
 - Regression evidence: internal/store/linking_test.go; internal/api/core/linking_test.go
-- Limits: Containment only; existing wrong-root/collapsed rows and full source migration remain open
+- Limits: Existing wrong-root/collapsed rows require the explicit reviewed repair mapping described in source-repair-command.md
 
 ### LT-007 — Audio queue replacement reused the old media session
 - Severity/status: High; fixed; tested
@@ -246,7 +246,7 @@ This records confirmed repairs and remaining work. A mapped review and passing t
 - Reproduce: Play a two-file edition with resume in the second file, seek in either direction across the boundary, finish the first file and revisit an earlier item
 - Change: Load ordered file IDs/durations and progress from work detail; map cumulative positions to file-relative offsets; isolate detached file sessions and complete only the last file
 - Regression evidence: multipartPlaylist.test.tsx: four failures on the preceding checkpoint pass after repair; existing secondary-audio regressions retained with realistic metadata events and work-detail fixtures
-- Limits: First-party direct audio only; multipart video/HLS/subtitles/thumbnails and live file-order changes remain open
+- Limits: Representative codec/client acceptance remains separate; selected multipart video/HLS and derived generation integration is now implemented
 
 ### LT-123 — CBR cancellation left extractors running or published failed partial output
 - Severity/status: High; fixed; tested
@@ -254,7 +254,7 @@ This records confirmed repairs and remaining work. A mapped review and passing t
 - Reproduce: Cancel or expire the scan during unrar/unar extraction/listing; fail after partial cover bytes; cancel immediately before store publication
 - Change: Propagate caller context/deadline, unblock reads, kill/reap the launched process, reject failed partial output, clean temporary extraction and recheck cancellation before publication
 - Regression evidence: cbr_cancellation_test.go: eight baseline subcases fail; cancellation, deadline, cleanup, partial-output and byte-cap controls pass under race and repetition
-- Limits: Synthetic extractors. Ongoing extraction-disk/process-tree budgets and real unrar/unar version compatibility remain separate
+- Limits: Synthetic extractors. Runtime monitoring and process-group budgets are implemented; real unrar/unar version compatibility and hard filesystem quotas remain external acceptance
 
 ### LT-124 — Slow work detail responses replaced newer navigation
 - Severity/status: Medium; fixed; tested
@@ -267,34 +267,34 @@ This records confirmed repairs and remaining work. A mapped review and passing t
 ## Remaining work and acceptance gates
 
 ### LT-P01 — Physical source identity and existing data repair
-- Severity/status: High; remaining; unverified acceptance
-- Evidence/limit: Standalone read-only snapshot inventory implemented and synthetically tested; reports lexical ambiguity, mixed-root candidates, possible collapse and progress references without ownership assignment. Physical-source migration and existing-data repair remain unimplemented.
-- Next acceptance: Run source-inventory-command.md against a consistent disposable real-library snapshot and optional copied-root mapping; review ambiguous identity/progress assignments, choose schema, then rehearse migration and rollback
+- Severity/status: High; runtime implementation complete; real-data rehearsal pending
+- Evidence: Files retain physical library ownership independently of work grouping. Scans use physical edition keys and full content digests; cross-library grouping preserves serving roots. Source-aware deletion preserves foreign-source files. The reviewed source repair command validates file identity, expected generations and full digests before atomic publication; splitting requires explicit progress reset.
+- Remaining acceptance: Permissioned disposable libraries and reviewed ambiguous old-data mappings; migration and rollback rehearsal on representative data. Existing ambiguous records are not guessed into a new owner.
 
 ### LT-P02 — Content/order generations and derived assets
-- Severity/status: Medium; remaining; unverified acceptance
-- Evidence/limit: Sidecar fingerprints and thumbnail/trickplay/content generations remain incomplete; running clients can retain a pre-rescan queue.
-- Next acceptance: Pause/reload before order-changing scans; define a generation-aware playback and invalidation contract
+- Severity/status: Medium; runtime implementation complete; real corpus pending
+- Evidence: Atomic edition timelines include observed file identity, order and duration. Selected playback, progress and derived requests carry generation fences. Thumbnail keys include selected file/generation; embedded subtitles include source/content identity. Warm scans verify full digests, and legacy rows without a digest are reprobed.
+- Remaining acceptance: Live clients during representative reorder/replacement and sidecar changes. Observed generations do not make filesystem writes transactional.
 
 ### LT-P04 — Durable offline media progress
-- Severity/status: Medium; remaining; unverified acceptance
-- Evidence/limit: Pure intent/conflict and recovery-transition model plus decision table implemented and fixture-tested, without runtime imports, browser persistence, server receipts or podcast revisions. Current audio retry remains in-tab.
-- Next acceptance: Approve media-intent-contract.md decisions, implement durable storage/server protocol, then test native browser reload/eviction and cross-device conflicts
+- Severity/status: Medium; runtime integration implemented; broader device acceptance pending
+- Evidence: Immutable browser operations persist before transport; server receipts publish atomically with edition/podcast progress. Revision, reset and timeline fences preserve conflicting evidence. Owner identity and Web Locks serialize delivery. Native Chromium fixtures exercise lost acknowledgement/reload, offline restart/completion, quota refusal and reset quarantine.
+- Remaining acceptance: Browser eviction, abrupt device crash, upgrades and cross-device behavior on representative native devices. Storage denial leaves explicit error state; browsers without Web Locks use an IndexedDB owner/expiry lease with server CAS as the final fence.
 
 ### LT-P05 — Multipart video, HLS and derived timelines
-- Severity/status: Medium; remaining; unverified acceptance
-- Evidence/limit: Pure multipart resolver and proposed HTTP fixtures implemented without player/server integration. Current video/HLS/thumbnail handlers still select the first file.
-- Next acceptance: Use multipart-video-contract.md to agree file/generation/offset semantics; integrate all handlers and adapters, then validate real browser/HLS multipart corpus
+- Severity/status: Medium; runtime integration implemented; real corpus pending
+- Evidence: Playback sessions resolve a selected file and relative offset from the atomic timeline. The video runtime maps cumulative seeks across parts, advances parts and records final completion through the durable saver. HLS and derived handlers enforce selected identity and generations; unknown durations remain explicit.
+- Remaining acceptance: Representative browser/codec/HLS corpus and hardware. Native Chromium generated-media fixtures cover multipart seek and final completion.
 
 ### LT-P06 — Broader archive/decode/transcode budgets
-- Severity/status: Medium; remaining; unverified acceptance
-- Evidence/limit: Disposable generated archive/native-media measurement harness implemented; separates compressed/entry/decode-estimate/disk/RSS evidence. No production quota or runtime budget implementation added.
-- Next acceptance: Run representative long-title/archive corpus through appropriate browser/native measurements and choose justified caps, rolling-window policy and failure cleanup tests
+- Severity/status: Medium; opt-in runtime budgets implemented; representative sizing pending
+- Evidence: Archive/response/reader leases follow retained lifetimes. Browser configuration caps retained bytes, decoded pixels and active decodes. Operator caps bound archive, CBR, HLS and trickplay work. Process-group cancellation and owned temporary-directory recovery are tested. Advertised HLS segments remain available.
+- Remaining acceptance: Representative long titles, native GPU memory and real extractors. External-output monitoring can overshoot before cancellation and is not a hard filesystem quota. Unversioned legacy temporary directories require operator review.
 
 ### LT-P07 — Runtime dependency gate
-- Severity/status: Medium; remaining; unverified acceptance
-- Evidence/limit: Existing epubjs/xmldom and devalue dependency paths were previously reported by npm audit. They were not upgraded or newly security-audited in this pass.
-- Next acceptance: Representative EPUB CFI/restore/navigation corpus before a breaking dependency change; coordinate with existing dependency update PRs rather than duplicating or blindly upgrading them; rerun the dependency gate only under permitted coverage
+- Severity/status: Medium; high-severity runtime gate passes; upstream moderate findings remain
+- Evidence: source-map-js is upgraded to its patched release and the runtime npm audit gate passes. Six moderate findings remain in upstream Neutron dependency paths.
+- Remaining acceptance: Upstream dependency repairs and representative EPUB navigation/restore before any breaking replacement. Passing the dependency gate is not a security assessment.
 
 ### LT-P08 — Real library, browser and compatibility corpus
 - Severity/status: Acceptance; remaining; unverified acceptance
@@ -303,8 +303,8 @@ This records confirmed repairs and remaining work. A mapped review and passing t
 
 ### LT-P09 — Focused authentication/security review
 - Severity/status: Coverage; remaining; unverified acceptance
-- Evidence/limit: Excluded by the prior platform restriction; not retried or reconstructed. Existing automated suites ran, but this is not an independent security assessment.
-- Next acceptance: Only pursue through an authorized supported review route; no inference of security completeness
+- Evidence/limit: Authorized independent source review found four concrete Jellyfin authorization/confinement defects, a secondary processor-input gap and a credential-documentation discrepancy. Repairs and focused regressions are prepared; regressions remain unrun under the shared execution hold. No security acceptance is inferred.
+- Next acceptance: Independent review of the exact repair snapshot, focused HTTP/socket/revocation and supported-binary adversarial regressions, then existing real-client/corpus/deployment gates
 
 ### LT-P10 — Production/container/hardware and performance acceptance
 - Severity/status: Operations; remaining; unverified acceptance
@@ -315,16 +315,16 @@ This records confirmed repairs and remaining work. A mapped review and passing t
 
 | Subsystem | Review depth and evidence | Remaining limit |
 |---|---|---|
-| Core/store/discovery/progress/linking | Prior repairs recompiled and exercised under full Go/race suites; paging/reset/cross-library HTTP regressions; migration full cycle, populated upgrade and downgrade FK checks | Source identity, real-library races and live playback during reorder |
+| Core/store/discovery/progress/linking | Prior repairs recompiled and exercised under full Go/race suites; paging/reset/cross-library HTTP regressions; migration full cycle, populated upgrade and downgrade FK checks | Reviewed old-data mappings, real-library races and live playback during reorder |
 | Scanner/audio/video/music/books/games/watch | Deep audiobook order/warm-scan review; synthetic media + ffmpeg fixtures; CBR cancellation/reaping/cleanup fixtures; complete scan/watch suites | Every real encoding/layout, sidecars and source generation |
-| Importers/podcasts | Deep ABS/Kavita destination-transaction and rollback review; source read-only/dry-run checks; podcast cancellation/download/refresh review | Foreign schema/version acceptance, source snapshots and large-import writer-lock duration |
-| Readers/offline | Deep CBZ/EPUB/PDF lifecycle and byte-stream review; 36 new focused tests; previous durable-reader tests retained; service-worker cache policy inspected | Real browser/EPUB/native PDF; decoded-memory bounds; media offline persistence |
-| Audio/video and browse/search | Primary/secondary keyed sessions, deadline-bound endpoint ordering, restart/completion retry, multipart playlist offsets, revisit-resume and search/work-detail races; component regressions | Actual codecs/browser events, multipart video/HLS, durable/cross-device media conflict policy |
+| Importers/podcasts | Deep ABS/Kavita destination-transaction and rollback review; source read-only/dry-run checks; podcast cancellation/download/refresh review | Real foreign schema/version and coherent backup acceptance; large-import writer-lock duration |
+| Readers/offline | Deep CBZ/EPUB/PDF lifecycle and byte-stream review; 36 new focused tests; previous durable-reader tests retained; service-worker cache policy inspected | Representative EPUB/native PDF and device eviction/crash; actual GPU memory and quota sizing |
+| Audio/video and browse/search | Primary/secondary keyed sessions, deadline-bound endpoint ordering, restart/completion retry, multipart playlist offsets, revisit-resume and search/work-detail races; component regressions | Representative codecs/HLS, native devices and cross-device conflict acceptance |
 | Metadata | Provider/cache/chapter application code sampled; full meta/core provider suites execute | Live providers, credentials, rate limits and cover/cache generations |
-| Transcoding/trickplay/jobs | Full race suites including real ffmpeg fixtures, cancellation/reaping/session checks; core playback paths inspected | Hardware devices, long-title resource budgets and multipart video timelines |
+| Transcoding/trickplay/jobs | Full race suites including real ffmpeg fixtures, cancellation/reaping/session checks; core playback paths inspected | Hardware devices, representative long-title resource sizing and real codec/HLS corpus |
 | Compatibility faces | Full ABS/Jellyfin/OPDS/Subsonic unit/HTTP suites execute | One ABS ping corpus only; no Jellyfin corpus or live-client acceptance |
 | Build/ops/export/backup | Locked make test, release compilation, migration checks, snapshot/export/CLI tests; recipes inspected | Docker/service deployment, native-target execution and one skipped snapshot failure injection |
-| Authentication/security | Existing tests executed as part of ordinary full suite | Focused review excluded by restriction; no new security completeness claim |
+| Authentication/security | Authorized independent source review; focused Jellyfin and input-boundary repair candidates plus production-route regressions | r3-reviewed security repair plus finisher closure of the R3-01 fence bound; security tests first executed 2026-10-07 (all six packages green against real ffmpeg 9.0.1); independent r4 review of the exact assembled tree, HLS/MOV adversarial corpora and device/deployment gates pending; no security completeness claim |
 
 Mapped source, test and build surface is listed in `review-source-inventory.md`; inventory inclusion is not a claim of line-by-line independent review. The historical audit ledger remains in `AUDIT_OPEN.md`; standing deferrals are not silently closed by this register.
 

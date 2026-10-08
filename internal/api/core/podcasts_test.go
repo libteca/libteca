@@ -505,6 +505,9 @@ func TestPodcastEpisodeProgressPersistence(t *testing.T) {
 	if em["positionSecs"].(float64) != 30 || em["percent"].(float64) != 0.5 || em["isFinished"].(bool) {
 		t.Fatalf("detail lost progress: %v", em)
 	}
+	if em["resumeConflict"] != true || em["position"] != float64(0) {
+		t.Fatalf("legacy position must retain a separate resume fence: %v", em)
+	}
 
 	// explicit finished flag
 	code, body = doPodcastReq(t, srv, "POST", "/api/core/podcasts/episodes/"+epID+"/progress", token, map[string]any{"position": 30, "duration": 60, "finished": true})

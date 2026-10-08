@@ -31,6 +31,10 @@ func Kavita(dbPath string, db *store.DB, dryRun bool) (*Plan, error) {
 		return nil, err
 	}
 	defer fdb.Close()
+	if err := fdb.QueryRow(`PRAGMA schema_version`).Scan(&plan.SourceSchemaVersion); err != nil {
+		return nil, err
+	}
+	plan.SourceConsistency = "SQLite read snapshot; media identity and stat revalidated before publication"
 
 	if err := detectKavitaLayout(fdb); err != nil {
 		return nil, err
@@ -164,7 +168,12 @@ func Kavita(dbPath string, db *store.DB, dryRun bool) (*Plan, error) {
 				plan.warnf("chapter %d: file %q has unsupported MangaFormat %d; skipped", chID, path, format)
 				continue
 			}
-			filesByChapter[chID] = append(filesByChapter[chID], fileSpec{Path: path})
+			planned := []fileSpec{{Path: path}}
+			if err := snapshotFiles(planned); err != nil {
+				frows.Close()
+				return nil, err
+			}
+			filesByChapter[chID] = append(filesByChapter[chID], planned[0])
 			formatsByChapter[chID] = kind
 		}
 		frows.Close()
@@ -307,7 +316,22 @@ func Kavita(dbPath string, db *store.DB, dryRun bool) (*Plan, error) {
 			if !ok {
 				continue
 			}
-			id, err := ensureLibrary(tx, lib.name, libType[lib.id], filepath.Join(filepath.Dir(dbPath), "imported-kavita", lib.name), plan, idx, true)
+			var paths []string
+			for _, rs := range series {
+				if rs.s.libID == lib.id {
+					for _, re := range rs.editions {
+						paths = append(paths, sourcePaths(re.files)...)
+					}
+				}
+			}
+			root := filepath.Join(filepath.Dir(dbPath), "imported-kavita", lib.name)
+			if len(paths) > 0 {
+				root, err = physicalImportRoot(tx, lib.name, libType[lib.id], paths)
+				if err != nil {
+					return err
+				}
+			}
+			id, err := ensureLibrary(tx, lib.name, libType[lib.id], root, plan, idx, true)
 			if err != nil {
 				return err
 			}
@@ -323,14 +347,18 @@ func Kavita(dbPath string, db *store.DB, dryRun bool) (*Plan, error) {
 				Author:      strPtr(rs.s.author),
 				Description: strPtr(seriesSummary[rs.s.id]),
 			}
-			wid, err := tx.UpsertWork(w)
+			var paths []string
+			for _, re := range rs.editions {
+				paths = append(paths, sourcePaths(re.files)...)
+			}
+			wid, err := tx.UpsertSourceWork(w, paths, libIDs[rs.s.libID])
 			if err != nil {
 				return err
 			}
 			for _, re := range rs.editions {
 				pages := re.ch.pages
 				e := &store.EditionPages{
-					Edition:   store.Edition{WorkID: wid, Format: re.format, Title: re.ch.title, DurationSecs: nil},
+					Edition:   store.Edition{WorkID: wid, Format: re.format, Title: re.ch.title, DurationSecs: nil, SourceLibraryID: libIDs[rs.s.libID], SourceKey: fmt.Sprintf("kavita/chapter/%d", re.ch.id), SourcePaths: sourcePaths(re.files), SourceDigests: sourceDigests(re.files)},
 					PageCount: &pages,
 				}
 				eid, err := tx.UpsertEditionPages(e)

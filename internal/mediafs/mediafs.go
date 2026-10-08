@@ -20,10 +20,6 @@ func OpenWithin(root, path string) (*os.File, fs.FileInfo, error) {
 	return f, fi, nil
 }
 
-// Open resolves path against an os.Root and returns the opened regular
-// file: processors receive this descriptor instead of the pathname, so a
-// swapped symlink or a demuxer-chased secondary resource cannot escape the
-// library (audit F03).
 func Open(root, path string) (*os.File, error) {
 	rel, err := filepath.Rel(root, path)
 	if err != nil || rel == "." || !filepath.IsLocal(rel) {

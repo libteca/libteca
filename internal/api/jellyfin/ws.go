@@ -2,6 +2,7 @@ package jellyfin
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/binary"
@@ -32,6 +33,7 @@ const (
 	wsMaxMessage   = 1 << 20
 	wsPingEvery    = 30 * time.Second
 	wsWriteTimeout = 10 * time.Second
+	wsDetailBudget = 5 * time.Second
 	wsKeepAlive    = "1800" // corpus: ForceKeepAlive Data value/shape unverified against 10.10 traffic
 )
 
@@ -173,15 +175,20 @@ type liveSession struct {
 	DeviceName    string
 }
 
+type sessionKey struct {
+	UserID   int64
+	DeviceID string
+}
+
 type hub struct {
 	mu       sync.Mutex
 	conns    map[wsClient]bool // bool = subscribed to Sessions
-	sessions map[string]*liveSession
+	sessions map[sessionKey]*liveSession
 	seq      uint64
 }
 
 func newHub() *hub {
-	return &hub{conns: map[wsClient]bool{}, sessions: map[string]*liveSession{}}
+	return &hub{conns: map[wsClient]bool{}, sessions: map[sessionKey]*liveSession{}}
 }
 
 func (h *hub) register(c wsClient) {
@@ -213,8 +220,14 @@ func (h *hub) unsubscribe(c wsClient) {
 	}
 }
 
-func (h *hub) deliver(c wsClient, msg []byte) {
-	if !c.enqueue(msg) {
+func (h *hub) deliver(c wsClient, msg []byte, senders ...store.SocketCredential) {
+	var accepted bool
+	if socket, ok := c.(*socketConn); ok {
+		accepted = socket.enqueueMessage(msg, senders...)
+	} else {
+		accepted = c.enqueue(msg)
+	}
+	if !accepted {
 		c.shutdown()
 		delete(h.conns, c)
 	}
@@ -242,20 +255,26 @@ func (h *hub) broadcast(msg []byte) {
 // the session table is user-scoped, so a global broadcast of one user's
 // view leaked other users' sessions and a global snapshot leaked everyone's.
 func (h *hub) broadcastPerUser(msgFor func(user int64) []byte) {
-	byUser := map[int64][]byte{}
 	h.mu.Lock()
-	defer h.mu.Unlock()
+	clients := make([]wsClient, 0, len(h.conns))
 	for c, sub := range h.conns {
-		if !sub {
-			continue
+		if sub {
+			clients = append(clients, c)
 		}
-		u := c.user()
-		m, ok := byUser[u]
+	}
+	h.mu.Unlock()
+	byUser := map[int64][]byte{}
+	for _, c := range clients {
+		m, ok := byUser[c.user()]
 		if !ok {
-			m = msgFor(u)
-			byUser[u] = m
+			m = msgFor(c.user())
+			byUser[c.user()] = m
 		}
-		h.deliver(c, m)
+		h.mu.Lock()
+		if sub, ok := h.conns[c]; ok && sub {
+			h.deliver(c, m)
+		}
+		h.mu.Unlock()
 	}
 }
 
@@ -275,15 +294,12 @@ func (h *hub) sendTo(device string, msg []byte) bool {
 // authenticated user matches `user`, delivering in the SAME lock hold: a
 // separate authorize-then-send pair could resolve two different sockets
 // sharing one client-supplied device id.
-func (h *hub) sendToOwnedBy(device string, user int64, msg []byte) bool {
+func (h *hub) sendToOwnedBy(device string, user int64, msg []byte, senders ...store.SocketCredential) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for c := range h.conns {
-		if c.device() == device {
-			if c.user() != user {
-				return false
-			}
-			h.deliver(c, msg)
+		if c.device() == device && c.user() == user {
+			h.deliver(c, msg, senders...)
 			return true
 		}
 	}
@@ -293,13 +309,13 @@ func (h *hub) sendToOwnedBy(device string, user int64, msg []byte) bool {
 func (h *hub) update(s *liveSession) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.sessions[s.DeviceID] = s
+	h.sessions[sessionKey{s.UserID, s.DeviceID}] = s
 }
 
-func (h *hub) remove(device string) {
+func (h *hub) remove(user int64, device string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	delete(h.sessions, device)
+	delete(h.sessions, sessionKey{user, device})
 }
 
 func (h *hub) snapshot() []*liveSession {
@@ -327,11 +343,11 @@ func (h *hub) deviceOwnedBy(device string, from wsClient) bool {
 	return false
 }
 
-func (h *hub) deviceForPlaySession(psid string) string {
+func (h *hub) deviceForPlaySession(user int64, psid string) string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for _, s := range h.sessions {
-		if s.PlaySessionID != "" && s.PlaySessionID == psid {
+		if s.UserID == user && s.PlaySessionID != "" && s.PlaySessionID == psid {
 			return s.DeviceID
 		}
 	}
@@ -347,22 +363,33 @@ func (h *hub) closeAll() {
 	h.conns = map[wsClient]bool{}
 }
 
+type socketMessage struct {
+	Payload []byte
+	Senders []store.SocketCredential
+}
+
 type socketConn struct {
-	uidv     int64
-	dev      string
-	conn     net.Conn
-	br       *bufio.Reader
-	w        *bufio.Writer
-	send     chan []byte
-	pong     chan []byte
-	closeReq chan []byte
-	done     chan struct{}
-	once     sync.Once
+	uidv       int64
+	authority  func(func() error, ...store.SocketCredential) error
+	credential store.SocketCredential
+	dev        string
+	conn       net.Conn
+	br         *bufio.Reader
+	w          *bufio.Writer
+	send       chan socketMessage
+	pong       chan []byte
+	closeReq   chan []byte
+	done       chan struct{}
+	once       sync.Once
 }
 
 func (c *socketConn) enqueue(msg []byte) bool {
+	return c.enqueueMessage(msg)
+}
+
+func (c *socketConn) enqueueMessage(msg []byte, senders ...store.SocketCredential) bool {
 	select {
-	case c.send <- msg:
+	case c.send <- socketMessage{Payload: msg, Senders: senders}:
 		return true
 	default:
 		return false
@@ -386,38 +413,78 @@ func (c *socketConn) requestClose(code int) {
 	}
 }
 
+func (c *socketConn) detailContext() (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(context.Background(), wsDetailBudget)
+	if c.done == nil {
+		return ctx, cancel
+	}
+	go func() {
+		select {
+		case <-c.done:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	return ctx, cancel
+}
+
+func (c *socketConn) authorized(action func() error, senders ...store.SocketCredential) bool {
+	if c.authority == nil {
+		return false
+	}
+	if err := c.authority(action, senders...); err != nil {
+		c.shutdown()
+		return false
+	}
+	return true
+}
+
 func (c *socketConn) writeLoop() {
-	ticker := time.NewTicker(wsPingEvery)
+	ticker := time.NewTicker(time.Second)
+	lastPing := time.Now()
 	defer ticker.Stop()
 	for {
 		var op byte
 		var payload []byte
+		var senders []store.SocketCredential
 		quit := false
 		select {
 		case msg := <-c.send:
-			op, payload = opText, msg
+			op, payload = opText, msg.Payload
+			senders = msg.Senders
 		case p := <-c.pong:
 			op, payload = opPong, p
 		case cl := <-c.closeReq:
 			op, payload = opClose, cl
 			quit = true
 		case <-ticker.C:
-			op, payload = opPing, nil // corpus: ping cadence unverified
+			if !c.authorized(func() error { return nil }) {
+				return
+			}
+			if time.Since(lastPing) < wsPingEvery {
+				continue
+			}
+			lastPing = time.Now()
+			op, payload = opPing, nil
 		case <-c.done:
 			op, payload = opClose, closePayload(1000)
 			quit = true
 		}
-		c.conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
-		err := writeFrame(c.w, op, payload)
-		if err == nil {
-			err = c.w.Flush()
-		} else {
-			c.w.Flush()
+		err := c.authority(func() error {
+			c.conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
+			if err := writeFrame(c.w, op, payload); err != nil {
+				return err
+			}
+			return c.w.Flush()
+		}, senders...)
+		if errors.Is(err, store.ErrSocketSenderRevoked) {
+			continue
 		}
 		if err != nil || quit {
-			c.conn.Close()
+			c.shutdown()
 			return
 		}
+
 	}
 }
 
@@ -437,7 +504,9 @@ func (c *socketConn) readLoop(a *API) {
 		}
 		switch op {
 		case opText:
-			a.handleText(c, payload)
+			if !a.admitText(c, payload) {
+				return
+			}
 		case opPing:
 			select {
 			case c.pong <- payload:
@@ -457,6 +526,26 @@ func (c *socketConn) readLoop(a *API) {
 	}
 }
 
+func (a *API) admitText(c *socketConn, payload []byte) bool {
+	var head struct {
+		MessageType string `json:"MessageType"`
+	}
+	if json.Unmarshal(payload, &head) != nil || head.MessageType != "SessionsStart" {
+		return c.authorized(func() error { a.handleText(c, payload); return nil })
+	}
+	if !c.authorized(func() error { a.hubv().subscribe(c); return nil }) {
+		return false
+	}
+	out := a.sessionsSnapshot(c)
+	return c.authorized(func() error { a.hubv().push(c, out); return nil })
+}
+
+func (a *API) sessionsSnapshot(c *socketConn) []byte {
+	ctx, cancel := c.detailContext()
+	defer cancel()
+	return a.sessionsMessageFor(ctx, c.user())
+}
+
 func (a *API) handleText(c *socketConn, payload []byte) {
 	var msg struct {
 		MessageType string          `json:"MessageType"`
@@ -468,11 +557,6 @@ func (a *API) handleText(c *socketConn, payload []byte) {
 	}
 	switch msg.MessageType {
 	case "KeepAlive":
-	case "SessionsStart":
-		a.hubv().subscribe(c)
-		// Filtered per socket: the global snapshot leaked every user's
-		// DeviceID/PlaySessionId to any authenticated connection.
-		a.hubv().push(c, a.sessionsMessageFor(c.user()))
 	case "SessionsStop": // corpus: message name unverified
 		a.hubv().unsubscribe(c)
 	case "Play", "Playstate":
@@ -493,7 +577,7 @@ func (a *API) forwardCommand(from wsClient, typ string, raw json.RawMessage) {
 	json.Unmarshal(raw, &t)
 	device := t.DeviceId
 	if device == "" && t.PlaySessionId != "" {
-		device = a.hubv().deviceForPlaySession(t.PlaySessionId)
+		device = a.hubv().deviceForPlaySession(from.user(), t.PlaySessionId)
 	}
 	if device == "" || device == from.device() {
 		return
@@ -509,7 +593,11 @@ func (a *API) forwardCommand(from wsClient, typ string, raw json.RawMessage) {
 	// user's call. Authorization AND delivery resolve the same socket in one
 	// hub operation: separate calls could resolve two different sockets
 	// sharing a client-supplied device id.
-	a.hubv().sendToOwnedBy(device, from.user(), out)
+	if source, ok := from.(*socketConn); ok {
+		a.hubv().sendToOwnedBy(device, from.user(), out, source.credential)
+	} else {
+		a.hubv().sendToOwnedBy(device, from.user(), out)
+	}
 }
 
 type wsPlayState struct {
@@ -529,9 +617,19 @@ type wsSessionDTO struct {
 } // corpus: session DTO field set trimmed vs real 10.10 /Sessions shape
 
 func (a *API) sessionDTOs() []wsSessionDTO {
+	return a.sessionDTOsFor(context.Background(), 0)
+}
+
+func (a *API) sessionDTOsFor(ctx context.Context, user int64) []wsSessionDTO {
 	sessions := a.hubv().snapshot()
 	dtos := make([]wsSessionDTO, 0, len(sessions))
 	for _, s := range sessions {
+		if user != 0 && s.UserID != user {
+			continue
+		}
+		if ctx.Err() != nil {
+			break
+		}
 		dto := wsSessionDTO{
 			Id:            s.DeviceID,
 			UserId:        strconv.FormatInt(s.UserID, 10),
@@ -541,11 +639,11 @@ func (a *API) sessionDTOs() []wsSessionDTO {
 		}
 		if a.DB != nil {
 			var name string
-			a.DB.QueryRow(`SELECT name FROM users WHERE id = ?`, s.UserID).Scan(&name)
+			a.DB.QueryRowContext(ctx, `SELECT name FROM users WHERE id = ?`, s.UserID).Scan(&name)
 			dto.UserName = name
 		}
-		if s.ItemID != "" {
-			if it, ok := a.detailFor(s.UserID, s.ItemID); ok {
+		if s.ItemID != "" && ctx.Err() == nil {
+			if it, ok := a.detailFor(ctx, s.UserID, s.ItemID); ok {
 				delete(it, "__sort")
 				delete(it, "__created")
 				dto.NowPlayingItem = it
@@ -557,8 +655,8 @@ func (a *API) sessionDTOs() []wsSessionDTO {
 	return dtos
 }
 
-func (a *API) sessionsMessageFor(user int64) []byte {
-	dtos := a.sessionDTOs()
+func (a *API) sessionsMessageFor(ctx context.Context, user int64) []byte {
+	dtos := a.sessionDTOsFor(ctx, user)
 	uidStr := strconv.FormatInt(user, 10)
 	filtered := make([]wsSessionDTO, 0, len(dtos))
 	for _, d := range dtos {
@@ -620,7 +718,7 @@ func clientInfo(r *http.Request) wsClientInfo {
 func (a *API) ReportPlayback(r *http.Request, itemID, playSessionID string, posTicks int64, paused bool) {
 	info := clientInfo(r)
 	if strings.HasSuffix(r.URL.Path, "Stopped") {
-		a.hubv().remove(info.deviceID)
+		a.hubv().remove(uid(r), info.deviceID)
 	} else {
 		a.hubv().update(&liveSession{
 			DeviceID:      info.deviceID,
@@ -633,7 +731,11 @@ func (a *API) ReportPlayback(r *http.Request, itemID, playSessionID string, posT
 			DeviceName:    info.deviceName,
 		})
 	}
-	a.hubv().broadcast(a.sessionsMessage())
+	ctx, cancel := context.WithTimeout(context.Background(), wsDetailBudget)
+	defer cancel()
+	a.hubv().broadcastPerUser(func(user int64) []byte {
+		return a.sessionsMessageFor(ctx, user)
+	})
 }
 
 // CloseSockets drops every live /socket connection (graceful shutdown hook).
@@ -730,16 +832,21 @@ func (a *API) handleSocket(w http.ResponseWriter, r *http.Request) {
 	conn.SetDeadline(time.Time{})
 
 	info := clientInfo(r)
+	digest := store.TokenDigest(token)
 	c := &socketConn{
-		uidv:     user.ID,
-		dev:      info.deviceID,
-		conn:     conn,
-		br:       brw.Reader,
-		w:        brw.Writer,
-		send:     make(chan []byte, 32),
-		pong:     make(chan []byte, 8),
-		closeReq: make(chan []byte, 1),
-		done:     make(chan struct{}),
+		uidv: user.ID,
+		authority: func(action func() error, senders ...store.SocketCredential) error {
+			return a.DB.WithSocketAuthority(digest, user.ID, action, senders...)
+		},
+		credential: store.SocketCredential{Digest: digest, UserID: user.ID},
+		dev:        info.deviceID,
+		conn:       conn,
+		br:         brw.Reader,
+		w:          brw.Writer,
+		send:       make(chan socketMessage, 32),
+		pong:       make(chan []byte, 8),
+		closeReq:   make(chan []byte, 1),
+		done:       make(chan struct{}),
 	}
 	a.hubv().register(c)
 	force, _ := json.Marshal(struct {

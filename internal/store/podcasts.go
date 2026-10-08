@@ -328,26 +328,7 @@ func (d *DB) DeletePodcastWithFiles(id int64) ([]int64, error) {
 // transaction, so the lifecycle gate in the service covers the whole
 // destructive operation - core no longer deletes the library row in a
 func deleteEditionBackedLibraryRows(tx dbtx, libraryID int64) error {
-	editions := `SELECT id FROM editions WHERE work_id IN (SELECT id FROM works WHERE library_id = ?)`
-	if _, err := tx.Exec(`DELETE FROM progress WHERE edition_id IN (`+editions+`)`, libraryID); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(`DELETE FROM playback_sessions WHERE edition_id IN (`+editions+`)`, libraryID); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(`DELETE FROM playlist_items WHERE edition_id IN (`+editions+`)`, libraryID); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(`DELETE FROM files WHERE edition_id IN (`+editions+`)`, libraryID); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(`DELETE FROM editions WHERE work_id IN (SELECT id FROM works WHERE library_id = ?)`, libraryID); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(`DELETE FROM works WHERE library_id = ?`, libraryID); err != nil {
-		return err
-	}
-	return nil
+	return deletePhysicalLibraryRows(tx, libraryID)
 }
 
 func deleteLibraryScanJobs(tx dbtx, libraryID int64) error {
@@ -594,21 +575,24 @@ func (d *DB) MarkFileMissing(fileID int64) error {
 
 // EpisodeProgress is per-user playback state for a podcast episode row.
 type EpisodeProgress struct {
-	UserID       int64
-	EpisodeID    int64
-	PositionSecs float64
-	DurationSecs *float64
-	IsFinished   bool
-	UpdatedAt    int64
+	UserID          int64
+	EpisodeID       int64
+	PositionSecs    float64
+	DurationSecs    *float64
+	IsFinished      bool
+	UpdatedAt       int64
+	Revision        int64
+	ResetGeneration int64
+	Deleted         bool
 }
 
-const episodeProgressCols = `user_id, episode_id, position_secs, duration_secs, is_finished, updated_at`
+const episodeProgressCols = `user_id, episode_id, position_secs, duration_secs, is_finished, updated_at, revision, reset_generation, deleted`
 
 func scanEpisodeProgress(row interface{ Scan(...any) error }) (*EpisodeProgress, error) {
 	var p EpisodeProgress
 	var fin int
 	var dur sql.NullFloat64
-	err := row.Scan(&p.UserID, &p.EpisodeID, &p.PositionSecs, &dur, &fin, &p.UpdatedAt)
+	err := row.Scan(&p.UserID, &p.EpisodeID, &p.PositionSecs, &dur, &fin, &p.UpdatedAt, &p.Revision, &p.ResetGeneration, &p.Deleted)
 	if dur.Valid {
 		v := dur.Float64
 		p.DurationSecs = &v
@@ -639,7 +623,8 @@ func (d *DB) SetEpisodeProgress(p *EpisodeProgress) error {
 			position_secs = excluded.position_secs,
 			duration_secs = excluded.duration_secs,
 			is_finished = excluded.is_finished,
-			updated_at = excluded.updated_at`,
+			updated_at = excluded.updated_at,
+            revision = podcast_episode_progress.revision + 1, deleted = 0`,
 		p.UserID, p.EpisodeID, p.PositionSecs, p.DurationSecs, fin, nowMilli())
 	return err
 }
@@ -670,7 +655,7 @@ func (d *DB) EpisodeProgressByPodcast(userID, podcastID int64) (map[int64]*Episo
 func (d *DB) LatestEpisodeProgressByPodcast(userID int64) (map[int64]*EpisodeProgress, error) {
 	rows, err := d.Query(`SELECT p.user_id, p.episode_id, p.position_secs, p.duration_secs, p.is_finished, p.updated_at, e.podcast_id FROM podcast_episode_progress p
 		JOIN podcast_episodes e ON e.id = p.episode_id
-		WHERE p.user_id = ? ORDER BY p.updated_at DESC`, userID)
+		WHERE p.user_id = ? AND p.deleted = 0 ORDER BY p.updated_at DESC`, userID)
 	if err != nil {
 		return nil, err
 	}

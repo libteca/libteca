@@ -1,3 +1,5 @@
+import JSZip from "jszip";
+import { sharedReaderBudget } from "../src/reader/resourceBudget";
 import { render } from "preact";
 import { act } from "preact/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -26,11 +28,12 @@ vi.mock("epubjs", () => ({
 }));
 
 let root: HTMLDivElement;
+let epubBytes: ArrayBuffer;
 const progress = { page: 1, percent: 0.2, locator: "epubcfi(saved)", revision: 3 };
 
 function book() {
   return {
-    open: vi.fn().mockResolvedValue(undefined), destroy: vi.fn(),
+    open: vi.fn().mockResolvedValue(undefined), destroy: vi.fn(), replacements: vi.fn().mockResolvedValue(undefined),
     loaded: { navigation: Promise.resolve({ toc: [{ label: "Chapter", href: "one.xhtml" }] }) },
     locations: { generate: vi.fn().mockResolvedValue([]), save: vi.fn(() => "[]"), load: vi.fn(), length: vi.fn(() => 1), percentageFromCfi: vi.fn(() => 0.4), cfiFromPercentage: vi.fn(() => "epubcfi(percent)") },
   };
@@ -40,13 +43,14 @@ async function settle() {
   await act(async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); await vi.dynamicImportSettled(); });
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  const archive = new JSZip(); archive.file("one.xhtml", "<html><body>chapter</body></html>"); epubBytes = await archive.generateAsync({ type: "arraybuffer" });
   root = document.createElement("div"); document.body.append(root);
   mocks.books.length = 0; mocks.renditions.length = 0; mocks.saves.length = 0;
   mocks.makeBook.mockReset().mockImplementation(book);
   localStorage.clear();
   vi.stubGlobal("crypto", { subtle: { digest: vi.fn().mockResolvedValue(new Uint8Array([0]).buffer) } });
-  vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(new Uint8Array([1, 2, 3])))));
+  vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(epubBytes))));
 });
 
 afterEach(() => { act(() => render(null, root)); root.remove(); vi.unstubAllGlobals(); });
@@ -136,7 +140,7 @@ describe("EPUB reader lifecycle", () => {
   });
 
   it("uses incremental download reads instead of buffering the whole response", async () => {
-    const response = new Response(new Uint8Array([1, 2, 3]));
+    const response = new Response(epubBytes);
     const buffer = vi.spyOn(response, "arrayBuffer");
     vi.mocked(fetch).mockResolvedValue(response);
     act(() => render(<EpubReader editionId={1} title="Book" progress={null} onBack={() => {}} />, root));
@@ -144,4 +148,17 @@ describe("EPUB reader lifecycle", () => {
     expect(mocks.books).toHaveLength(1);
     expect(buffer).not.toHaveBeenCalled();
   });
+});
+
+it("retains configured shared compressed and directory capacity through close even if destruction fails",async()=>{
+ localStorage.setItem("libteca-reader-resource-limits",JSON.stringify({retainedBytes:4096}));
+ const budget=sharedReaderBudget();const failing=book();failing.destroy.mockImplementation(()=>{throw new Error("destroy failed")});mocks.makeBook.mockReturnValue(failing);
+ act(()=>render(<EpubReader editionId={5} title="Book" progress={null} onBack={()=>{}}/>,root));await settle();
+ expect(budget.snapshot().retainedBytes).toBeGreaterThanOrEqual(epubBytes.byteLength);
+ act(()=>render(null,root));expect(budget.snapshot().retainedBytes).toBe(0);
+});
+it("refuses low shared limits before opening EPUB and releases failed admission",async()=>{
+ localStorage.setItem("libteca-reader-resource-limits",JSON.stringify({retainedBytes:1}));const budget=sharedReaderBudget();
+ act(()=>render(<EpubReader editionId={6} title="Book" progress={null} onBack={()=>{}}/>,root));await settle();
+ expect(mocks.books).toHaveLength(0);expect(root.textContent).toContain("retainedBytes");expect(budget.snapshot().retainedBytes).toBe(0);
 });

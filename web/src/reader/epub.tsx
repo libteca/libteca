@@ -2,7 +2,10 @@ import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import type { Book, NavItem, Rendition } from "epubjs";
 import { media } from "../api";
 import { c } from "../styles";
-import { readBoundedBody } from "./resources";
+import { readBoundedBodyReserved } from "./resources";
+import { sharedReaderBudget } from "./resourceBudget";
+import { admitZipDirectory } from "./archiveAdmission";
+import { BoundedEpubArchive } from "./epubArchive";
 import {
   drawerItem, drawerPanel, IconClose, IconContents, IconMinus, IconPlus,
   isTypingTarget, PagePill, ReaderMessage, readerOverlay, readerStage, TopBar, TapZones, toolBtn, toolBtnActive, toolBtnCls,
@@ -115,29 +118,62 @@ function EpubSession(props: EpubReaderProps) {
       try { localStorage.setItem(locKey, book.locations.save()); } catch { /* storage unavailable */ }
     };
 
+    let releaseArchive: (() => void) | undefined;
+    let releaseDirectory: (() => void) | undefined;
+    let archive: BoundedEpubArchive | undefined;
     let book: Book | null = null;
     let rendition: Rendition | null = null;
     let locKey: string | null = null;
     const onDocKey = (e: KeyboardEvent) => { if (!destroyed) keyHandler.current(e); };
     const release = () => {
-      rendition?.off("keydown", onDocKey);
+      try { rendition?.off("keydown", onDocKey); } catch {}
       try { rendition?.destroy(); } catch {}
       try { book?.destroy(); } catch {}
+      archive?.destroy();
+      releaseDirectory?.(); releaseDirectory = undefined;
+      releaseArchive?.(); releaseArchive = undefined;
       if (renditionRef.current === rendition) renditionRef.current = null;
       if (bookRef.current === book) bookRef.current = null;
     };
     (async () => {
       try {
         const res = await fetch(media(`/editions/${props.editionId}/download`), { signal: controller.signal });
-        const data = await readBoundedBody(res, EPUB_MAX_BYTES, controller.signal);
-        if (destroyed) return;
+        const budget = sharedReaderBudget();
+        const downloaded = await readBoundedBodyReserved(res, EPUB_MAX_BYTES, budget, controller.signal);
+        releaseArchive = downloaded.release;
+        const data = downloaded.buffer;
+        if (destroyed) { release(); return; }
+        const directory = admitZipDirectory(data, budget);
+        releaseDirectory = directory.release;
         locKey = await epubLocationKey(props.editionId, data, LOC_CHUNK);
-        if (destroyed) return;
+        if (destroyed) { release(); return; }
         try { localStorage.removeItem(`libteca-epub-loc-${props.editionId}`); } catch { /* storage unavailable */ }
         const epubjs = await import("epubjs");
-        if (destroyed) return;
+        if (destroyed) { release(); return; }
+        const JSZip = (await import("jszip")).default;
+        const zip = await JSZip.loadAsync(data);
+        if (destroyed) { release(); return; }
+        archive = new BoundedEpubArchive(zip, directory.entries, budget, controller.signal, error => {
+          if (!destroyed) { setError(String((error as Error)?.message || error)); setPhase("error"); controller.abort(); queueMicrotask(release); }
+        });
         book = new epubjs.Book();
+        const boundedArchive = archive as unknown as Book["archive"];
+        book.unarchive = async () => { book!.archive = boundedArchive; return boundedArchive; };
+        const runtimeBook = book as unknown as { replacements: () => Promise<void> };
+        const originalReplacements = runtimeBook.replacements.bind(book);
+        runtimeBook.replacements = async () => {
+          const resources = book!.resources as unknown as { createCssFile: (href: string) => Promise<string>; replacementUrls: string[] };
+          const originalCss = resources.createCssFile.bind(resources);
+          resources.createCssFile = async href => {
+            const text = await archive!.getText(book!.resolve(href));
+            const maxUrl = Math.max(1, ...resources.replacementUrls.map(url => url?.length ?? 0));
+            archive!.reserveRetained(text.length * (maxUrl + 1) * 2);
+            return originalCss(href);
+          };
+          return originalReplacements();
+        };
         await book.open(data);
+        if (controller.signal.aborted) throw new DOMException("Reader closed", "AbortError");
         if (destroyed) { release(); return; }
         bookRef.current = book;
 
@@ -219,6 +255,7 @@ function EpubSession(props: EpubReaderProps) {
           await rendition.display();
         }
         if (destroyed) { release(); return; }
+        if (controller.signal.aborted) throw new DOMException("Reader closed", "AbortError");
         setPhase("ready");
 
         if (!haveLocations) {
@@ -239,6 +276,7 @@ function EpubSession(props: EpubReaderProps) {
           }
         }
       } catch (err) {
+        release();
         if (!destroyed && !controller.signal.aborted) {
           release();
           setError(String((err as Error)?.message || err));

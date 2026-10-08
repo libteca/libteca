@@ -31,7 +31,7 @@ func (a *API) editionDownload(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 404, map[string]string{"error": "edition not found"})
 		return
 	}
-	root, rerr := a.confinedRoot(f.EditionID)
+	root, rerr := a.confinedFileRoot(f)
 	if rerr != nil {
 		writeJSON(w, 404, map[string]string{"error": "edition not found"})
 		return

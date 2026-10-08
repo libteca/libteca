@@ -11,8 +11,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
+	"time"
 
 	"github.com/libteca/libteca/internal/procfd"
+	"github.com/libteca/libteca/internal/resourcebudget"
 )
 
 const (
@@ -52,12 +55,15 @@ type generation struct {
 }
 
 type Generator struct {
-	dir    string
-	ffmpeg string
-	mu     sync.Mutex
-	gen    map[string]*generation
-	run    func(ctx context.Context, name string, files []*os.File, args ...string) ([]byte, error)
-	fdArgs func(extra ...string) ([]string, error)
+	diskPool  *resourcebudget.DiskPool
+	configErr error
+	dir       string
+	ffmpeg    string
+	mu        sync.Mutex
+	gen       map[string]*generation
+	run       func(ctx context.Context, name string, files []*os.File, args ...string) ([]byte, error)
+	fdArgs    func(extra ...string) ([]string, error)
+	cleanup   func(string) error
 }
 
 func New(dataDir string) *Generator {
@@ -65,7 +71,9 @@ func New(dataDir string) *Generator {
 	if _, err := exec.LookPath("ffmpeg"); err == nil {
 		ff = "ffmpeg"
 	}
-	return &Generator{dir: dataDir, ffmpeg: ff, gen: map[string]*generation{}, run: ffmpegRun, fdArgs: func(extra ...string) ([]string, error) {
+	per, perErr := resourcebudget.Env("LIBTECA_TRICKPLAY_JOB_BYTES")
+	total, totalErr := resourcebudget.Env("LIBTECA_TRICKPLAY_TOTAL_BYTES")
+	return &Generator{diskPool: resourcebudget.NewDiskPool(filepath.Join(dataDir, "trickplay"), per, total), configErr: errors.Join(perErr, totalErr), dir: dataDir, ffmpeg: ff, gen: map[string]*generation{}, run: ffmpegRun, fdArgs: func(extra ...string) ([]string, error) {
 		return procfd.Args("ffmpeg", extra...)
 	}}
 }
@@ -73,6 +81,18 @@ func New(dataDir string) *Generator {
 func ffmpegRun(ctx context.Context, name string, files []*os.File, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.ExtraFiles = files
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		if err == syscall.ESRCH {
+			return os.ErrProcessDone
+		}
+		return err
+	}
+	cmd.WaitDelay = time.Second
 	return cmd.CombinedOutput()
 }
 
@@ -198,6 +218,22 @@ func (g *Generator) complete(itemID string, width int) bool {
 }
 
 func (g *Generator) generate(ctx context.Context, itemID string, open func() (*os.File, error), width int) error {
+	if g.configErr != nil {
+		return g.configErr
+	}
+	dir := g.widthDir(itemID, width)
+	if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
+		return err
+	}
+	lock, err := os.OpenFile(dir+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		return ErrBusy
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 	if g.complete(itemID, width) {
 		return nil
 	}
@@ -219,8 +255,21 @@ func (g *Generator) generate(ctx context.Context, itemID string, open func() (*o
 	default:
 		return ErrBusy
 	}
-	dir := g.widthDir(itemID, width)
-	os.RemoveAll(dir)
+	remove := g.cleanup
+	if remove == nil {
+		remove = os.RemoveAll
+	}
+	if err := recoverIncomplete(dir, remove); err != nil {
+		return err
+	}
+	var lease *resourcebudget.DiskLease
+	if g.diskPool != nil {
+		lease, err = g.diskPool.Acquire(dir)
+		if err != nil {
+			return err
+		}
+		defer lease.Release()
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
@@ -234,15 +283,63 @@ func (g *Generator) generate(ctx context.Context, itemID string, open func() (*o
 		"-start_number", "0",
 		filepath.Join(dir, "%d.jpg"),
 	)
-	if out, err := g.run(ctx, g.ffmpeg, []*os.File{input}, args...); err != nil {
-		os.RemoveAll(dir)
-		return fmt.Errorf("trickplay ffmpeg: %w: %s", err, out)
+	runCtx, stop := context.WithCancel(ctx)
+	defer stop()
+	var finish func() error
+	if lease != nil && lease.Limit() > 0 {
+		finish = resourcebudget.Monitor(runCtx, dir, lease.Limit(), stop)
+	}
+	out, runErr := g.run(runCtx, g.ffmpeg, []*os.File{input}, args...)
+	if finish != nil {
+		runErr = errors.Join(finish(), runErr)
+	}
+	if runErr == nil {
+		runErr = ctx.Err()
+	}
+	if runErr != nil {
+		cleanupErr := os.RemoveAll(dir)
+		return errors.Join(fmt.Errorf("trickplay ffmpeg: %w: %s", runErr, out), cleanupErr)
 	}
 	marker, err := os.Create(filepath.Join(dir, "COMPLETE"))
 	if err != nil {
+		os.RemoveAll(dir)
 		return err
 	}
-	return marker.Close()
+	if err := marker.Close(); err != nil {
+		os.RemoveAll(dir)
+		return err
+	}
+	return nil
+}
+
+func recoverIncomplete(dir string, remove func(string) error) error {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.Name() == "COMPLETE" {
+			return ErrBusy
+		}
+		if entry.Type()&os.ModeSymlink != 0 || entry.IsDir() {
+			return ErrBusy
+		}
+		if entry.Name() == "OWNED" {
+			marker, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+			if err != nil {
+				return err
+			}
+			if string(marker) != "libteca-trickplay-v1" {
+				return ErrBusy
+			}
+		} else if _, ok := ParseTileName(entry.Name()); !ok {
+			return ErrBusy
+		}
+	}
+	return remove(dir)
 }
 
 // jpegDims reads the SOF marker of a baseline/progressive JPEG.

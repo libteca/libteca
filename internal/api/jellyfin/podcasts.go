@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/libteca/libteca/internal/auth"
+	"github.com/libteca/libteca/internal/mediafs"
 	"github.com/libteca/libteca/internal/store"
 	"github.com/neutron-build/neutron/go/neutron"
 )
@@ -159,20 +160,35 @@ func (a *API) podcastEpisodeStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ep, err := a.DB.EpisodeByID(auth.Atoi64(m[1]))
-	if errors.Is(err, store.ErrNotFound) || ep.FileID == nil {
+	if err != nil || ep.FileID == nil {
 		http.Error(w, "not found", 404)
 		return
 	}
+	file, err := a.DB.FileByID(*ep.FileID)
 	if err != nil {
 		http.Error(w, "not found", 404)
 		return
 	}
-	path, err := a.DB.FilePath(*ep.FileID)
+	root := filepath.Join(a.Dir, "podcasts")
+	if file.SourceLibraryID != 0 || file.EditionID != 0 {
+		root, err = a.DB.LibraryRootForFile(file.ID)
+		if err != nil {
+			http.Error(w, "not found", 404)
+			return
+		}
+	}
+	f, err := mediafs.OpenNoSymlinks(root, file.Path)
 	if err != nil {
 		http.Error(w, "not found", 404)
 		return
 	}
-	serveFile(w, r, path)
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		http.Error(w, "not found", 404)
+		return
+	}
+	http.ServeContent(w, r, filepath.Base(file.Path), fi.ModTime(), f)
 }
 
 func episodePlayedPercent(e *store.PodcastEpisode, p *store.EpisodeProgress) float64 {

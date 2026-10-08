@@ -13,6 +13,7 @@ type WorkView struct {
 
 type EditionView struct {
 	Edition
+	Generation   string `json:"-"`
 	Files        []FileRec
 	CumDurations []float64
 }
@@ -40,12 +41,12 @@ func (e *EditionView) Locate(position float64) (fileID int64, offset float64) {
 	return 0, 0
 }
 
-const fileCols = `id, edition_id, path, seq, size_bytes, mtime_secs, mtime_ns, hash, sha256, codec, video_codec, width, height, container, bitrate, channels, sample_rate, duration_secs, chapters, missing`
+const fileCols = `id, coalesce(edition_id,0), path, seq, size_bytes, mtime_secs, mtime_ns, hash, sha256, codec, video_codec, width, height, container, bitrate, channels, sample_rate, duration_secs, chapters, missing, coalesce(source_library_id,0)`
 
 func scanFile(rows *sql.Rows) (FileRec, error) {
 	var f FileRec
 	var missing int
-	err := rows.Scan(&f.ID, &f.EditionID, &f.Path, &f.Seq, &f.SizeBytes, &f.MtimeSecs, &f.MtimeNS, &f.Hash, &f.SHA256, &f.Codec, &f.VideoCodec, &f.Width, &f.Height, &f.Container, &f.Bitrate, &f.Channels, &f.SampleRate, &f.DurationSecs, &f.Chapters, &missing)
+	err := rows.Scan(&f.ID, &f.EditionID, &f.Path, &f.Seq, &f.SizeBytes, &f.MtimeSecs, &f.MtimeNS, &f.Hash, &f.SHA256, &f.Codec, &f.VideoCodec, &f.Width, &f.Height, &f.Container, &f.Bitrate, &f.Channels, &f.SampleRate, &f.DurationSecs, &f.Chapters, &missing, &f.SourceLibraryID)
 	f.Missing = missing != 0
 	return f, err
 }
@@ -258,11 +259,16 @@ func (d *DB) FileByID(id int64) (*FileRec, error) {
 
 func (d *DB) LibraryRootForEdition(editionID int64) (string, error) {
 	var root string
-	err := d.QueryRow(`SELECT l.path
-		FROM editions e
-		JOIN works w ON w.id = e.work_id
-		JOIN libraries l ON l.id = w.library_id
-		WHERE e.id = ?`, editionID).Scan(&root)
+	err := d.QueryRow(`SELECT l.path FROM files f JOIN libraries l ON l.id=f.source_library_id WHERE f.edition_id=? ORDER BY f.seq,f.id LIMIT 1`, editionID).Scan(&root)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	return root, err
+}
+
+func (d *DB) LibraryRootForFile(fileID int64) (string, error) {
+	var root string
+	err := d.QueryRow(`SELECT l.path FROM files f JOIN libraries l ON l.id=f.source_library_id WHERE f.id=?`, fileID).Scan(&root)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", ErrNotFound
 	}
