@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@neutron-build/cli": "^0.3.1",
-    "@neutron-build/core": "^0.3.1",
+    "@neutron-build/core": "^0.3.2",
     "epubjs": "^0.3.93",
     "hls.js": "^1.7.3",
     "jszip": "^3.10.2",
