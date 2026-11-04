@@ -1,6 +1,7 @@
 package subsonic
 
 import (
+	"context"
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
@@ -809,4 +810,59 @@ func TestStarred2AndAlbumInfoShape(t *testing.T) {
 	if _, ok := sr["albumInfo"].(map[string]any); !ok {
 		t.Fatalf("getAlbumInfo2 must carry an albumInfo element: %s", rec.Body.String())
 	}
+}
+
+func TestPasswordProofCached(t *testing.T) {
+	dir := t.TempDir()
+	db, err := store.Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	now := time.Now().UnixMilli()
+	res, err := db.Exec(`INSERT INTO users (name, password_hash, is_admin, created_at, updated_at) VALUES ('tyler', ?, 0, ?, ?)`,
+		auth.MustHash("secret"), now, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uid, _ := res.LastInsertId()
+	a := New(db, dir)
+	u, err := db.User(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("GET", "/rest/ping.view", nil)
+	if ok, err := a.verifyPassword(req, u, "wrong-password"); ok || err != nil {
+		t.Fatalf("wrong password = %v %v", ok, err)
+	}
+	if len(a.proofs) != 0 {
+		t.Fatal("failed verification must not be cached")
+	}
+	if ok, err := a.verifyPassword(req, u, "secret"); !ok || err != nil {
+		t.Fatalf("right password = %v %v", ok, err)
+	}
+	if len(a.proofs) != 1 {
+		t.Fatalf("proofs = %d, want 1", len(a.proofs))
+	}
+	if ok, err := a.verifyPassword(req.WithContext(canceledContext()), u, "secret"); !ok || err != nil {
+		t.Fatalf("cached proof must not need a KDF slot: %v %v", ok, err)
+	}
+	u.PasswordHash = auth.MustHash("rotated")
+	if ok, _ := a.verifyPassword(req, u, "secret"); ok {
+		t.Fatal("proof must not survive a password change")
+	}
+}
+
+func TestTokenUnknownUserSkipsKDF(t *testing.T) {
+	e := newEnv(t)
+	rec := e.get(t, "/rest/ping.view?u=ghost&t=00&s=00&f=json")
+	if subMap(t, decode(t, rec), "error")["code"].(float64) != 40 {
+		t.Fatal("unknown user token auth must be 40")
+	}
+}
+
+func canceledContext() context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return ctx
 }

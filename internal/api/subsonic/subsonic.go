@@ -2,6 +2,7 @@ package subsonic
 
 import (
 	"crypto/md5"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
@@ -15,6 +16,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -56,6 +58,47 @@ type API struct {
 	LoginLimiter *auth.Limiter
 	DB           *store.DB
 	Dir          string
+
+	proofMu sync.Mutex
+	proofs  map[[32]byte]time.Time
+}
+
+const proofTTL = 15 * time.Minute
+const proofsMax = 1024
+
+func (a *API) verifyPassword(r *http.Request, u *store.User, pass string) (bool, error) {
+	if len(pass) > 1024 {
+		return false, nil
+	}
+	key := sha256.Sum256([]byte(strconv.FormatInt(u.ID, 10) + "\x00" + u.PasswordHash + "\x00" + pass))
+	now := time.Now()
+	a.proofMu.Lock()
+	until, hit := a.proofs[key]
+	a.proofMu.Unlock()
+	if hit && now.Before(until) {
+		return true, nil
+	}
+	valid, err := auth.VerifyRequest(r.Context(), pass, u.PasswordHash)
+	if err != nil || !valid {
+		return false, err
+	}
+	a.proofMu.Lock()
+	if a.proofs == nil {
+		a.proofs = make(map[[32]byte]time.Time)
+	}
+	if len(a.proofs) >= proofsMax {
+		for k, exp := range a.proofs {
+			if !now.Before(exp) {
+				delete(a.proofs, k)
+			}
+		}
+		if len(a.proofs) >= proofsMax {
+			a.proofs = make(map[[32]byte]time.Time)
+		}
+	}
+	a.proofs[key] = now.Add(proofTTL)
+	a.proofMu.Unlock()
+	return true, nil
 }
 
 func New(db *store.DB, dir string) *API {
@@ -173,9 +216,11 @@ func (a *API) authenticate(r *http.Request) (int64, bool, error) {
 	u, err := a.DB.UserByName(name)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			_, verr := auth.VerifyRequest(r.Context(), r.Form.Get("p"), auth.DummyHash())
-			if verr != nil {
-				return 0, false, verr
+			if r.Form.Get("t") == "" {
+				_, verr := auth.VerifyRequest(r.Context(), r.Form.Get("p"), auth.DummyHash())
+				if verr != nil {
+					return 0, false, verr
+				}
 			}
 			failBoth()
 			return 0, false, nil
@@ -209,7 +254,7 @@ func (a *API) authenticate(r *http.Request) (int64, bool, error) {
 			a.LoginLimiter.Success(principal)
 			a.LoginLimiter.SuccessIP(ip)
 		}
-		stillCurrent, verr := auth.VerifyRequest(r.Context(), secret, u.PasswordHash)
+		stillCurrent, verr := a.verifyPassword(r, u, secret)
 		if verr != nil {
 			return 0, false, verr
 		}
@@ -236,7 +281,7 @@ func (a *API) authenticate(r *http.Request) (int64, bool, error) {
 		}
 		pass = string(raw)
 	}
-	valid, verr := auth.VerifyRequest(r.Context(), pass, u.PasswordHash)
+	valid, verr := a.verifyPassword(r, u, pass)
 	if verr != nil {
 		return 0, false, verr
 	}
