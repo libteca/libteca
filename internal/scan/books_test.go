@@ -456,3 +456,19 @@ func TestScanBooksLibraryCBR(t *testing.T) {
 		t.Fatalf("cover file = %q, %v", cover, err)
 	}
 }
+
+func TestProbeCBRUnarIgnoresSymlinkEntries(t *testing.T) {
+	secret := filepath.Join(t.TempDir(), "secret.db")
+	if err := os.WriteFile(secret, []byte("server-secret-bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dir := fakeExtractor(t, "lsar", fakeLsar)
+	script := "#!/bin/sh\nif [ \"$6\" = \"p001.jpg\" ]; then ln -s '" + secret + "' \"$4/p001.jpg\"; fi\n"
+	os.WriteFile(filepath.Join(dir, "unar"), []byte(script), 0o755)
+	p := filepath.Join(t.TempDir(), "Comic.cbr")
+	os.WriteFile(p, []byte("Rar!"), 0o644)
+	_, cover, _ := probeCBR(context.Background(), p, "unar")
+	if strings.Contains(string(cover), "server-secret-bytes") {
+		t.Fatal("symlinked archive entry was followed into a server file")
+	}
+}

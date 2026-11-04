@@ -257,8 +257,10 @@ func readXMLZip(zr *zip.Reader, name string, v any) error {
 		return err
 	}
 	defer f.Close()
-	return xml.NewDecoder(f).Decode(v)
+	return xml.NewDecoder(io.LimitReader(f, epubXMLMax)).Decode(v)
 }
+
+const epubXMLMax = 16 << 20
 
 func parseNav(zr *zip.Reader, name string) []EpubTOCEntry {
 	var doc navDoc
