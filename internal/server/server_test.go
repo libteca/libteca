@@ -67,3 +67,24 @@ func TestCoreBodyLimit(t *testing.T) {
 		t.Fatalf("oversized unauthenticated opml = %d, want 401 (auth checked before body)", unauth.StatusCode)
 	}
 }
+
+func TestSecurityHeaders(t *testing.T) {
+	ts := newBodyLimitServer(t)
+	for _, path := range []string{"/", "/api/core/me", "/rest/ping.view"} {
+		resp, err := http.Get(ts.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		if got := resp.Header.Get("X-Content-Type-Options"); got != "nosniff" {
+			t.Fatalf("%s X-Content-Type-Options = %q", path, got)
+		}
+		if got := resp.Header.Get("X-Frame-Options"); got != "SAMEORIGIN" {
+			t.Fatalf("%s X-Frame-Options = %q", path, got)
+		}
+		if got := resp.Header.Get("Content-Security-Policy"); got != "frame-ancestors 'self'" {
+			t.Fatalf("%s CSP = %q", path, got)
+		}
+	}
+}

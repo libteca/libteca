@@ -111,5 +111,16 @@ func (s *Server) buildHandler() http.Handler {
 
 	r.StaticFS("/", webFS())
 
-	return app.Handler()
+	return securityHeaders(app.Handler())
+}
+
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "SAMEORIGIN")
+		h.Set("Content-Security-Policy", "frame-ancestors 'self'")
+		h.Set("Referrer-Policy", "same-origin")
+		next.ServeHTTP(w, r)
+	})
 }
