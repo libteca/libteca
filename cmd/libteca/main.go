@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -55,6 +56,7 @@ func main() {
 	watchEnabled := flag.Bool("watch", true, "watch libraries for changes and rescan (env LIBTECA_WATCH=false disables; LIBTECA_SWEEP=<seconds> sets the sweep interval, 0 disables)")
 	hwaccel := flag.String("hwaccel", "", "video hwaccel: auto|none|videotoolbox|vaapi|nvenc|qsv (default: $LIBTECA_HWACCEL)")
 	secureCookie := flag.Bool("secure-cookie", false, "mark the media cookie Secure (enable when the user-facing origin is HTTPS; env LIBTECA_SECURE_COOKIE)")
+	trustedProxies := flag.String("trusted-proxies", "", "comma-separated IPs/CIDRs of reverse proxies whose X-Forwarded-For is trusted for the client address (default none; env LIBTECA_TRUSTED_PROXIES)")
 	flag.Parse()
 
 	if *showVersion {
@@ -65,6 +67,7 @@ func main() {
 	watchWasSet := false
 	hwaccelWasSet := false
 	secureCookieWasSet := false
+	trustedProxiesWasSet := false
 	flag.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "watch":
@@ -73,6 +76,8 @@ func main() {
 			hwaccelWasSet = true
 		case "secure-cookie":
 			secureCookieWasSet = true
+		case "trusted-proxies":
+			trustedProxiesWasSet = true
 		}
 	})
 	if !watchWasSet {
@@ -92,6 +97,15 @@ func main() {
 			}
 			*secureCookie = parsed
 		}
+	}
+	if !trustedProxiesWasSet {
+		*trustedProxies = os.Getenv("LIBTECA_TRUSTED_PROXIES")
+	}
+	if err := auth.SetTrustedProxies(*trustedProxies); err != nil {
+		fatal(fmt.Errorf("LIBTECA_TRUSTED_PROXIES: %w", err))
+	}
+	if strings.TrimSpace(*trustedProxies) != "" {
+		fmt.Printf("libteca: trusting X-Forwarded-For from %s\n", strings.TrimSpace(*trustedProxies))
 	}
 	if *port < 1 || *port > 65535 {
 		fatal(fmt.Errorf("port must be 1..65535"))
