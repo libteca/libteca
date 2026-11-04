@@ -1298,3 +1298,23 @@ trusted-proxy setting; IPv6 addresses are not grouped by prefix and
 evictLocked drops locked entries at 10000 keys; Kavita/ABS importers trust
 absolute file paths from the imported database (admin-only, needs a
 crafted DB); teploy template does not set LIBTECA_SECURE_COOKIE.
+
+Follow-up on the same branch (closes the deferred items above):
+- Trusted proxies: `LIBTECA_TRUSTED_PROXIES` / `--trusted-proxies` (IPs or
+  CIDRs, default empty = X-Forwarded-For ignored). When the peer is trusted,
+  the client is the right-most X-Forwarded-For hop that is not itself a
+  trusted proxy. Deploys behind Caddy must set it to the proxy subnet.
+- Limiter: IPv6 keys grouped by /64; at capacity unlocked entries are
+  evicted first and active lockouts are never dropped; a table holding only
+  lockouts refuses new keys with the usual 429. A pure per-username lockout
+  was not added: keys are already per (client, username) plus per client,
+  and a username-wide lock lets anyone lock any account out, which is the
+  failure the trusted-proxy fix removes. Owner decision if distributed
+  per-account guessing is judged the larger risk.
+- Importers: imported paths need a scanner-accepted media extension and must
+  resolve (Clean + EvalSymlinks) inside a source-declared library folder or
+  an existing libteca library root; others are skipped with a warning.
+  Kavita no longer imports extensionless or .zip/.rar files by format code.
+- teploy template: plain-HTTP raw-port form, so LIBTECA_SECURE_COOKIE and
+  LIBTECA_TRUSTED_PROXIES stay unset by default; the Caddy (HTTPS) variant
+  is documented in the template header.
