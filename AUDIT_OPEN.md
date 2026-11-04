@@ -1277,3 +1277,24 @@ Still open, unchanged in kind: security acceptance needs the independent r4
 review of this exact tree; the HLS/MOV adversarial corpora, representative
 format/device corpus, real ABS/Kavita backup acceptance, migration/rollback
 rehearsal, deployment and native-target gates remain as previously qualified.
+
+## 2026-11-03 — Security review pass (branch security/review-2026-11-03)
+
+Fixed: security headers on every response (nosniff, X-Frame-Options
+SAMEORIGIN, CSP frame-ancestors 'self', Referrer-Policy same-origin);
+Jellyfin podcast progress body cap + ValidPosition + MediaSources Path
+reduced to the base name; Subsonic per-request Argon2 replaced by a
+15-minute proof cache keyed by user/current hash/password (KDF-slot
+starvation across all faces), and the unknown-user token path no longer
+burns the dummy hash (user-enumeration timing); EPUB XML entries capped
+at 16 MiB during scan (deflate bomb). Verified not exploitable: unar CBR
+symlink entries (resourcebudget monitor rejects non-regular output;
+regression test added).
+
+Deferred, owner decisions: login limiter keys on RemoteAddr, so behind a
+reverse proxy all clients share one per-IP bucket (30 anonymous failures
+lock OPDS/Subsonic/ABS/core logins for everyone for 15 minutes) — needs a
+trusted-proxy setting; IPv6 addresses are not grouped by prefix and
+evictLocked drops locked entries at 10000 keys; Kavita/ABS importers trust
+absolute file paths from the imported database (admin-only, needs a
+crafted DB); teploy template does not set LIBTECA_SECURE_COOKIE.
