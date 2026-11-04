@@ -257,3 +257,44 @@ func TestPodcastEpisodeProgressUserData(t *testing.T) {
 		t.Fatalf("finished show should reset resume position: %s", body)
 	}
 }
+
+func TestPodcastEpisodeProgressRejectsBadInput(t *testing.T) {
+	e := newPodEnv(t)
+	epPath := fmt.Sprintf("/Audio/podcast/pe%d/progress", e.epID)
+	if rec, body := e.req(t, "POST", epPath, e.token, map[string]any{"PositionTicks": -10000000}); rec.Code != 400 {
+		t.Fatalf("negative position: status %d %s, want 400", rec.Code, body)
+	}
+	if rec, body := e.req(t, "POST", epPath, e.token, map[string]any{"ItemId": strings.Repeat("x", 2<<20)}); rec.Code != 400 {
+		t.Fatalf("oversized body: status %d %s, want 400", rec.Code, body)
+	}
+}
+
+func TestPodcastItemsHideServerPath(t *testing.T) {
+	e := newPodEnv(t)
+	rec, body := e.get(t, fmt.Sprintf("/Items?ParentId=pod%d", e.podID), e.token)
+	if rec.Code != 200 {
+		t.Fatalf("status %d: %s", rec.Code, body)
+	}
+	var dto struct {
+		Items []struct {
+			MediaSources []struct {
+				Path string `json:"Path"`
+			} `json:"MediaSources"`
+		} `json:"Items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &dto); err != nil {
+		t.Fatal(err)
+	}
+	seen := false
+	for _, it := range dto.Items {
+		for _, ms := range it.MediaSources {
+			seen = true
+			if strings.ContainsAny(ms.Path, `/\`) {
+				t.Fatalf("media source path leaks server path: %q", ms.Path)
+			}
+		}
+	}
+	if !seen {
+		t.Fatal("no media sources in response")
+	}
+}

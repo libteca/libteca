@@ -142,7 +142,7 @@ func (a *API) podcastEpisodeItem(p *store.Podcast, e *store.PodcastEpisode, r *h
 				url += "?api_key=" + key
 			}
 			it["MediaSources"] = []any{map[string]any{
-				"Id": epID, "Path": path, "Protocol": "File",
+				"Id": epID, "Path": filepath.Base(path), "Protocol": "File",
 				"Container":          strings.TrimPrefix(filepath.Ext(path), "."),
 				"SupportsDirectPlay": false, "SupportsDirectStream": false, "SupportsTranscoding": true,
 				"TranscodingUrl": url,
@@ -230,6 +230,7 @@ func (a *API) podcastEpisodeProgress(w http.ResponseWriter, r *http.Request) {
 		IsPaused      bool   `json:"IsPaused"`
 		PlaySessionId string `json:"PlaySessionId"`
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		write(w, 400, map[string]any{"error": "invalid body"})
 		return
@@ -242,6 +243,10 @@ func (a *API) podcastEpisodeProgress(w http.ResponseWriter, r *http.Request) {
 	dur := 0.0
 	if ep.DurationSecs != nil {
 		dur = *ep.DurationSecs
+	}
+	if store.ValidPosition(pos, dur) != nil {
+		write(w, 400, map[string]any{"error": "invalid position"})
+		return
 	}
 	if dur > 0 {
 		p.DurationSecs = &dur
