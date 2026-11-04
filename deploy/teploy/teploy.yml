@@ -24,6 +24,15 @@
 # exposure by default). For Caddy in front of a LAN box, set a hostname and
 # add tls: {internal: true}, or the ACME challenge can never complete.
 #
+# Behind Caddy (ingress: caddy, HTTPS only) also set, under env:
+#   LIBTECA_SECURE_COOKIE: "true"
+#   LIBTECA_TRUSTED_PROXIES: <subnet of the teploy docker network>
+# The subnet comes from `docker network inspect teploy` (IPAM Subnet). Login
+# lockouts then key on the real client from X-Forwarded-For instead of on
+# Caddy. Leave both unset in this raw-port form: the port is plain HTTP, and
+# with docker's userland proxy direct clients can arrive from the bridge
+# gateway, so trusting that subnet here would let them forge their address.
+#
 # The image entrypoint must start the binary with `--data /data` so it lives
 # on the teploy-managed volume below (port defaults to 8096 already).
 app: libteca

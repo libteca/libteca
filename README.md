@@ -53,6 +53,12 @@ Behind HTTPS termination (reverse proxy, Tailscale HTTPS), enable
 the `Secure` attribute. Leave it off for direct-HTTP LAN/Tailscale-HTTP
 deployments — a Secure cookie is dropped by the browser on plain HTTP.
 
+Behind a reverse proxy, set `--trusted-proxies` (`LIBTECA_TRUSTED_PROXIES`,
+comma-separated IPs/CIDRs of the proxy) so login rate limits key on the real
+client from `X-Forwarded-For`. Default is empty: the header is ignored and the
+connecting address is used. Only list addresses that nothing but the proxy can
+connect from.
+
 Open http://localhost:8096, log in, add a library, and scan (web UI, or
 `./libteca --data ./data --scan` as a one-shot). Then point clients at it:
 
