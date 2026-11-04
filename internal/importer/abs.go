@@ -47,6 +47,11 @@ func ABS(dataDir string, db *store.DB, dryRun bool) (*Plan, error) {
 	if err != nil {
 		return nil, err
 	}
+	roots, err := importRoots(db, snap.folders)
+	if err != nil {
+		return nil, err
+	}
+	audioOK := audioExtSet()
 
 	ourType := map[string]string{"book": "audiobooks", "podcast": "podcasts"}
 	libType := map[foreignID]string{}
@@ -88,6 +93,20 @@ func ABS(dataDir string, db *store.DB, dryRun bool) (*Plan, error) {
 			plan.warnf("book %q: no audio files found; skipped", b.title)
 			continue
 		}
+		var rejected error
+		for i := range files {
+			clean, cerr := confinedMediaPath(files[i].Path, audioOK, roots)
+			if cerr != nil {
+				rejected = fmt.Errorf("file %q not imported: %w", files[i].Path, cerr)
+				break
+			}
+			files[i].Path = clean
+		}
+		if rejected != nil {
+			plan.Libraries[libIndex[b.libID]].Skipped++
+			plan.warnf("book %q: %v; skipped", b.title, rejected)
+			continue
+		}
 		if err := snapshotFiles(files); err != nil {
 			return nil, err
 		}
@@ -126,6 +145,13 @@ func ABS(dataDir string, db *store.DB, dryRun bool) (*Plan, error) {
 				plan.warnf("podcast episode %q: no downloaded audio file; skipped", e.title)
 				continue
 			}
+			clean, cerr := confinedMediaPath(path, audioOK, roots)
+			if cerr != nil {
+				plan.Libraries[libIndex[p.libID]].Skipped++
+				plan.warnf("podcast episode %q: file %q not imported: %v; skipped", e.title, path, cerr)
+				continue
+			}
+			path = clean
 			if dur <= 0 {
 				dur = e.duration
 			}
@@ -495,6 +521,7 @@ type absSourcePlaylist struct {
 type absSnapshot struct {
 	libs      []absLib
 	libPaths  map[foreignID]string
+	folders   []string
 	users     []foreignUser
 	books     []absSourceBook
 	podcasts  []absSourcePodcast
@@ -551,6 +578,7 @@ func discoverABS(fdb *sql.DB, layout absLayout, plan *Plan) (*absSnapshot, error
 			var libID any
 			var p sql.NullString
 			if rows.Scan(&libID, &p) == nil && p.String != "" {
+				snap.folders = append(snap.folders, p.String)
 				if _, ok := snap.libPaths[idOf(libID)]; !ok {
 					snap.libPaths[idOf(libID)] = p.String
 				}

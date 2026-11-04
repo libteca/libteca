@@ -146,6 +146,28 @@ func Kavita(dbPath string, db *store.DB, dryRun bool) (*Plan, error) {
 		}
 	}
 
+	var folders []string
+	if rows, err := fdb.Query(`SELECT Path FROM FolderPath`); err == nil {
+		for rows.Next() {
+			var p sql.NullString
+			if rows.Scan(&p) == nil && p.String != "" {
+				folders = append(folders, p.String)
+			}
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+	} else if schemaErr(err) {
+		plan.warnf("FolderPath unreadable; only files inside existing libteca libraries can be imported")
+	} else {
+		return nil, err
+	}
+	roots, err := importRoots(db, folders)
+	if err != nil {
+		return nil, err
+	}
+
 	filesByChapter := map[int64][]fileSpec{}
 	formatsByChapter := map[int64]string{}
 	{
@@ -163,6 +185,12 @@ func Kavita(dbPath string, db *store.DB, dryRun bool) (*Plan, error) {
 			if _, err := os.Stat(path); err != nil {
 				continue
 			}
+			clean, cerr := confinedMediaPath(path, kavitaMediaExts, roots)
+			if cerr != nil {
+				plan.warnf("chapter %d: file %q not imported: %v", chID, path, cerr)
+				continue
+			}
+			path = clean
 			kind, supported := kavitaFormat(format, path)
 			if !supported {
 				plan.warnf("chapter %d: file %q has unsupported MangaFormat %d; skipped", chID, path, format)
@@ -503,24 +531,15 @@ func chapterTitle(title, numRange string, number sql.NullFloat64) string {
 }
 
 func kavitaFormat(format int, path string) (string, bool) {
-	switch ext := strings.ToLower(filepath.Ext(path)); ext {
+	switch strings.ToLower(filepath.Ext(path)) {
 	case ".epub":
 		return "epub", true
 	case ".pdf":
 		return "pdf", true
-	case ".cbz", ".zip":
+	case ".cbz":
 		return "cbz", true
-	case ".cbr", ".rar":
+	case ".cbr":
 		return "cbr", true
 	}
-	switch format {
-	case 1:
-		return "cbz", true
-	case 3:
-		return "epub", true
-	case 4:
-		return "pdf", true
-	default:
-		return "", false
-	}
+	return "", false
 }

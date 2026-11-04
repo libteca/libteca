@@ -88,6 +88,7 @@ func newAtomicImportFixture(t *testing.T, format string) atomicImportFixture {
 				sourceExec(t, source, func(db *sql.DB) {
 					importExec(t, db, `INSERT INTO users VALUES (10, 'rollback-first-user', '', 'user'), (11, 'rollback-last-user', '', 'user')`)
 					importExec(t, db, `INSERT INTO libraries VALUES (10, 'Rollback First Library', 'book'), (11, 'Rollback Last Library', 'book')`)
+					importExec(t, db, `INSERT INTO libraryFolders VALUES (10, 1, ?)`, filepath.Join(dir, "media"))
 					importExec(t, db, `INSERT INTO playlists VALUES (10, 1, 'Rollback Playlist')`)
 					importExec(t, db, `INSERT INTO playlistMediaItems VALUES (10, 10, 1, 'book')`)
 					importExec(t, db, `INSERT INTO libraryItems VALUES (4, 1, 4, 'book', 'Book Two', '`+filepath.Join(dir, "media", "Book Two")+`')`)
@@ -351,7 +352,10 @@ func TestWholeImportNonRegularFileRollback(t *testing.T) {
 					preserveImportSentinels(t, db)
 				}
 				f.grow(t)
-				dir := filepath.Join(t.TempDir(), "nonregular.mp3")
+				dir := filepath.Join(filepath.Dir(filepath.Dir(f.source)), "media", "nonregular.mp3")
+				if format == "kavita" {
+					dir = filepath.Join(filepath.Dir(f.source), "nonregular.cbz")
+				}
 				if err := os.Mkdir(dir, 0o755); err != nil {
 					t.Fatal(err)
 				}

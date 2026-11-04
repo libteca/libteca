@@ -34,6 +34,8 @@ func buildKavitaFixture(t *testing.T) string {
 		`CREATE TABLE Volume (Id INTEGER PRIMARY KEY, SeriesId INTEGER, Number TEXT)`,
 		`CREATE TABLE Chapter (Id INTEGER PRIMARY KEY, VolumeId INTEGER, Number REAL, Range TEXT, Title TEXT, Pages INTEGER)`,
 		`CREATE TABLE MangaFile (Id INTEGER PRIMARY KEY, ChapterId INTEGER, FilePath TEXT, Format INTEGER)`,
+		`CREATE TABLE FolderPath (Id INTEGER PRIMARY KEY, Path TEXT, LibraryId INTEGER)`,
+		`INSERT INTO FolderPath VALUES (1, '` + root + `', 1)`,
 		`CREATE TABLE AspNetUsers (Id TEXT PRIMARY KEY, UserName TEXT, PasswordHash TEXT)`,
 		`CREATE TABLE AspNetRoles (Id TEXT PRIMARY KEY, Name TEXT)`,
 		`CREATE TABLE AspNetUserRoles (UserId TEXT, RoleId TEXT)`,

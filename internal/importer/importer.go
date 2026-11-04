@@ -451,3 +451,63 @@ func physicalImportRoot(db libraryStore, name, typ string, paths []string) (stri
 	}
 	return root, nil
 }
+
+var kavitaMediaExts = map[string]bool{".epub": true, ".pdf": true, ".cbz": true, ".cbr": true}
+
+func importRoots(db libraryStore, foreign []string) ([]string, error) {
+	libs, err := db.Libraries()
+	if err != nil {
+		return nil, err
+	}
+	candidates := append([]string{}, foreign...)
+	for _, l := range libs {
+		candidates = append(candidates, l.Path)
+	}
+	var roots []string
+	for _, c := range candidates {
+		if c == "" || !filepath.IsAbs(c) {
+			continue
+		}
+		real, err := filepath.EvalSymlinks(filepath.Clean(c))
+		if err != nil {
+			continue
+		}
+		if real == filepath.VolumeName(real)+string(filepath.Separator) {
+			continue
+		}
+		roots = append(roots, real)
+	}
+	return roots, nil
+}
+
+func confinedMediaPath(path string, exts map[string]bool, roots []string) (string, error) {
+	if !filepath.IsAbs(path) {
+		return "", errors.New("not an absolute path")
+	}
+	clean := filepath.Clean(path)
+	if !exts[strings.ToLower(filepath.Ext(clean))] {
+		return "", errors.New("not a supported media file")
+	}
+	real, err := filepath.EvalSymlinks(clean)
+	if err != nil {
+		return "", err
+	}
+	if !exts[strings.ToLower(filepath.Ext(real))] {
+		return "", errors.New("not a supported media file")
+	}
+	for _, root := range roots {
+		rel, err := filepath.Rel(root, real)
+		if err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel) {
+			return clean, nil
+		}
+	}
+	return "", errors.New("outside the imported and configured library folders")
+}
+
+func audioExtSet() map[string]bool {
+	set := make(map[string]bool, len(audioExts))
+	for ext := range audioExts {
+		set[ext] = true
+	}
+	return set
+}

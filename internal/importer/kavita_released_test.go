@@ -31,8 +31,8 @@ func TestKavitaLibraryTypeReleasedEnums(t *testing.T) {
 }
 
 func TestKavitaFormatReleasedEnums(t *testing.T) {
-	if got, ok := kavitaFormat(4, "/store/noext"); !ok || got != "pdf" {
-		t.Fatalf("Pdf=4 extensionless = %q,%v want pdf", got, ok)
+	if got, ok := kavitaFormat(4, "/store/noext"); ok {
+		t.Fatalf("extensionless files must be unsupported regardless of enum, got %q", got)
 	}
 	if got, ok := kavitaFormat(2, "/store/noext"); ok {
 		t.Fatalf("Unknown=2 must be unsupported, got %q", got)
@@ -40,8 +40,8 @@ func TestKavitaFormatReleasedEnums(t *testing.T) {
 	if got, ok := kavitaFormat(0, "/store/noext"); ok {
 		t.Fatalf("Image=0 must be unsupported, got %q", got)
 	}
-	if got, ok := kavitaFormat(1, "/store/noext"); !ok || got != "cbz" {
-		t.Fatalf("Archive=1 extensionless = %q,%v want cbz", got, ok)
+	if got, ok := kavitaFormat(1, "/store/book.zip"); ok {
+		t.Fatalf(".zip is not a scanner media extension, got %q", got)
 	}
 	if got, ok := kavitaFormat(9, "/store/book.epub"); !ok || got != "epub" {
 		t.Fatalf("extension wins over unknown enum = %q,%v want epub", got, ok)
@@ -63,6 +63,8 @@ func buildKavitaEnumFixture(t *testing.T) string {
 		`CREATE TABLE Volume (Id INTEGER PRIMARY KEY, SeriesId INTEGER, Number TEXT)`,
 		`CREATE TABLE Chapter (Id INTEGER PRIMARY KEY, VolumeId INTEGER, Number REAL, Range TEXT, Title TEXT, Pages INTEGER)`,
 		`CREATE TABLE MangaFile (Id INTEGER PRIMARY KEY, ChapterId INTEGER, FilePath TEXT, Format INTEGER)`,
+		`CREATE TABLE FolderPath (Id INTEGER PRIMARY KEY, Path TEXT, LibraryId INTEGER)`,
+		`INSERT INTO FolderPath VALUES (1, '` + root + `', 1)`,
 		`CREATE TABLE AspNetUsers (Id TEXT PRIMARY KEY, UserName TEXT)`,
 		`CREATE TABLE AspNetRoles (Id TEXT PRIMARY KEY, Name TEXT)`,
 		`CREATE TABLE AspNetUserRoles (UserId TEXT, RoleId TEXT)`,
@@ -129,7 +131,7 @@ func TestKavitaReleasedLibraryClassification(t *testing.T) {
 	if !warningsMention(plan.Warnings, "Images") || !warningsMention(plan.Warnings, "unsupported type 3") {
 		t.Fatalf("image library warning absent: %v", plan.Warnings)
 	}
-	if !warningsMention(plan.Warnings, "unsupported MangaFormat") {
+	if !warningsMention(plan.Warnings, "not a supported media file") {
 		t.Fatalf("loose-image format warning absent: %v", plan.Warnings)
 	}
 	if plan.ProgressRows != 1 || len(plan.Users) != 1 {
