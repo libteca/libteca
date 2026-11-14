@@ -145,7 +145,7 @@ function WorkSession(props: { id: number }) {
     ].filter((f): f is string => !!f);
     const movie = (
       <Wash id={w.id} has={!!w.hasCover} fanart={w.hasFanart}>
-        <BackButton />
+        <BackButton w={w} />
         <div className="work-head" style={workHead}>
           <div className="work-cover" style={{ ...workCover, width: "13rem" }}><Cover has={w.hasCover} id={w.id} title={w.title} /></div>
           <div style={workMeta}>
@@ -196,32 +196,35 @@ function Wash(props: { id: number; has: boolean; fanart?: boolean; children: Com
   );
 }
 
-function BackButton() {
+function BackButton(props: { w: WorkDetail }) {
+  const target = props.w.libraryId ? `#/library?lib=${props.w.libraryId}` : "#/library";
   return (
-    <button className="press" style={backLink} onClick={() => { location.hash = "#/library"; }}>
-      <IconChevronLeft size={16} /> Library
-    </button>
+    <a className="press" style={backLink} href={target}>
+      <IconChevronLeft size={16} /> {props.w.libraryName || "Library"}
+    </a>
   );
 }
 
 function EpisodeList(props: { w: WorkDetail; onPlay: (id: number) => void }) {
   const eps = [...props.w.editions].sort((a, b) => (a.seasonNum! - b.seasonNum!) || (a.episodeNum! - b.episodeNum!));
   const resumeEp = eps.find((e) => e.position && e.position > 0 && !e.isFinished);
+  const nextEp = resumeEp || eps.find((e) => !e.isFinished) || eps[0];
+  const playLabel = !nextEp ? "" : resumeEp ? "Continue" : nextEp.isFinished ? "Watch again" : "Play";
   return (
     <Wash id={props.w.id} has={!!props.w.hasCover} fanart={props.w.hasFanart}>
-      <BackButton />
+      <BackButton w={props.w} />
       <div className="work-head" style={workHead}>
         <div className="work-cover" style={{ ...workCover, width: "13rem" }}><Cover has={props.w.hasCover} id={props.w.id} title={props.w.title} /></div>
         <div style={workMeta}>
           <h2 style={workTitle}>{props.w.title}</h2>
           <GenreChips genres={props.w.genres} />
-          <p style={muted}>{eps.length} episodes</p>
-          {resumeEp && (
-            <button className="press btnp" style={primaryBtn} onClick={() => props.onPlay(resumeEp.id)}>
-              <span style={{ display: "inline-flex", gap: "0.45rem", alignItems: "center" }}>
-                <IconPlay size={14} /> Continue S{resumeEp.seasonNum}E{resumeEp.episodeNum}
-              </span>
-            </button>
+          <p style={muted}>{eps.length} {eps.length === 1 ? "episode" : "episodes"}</p>
+          {nextEp && (
+            <div className="work-actions">
+              <button className="press btnp" style={primaryBtn} onClick={() => props.onPlay(nextEp.id)}>
+                <IconPlay size={14} /> {playLabel} S{nextEp.seasonNum}E{nextEp.episodeNum}
+              </button>
+            </div>
           )}
         </div>
       </div>
@@ -281,16 +284,31 @@ function TrackList(props: { w: WorkDetail; sessionToken: string }) {
     }
   }, [idx]);
 
+  const resumeIndex = tracks.findIndex((t) => !!t.position && t.position > 0 && !t.isFinished);
+  const startIndex = resumeIndex >= 0 ? resumeIndex : 0;
+  const startOffset = resumeIndex >= 0 ? tracks[resumeIndex].position || 0 : 0;
+  const playTrack = (i: number, offset = i === startIndex ? startOffset : 0) => {
+    if (ctl.current) ctl.current.playAt(i, offset);
+    else requested.current = { index: i, offset };
+    setIdx(i);
+  };
 
   return (
     <Wash id={props.w.id} has={!!props.w.hasCover} fanart={props.w.hasFanart}>
-      <BackButton />
+      <BackButton w={props.w} />
       <div className="work-head" style={workHead}>
         <div className="work-cover" style={{ ...workCover, width: "13rem" }}><Cover has={props.w.hasCover} id={props.w.id} title={props.w.title} ratio="square" /></div>
         <div style={workMeta}>
           <h2 style={workTitle}>{props.w.title}</h2>
-          <p style={muted}>{props.w.author} · {tracks.length} tracks</p>
+          <p style={muted}>{[props.w.author, `${tracks.length} ${tracks.length === 1 ? "track" : "tracks"}`].filter(Boolean).join(" · ")}</p>
           <GenreChips genres={props.w.genres} />
+          {tracks.length > 0 && (
+            <div className="work-actions">
+              <button className="press btnp" style={primaryBtn} onClick={() => playTrack(startIndex)}>
+                <IconPlay size={14} /> {startOffset > 0 ? "Resume" : "Play"}
+              </button>
+            </div>
+          )}
         </div>
       </div>
       <div style={chapterList}>
@@ -299,11 +317,7 @@ function TrackList(props: { w: WorkDetail; sessionToken: string }) {
           const off = t.position && !t.isFinished ? t.position : 0;
           return (
           <div key={t.id} style={{ display: "flex", alignItems: "center", gap: "0.35rem", borderBottom: `1px solid ${c.lineSoft}` }}>
-            <button className="row-hit" style={{ ...chapterRow, width: "auto", flex: 1, minWidth: 0, borderBottom: "none", color: t.isFinished ? c.faint : i === idx ? c.text : c.textDim }} onClick={() => {
-              if (ctl.current) ctl.current.playAt(i, off);
-              else requested.current = { index: i, offset: off };
-              setIdx(i);
-            }}>
+            <button className="row-hit" style={{ ...chapterRow, width: "auto", flex: 1, minWidth: 0, borderBottom: "none", color: t.isFinished ? c.faint : i === idx ? c.text : c.textDim }} onClick={() => playTrack(i, off)}>
               <span style={{ display: "flex", gap: "0.7rem", alignItems: "baseline", minWidth: 0 }}>
                 <span style={{ color: c.faint, fontVariantNumeric: "tabular-nums" }}>{i + 1}.</span>
                 <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.title}</span>
@@ -409,7 +423,7 @@ function EditionsView(props: { w: WorkDetail; editionId: number; setEdition: (id
 
   return (
     <Wash id={w.id} has={!!w.hasCover} fanart={w.hasFanart}>
-      <BackButton />
+      <BackButton w={w} />
       <div className="work-head" style={workHead}>
         <div className="work-cover" style={{ ...workCover, width: "13rem" }}><Cover has={w.hasCover} id={w.id} title={w.title} progress={ed.position && ed.duration ? ed.position / ed.duration : rp?.pct} /></div>
         <div style={workMeta}>
@@ -436,30 +450,26 @@ function EditionsView(props: { w: WorkDetail; editionId: number; setEdition: (id
               );
             })}
           </div>
-          <EditionMenu w={w} edition={ed} isAdmin={props.isAdmin} reload={props.reload} />
-          {(ed.format === "m4b" || ed.format === "mp3" || ed.format === "audio") && <AddToPlaylist editionId={ed.id} />}
-          {playable ? (
-            <button className="press btnp" style={primaryBtn} onClick={resumeOrPlay}>
-              <span style={{ display: "inline-flex", gap: "0.45rem", alignItems: "center" }}>
+          {!playable && !readable && <p style={muted}>{formatLabel(ed.format)} edition · in-app reading not available yet</p>}
+          <div className="work-actions">
+            {playable && (
+              <button className="press btnp" style={{ ...primaryBtn, alignSelf: "center" }} onClick={resumeOrPlay}>
                 <IconPlay size={14} />
                 {inProgress ? `Resume · ${fmt(ed.duration - (ed.position || 0))} left` : ed.isFinished ? "Listen again" : "Listen"}
-              </span>
-            </button>
-          ) : readable ? (
-            <div style={{ display: "flex", gap: "0.6rem", alignItems: "center", flexWrap: "wrap" }}>
-              <button className="press btnp" style={primaryBtn} onClick={() => { location.hash = `#/read?edition=${ed.id}&id=${w.id}`; }}>
-                <span style={{ display: "inline-flex", gap: "0.45rem", alignItems: "center" }}>
-                  <IconBook size={14} />
-                  {ed.isFinished ? "Read again" : rp && rp.pct > 0 ? `Resume · ${rp.label}` : "Read"}
-                </span>
               </button>
-              {ed.format.toLowerCase() === "pdf" && (
-                <a style={{ ...ghostBtn, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: "0.4rem" }} href={media(`/editions/${ed.id}/download`)} download>Download</a>
-              )}
-            </div>
-          ) : (
-            <p style={muted}>{formatLabel(ed.format)} edition · in-app reading not available yet</p>
-          )}
+            )}
+            {readable && (
+              <button className="press btnp" style={{ ...primaryBtn, alignSelf: "center" }} onClick={() => { location.hash = `#/read?edition=${ed.id}&id=${w.id}`; }}>
+                <IconBook size={14} />
+                {ed.isFinished ? "Read again" : rp && rp.pct > 0 ? `Resume · ${rp.label}` : "Read"}
+              </button>
+            )}
+            {readable && ed.format.toLowerCase() === "pdf" && (
+              <a className="press" style={{ ...ghostBtn, textDecoration: "none", boxSizing: "border-box" }} href={media(`/editions/${ed.id}/download`)} download>Download</a>
+            )}
+            {(ed.format === "m4b" || ed.format === "mp3" || ed.format === "audio") && <AddToPlaylist editionId={ed.id} />}
+            <EditionMenu w={w} edition={ed} isAdmin={props.isAdmin} reload={props.reload} />
+          </div>
           {ed.isFinished && <p style={{ ...muted, color: c.ok, display: "flex", gap: "0.35rem", alignItems: "center" }}><IconCheck size={13} /> Finished</p>}
         </div>
       </div>
@@ -648,7 +658,7 @@ function AddToPlaylist(props: { editionId: number; compact?: boolean }) {
   return (
     <div ref={wrapRef} style={{ position: "relative" }}>
       <button type="button" style={{ ...btnStyle, borderColor: c.accent }} onClick={() => setOpen(false)}>+ Playlist</button>
-      <div style={{ ...menuCard, left: "auto", right: 0 }}>
+      <div style={props.compact ? { ...menuCard, left: "auto", right: 0 } : menuCard}>
         {added ? (
           <p style={{ ...muted, margin: 0 }}>{added}</p>
         ) : (

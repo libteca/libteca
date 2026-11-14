@@ -24,7 +24,7 @@ type Dependencies = {
   identity: () => Identity;
   request: (path: string, opts?: RequestInit) => Promise<any>;
   lock: <T>(name: string, action: (owns?: () => boolean) => Promise<T>) => Promise<T>;
-  warn: (message: string) => void;
+  warn: (message: string, retryable?: boolean) => void;
 };
 const prefix = "libteca-media-v1:";
 const validNumber = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n) && n >= 0;
@@ -73,7 +73,7 @@ export class DurableMediaQueue {
     if (s.ownerId !== identity.ownerId || s.kind !== target.kind || s.targetId !== target.id ||
       !s.generation || !Number.isSafeInteger(s.revision) || s.revision < 0 ||
       !Number.isSafeInteger(s.resetGeneration) || s.resetGeneration < 0 || !Array.isArray(s.files)) throw new Error("Invalid media progress snapshot");
-    if (s.resumeConflict) this.deps.warn("Saved progress refers to changed media. Make a deliberate seek to choose a new starting point.");
+    if (s.resumeConflict) this.deps.warn("Saved progress refers to changed media. Make a deliberate seek to choose a new starting point.", false);
     this.bases.set(this.key(identity, path), s);
     try { this.deps.storage().setItem(`${prefix}base:${s.ownerId}:${s.kind}:${s.targetId}`, JSON.stringify(s)); } catch {}
     return s;
@@ -85,7 +85,7 @@ export class DurableMediaQueue {
       generation: edition.generation, revision: edition.revision!, resetGeneration: edition.resetGeneration!,
       resumeConflict: edition.resumeConflict, position: edition.position ?? 0, finished: !!edition.isFinished, deleted: !!edition.deleted,
       files: edition.files.map(f => ({id:f.id,duration:f.duration,missing:false})) };
-    if (snapshot.resumeConflict) this.deps.warn("Saved progress refers to changed media. Make a deliberate seek to choose a new starting point.");
+    if (snapshot.resumeConflict) this.deps.warn("Saved progress refers to changed media. Make a deliberate seek to choose a new starting point.", false);
     this.bases.set(this.key(identity, `/progress/${edition.id}`), snapshot);
     try { this.deps.storage().setItem(`${prefix}base:${identity.ownerId}:edition:${edition.id}`, JSON.stringify(snapshot)); } catch {}
   }
@@ -133,7 +133,7 @@ export class DurableMediaQueue {
       try { predecessorQuarantined = !!chain.predecessorId && !!this.deps.storage().getItem(`${prefix}quarantine:${prefix}op:${identity.ownerId}:${chain.predecessorId}`); } catch {}
       if (predecessorQuarantined) {
         if (patch.mediaIntent !== "seek" && patch.mediaIntent !== "restart" && patch.mediaIntent !== "reset") {
-          this.deps.warn("Progress has a conflict. Make a deliberate seek to save a new position.");
+          this.deps.warn("Progress has a conflict. Make a deliberate seek to save a new position.", false);
           return { quarantined: true };
         }
         base = await this.snapshot(identity, path);
@@ -183,7 +183,7 @@ export class DurableMediaQueue {
       }
       if (base.resumeConflict && !["seek", "restart", "reset"].includes(intent)) {
         this.deps.storage().setItem(`${prefix}quarantine:${prefix}op:${operation.ownerId}:${operation.operationId}`, "Saved progress refers to changed media");
-        this.deps.warn("Saved progress refers to changed media. Make a deliberate seek to save a new position.");
+        this.deps.warn("Saved progress refers to changed media. Make a deliberate seek to save a new position.", false);
       } else if (base.resumeConflict) { base.resumeConflict = false; }
       chain.sequence = operation.sequence;
       chain.predecessorId = operation.operationId;
@@ -278,17 +278,21 @@ export class DurableMediaQueue {
 
 }
 
-function showProblem(message: string) {
+function showProblem(message: string, retryable = true) {
   if (typeof document === "undefined") return;
   let panel = document.getElementById("libteca-media-progress-status");
   if (!panel) {
     panel = document.createElement("div"); panel.id = "libteca-media-progress-status"; panel.setAttribute("role", "alert");
-    Object.assign(panel.style, { position: "fixed", bottom: "8rem", right: "1rem", maxWidth: "26rem", padding: "1rem", background: "#18191c", color: "#f5f5f7", border: "1px solid #444", borderRadius: "12px", zIndex: "100" });
+    panel.className = "notice notice-corner";
     document.body.append(panel);
   }
-  panel.textContent = message;
-  const retry = document.createElement("button"); retry.textContent = "Retry saved progress"; retry.onclick = () => { void mediaProgress.replay(); }; panel.append(retry);
-  const close = document.createElement("button"); close.textContent = "Dismiss"; close.onclick = () => panel?.remove(); panel.append(close);
+  panel.textContent = "";
+  const text = document.createElement("p"); text.className = "notice-msg"; text.textContent = message; panel.append(text);
+  const actions = document.createElement("div"); actions.className = "notice-actions"; panel.append(actions);
+  if (retryable) {
+    const retry = document.createElement("button"); retry.type = "button"; retry.className = "notice-btn primary"; retry.textContent = "Retry saved progress"; retry.onclick = () => { void mediaProgress.replay(); }; actions.append(retry);
+  }
+  const close = document.createElement("button"); close.type = "button"; close.className = "notice-btn"; close.textContent = "Dismiss"; close.onclick = () => panel?.remove(); actions.append(close);
 }
 async function transport(path: string, opts: RequestInit = {}) {
   const controller = new AbortController();

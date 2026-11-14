@@ -34,7 +34,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 @keyframes libteca-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 @keyframes libteca-spin { to { transform: rotate(360deg); } }
 
-.anim-page { animation: libteca-enter 180ms var(--ease) both; }
+.anim-page { animation: libteca-enter 180ms var(--ease) backwards; }
 .anim-fade { animation: libteca-fade 180ms ease both; }
 .anim-slide-up { animation: libteca-slide-up 240ms var(--ease) both; }
 .anim-pop { animation: libteca-pop 200ms var(--ease) both; }

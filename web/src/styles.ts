@@ -34,6 +34,7 @@ export const page: CSSProperties = {
   padding: 0,
   lineHeight: 1.45,
   WebkitFontSmoothing: "antialiased",
+  overflowX: "clip",
 };
 
 export const content: CSSProperties = {
@@ -172,7 +173,8 @@ export const input: CSSProperties = {
   background: c.bg,
   color: c.text,
   minWidth: 0,
-  minHeight: "38px",
+  minHeight: "40px",
+  boxSizing: "border-box",
 };
 
 export const primaryBtn: CSSProperties = {
@@ -188,6 +190,8 @@ export const primaryBtn: CSSProperties = {
   alignSelf: "flex-start",
   fontFamily: font,
   minHeight: "36px",
+  boxSizing: "border-box",
+  textDecoration: "none",
   display: "inline-flex",
   alignItems: "center",
   justifyContent: "center",
@@ -204,6 +208,7 @@ export const ghostBtn: CSSProperties = {
   color: c.textDim,
   fontFamily: font,
   minHeight: "36px",
+  boxSizing: "border-box",
   display: "inline-flex",
   alignItems: "center",
   justifyContent: "center",
@@ -370,6 +375,7 @@ export const backLink: CSSProperties = {
   fontFamily: font,
   padding: "0.2rem 0.15rem",
   minHeight: "36px",
+  boxSizing: "border-box",
   borderRadius: "8px",
 };
 
@@ -814,11 +820,62 @@ input[type="range"].seek::-moz-range-thumb {
 nav a svg { flex-shrink: 0; }
 @media (max-width: 1024px) { .nav-cat { display: none; } nav a { padding: 0.42rem 0.55rem; } }
 @media (max-width: 760px) {
-  .topbar { flex-wrap: wrap; height: auto; padding: 0.5rem 1rem; }
-  .topbar nav { flex-grow: 1; }
-  .topbar > div:first-of-type { min-width: 6rem !important; }
+  .topbar { flex-wrap: wrap; height: auto; padding: 0.3rem 1rem 0; gap: 0 0.5rem; }
+  .topbar > a:first-child { order: 1; }
+  .topbar-search { order: 2; flex: 1 1 6rem !important; max-width: none !important; min-width: 6rem !important; }
+  .topbar-user { order: 3; margin-left: 0 !important; }
+  .topbar nav {
+    order: 4; flex: 1 0 100%; min-width: 0;
+    margin: 0 -1rem; padding: 0 0.55rem 0.3rem;
+    overflow-x: auto; scrollbar-width: none;
+  }
+  .topbar nav::-webkit-scrollbar { display: none; }
+  .topbar nav a { flex-shrink: 0; }
+  .nav-cat { display: inline; }
   .rail-nav { opacity: 1; }
 }
+
+.work-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.55rem; margin-top: 0.35rem; }
+
+.notice {
+  box-sizing: border-box;
+  display: flex; flex-direction: column; gap: 0.8rem;
+  width: min(26rem, calc(100vw - 2rem));
+  padding: 1rem 1.1rem;
+  background: rgba(20,21,24,0.94); color: #f5f5f7;
+  border: 1px solid #26282d; border-left: 2px solid #ffb340; border-radius: 14px;
+  box-shadow: 0 18px 44px rgba(0,0,0,0.5);
+  backdrop-filter: blur(18px) saturate(160%); -webkit-backdrop-filter: blur(18px) saturate(160%);
+  font-family: system-ui, -apple-system, 'SF Pro Text', 'Segoe UI', sans-serif;
+  font-size: 0.88rem; line-height: 1.5; letter-spacing: -0.01em;
+  animation: libteca-toast-in 240ms var(--ease, ease) both;
+}
+.notice-msg { margin: 0; overflow-wrap: anywhere; }
+.notice-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.notice-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: 36px; padding: 0.4rem 0.95rem; border-radius: 980px;
+  background: none; border: 1px solid #26282d; color: #c7c9ce;
+  font: inherit; font-size: 0.84rem; cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+.notice-btn:hover { background: rgba(255,255,255,0.05); border-color: #3a3d45; color: #f5f5f7; }
+.notice-btn.primary { background: #0a84ff; border-color: #0a84ff; color: #fff; font-weight: 600; }
+.notice-btn.primary:hover { background: #2b95ff; border-color: #2b95ff; }
+.notice-top, .notice-bottom { position: fixed; left: 50%; transform: translateX(-50%); z-index: 90; animation: none; }
+.notice-top { top: calc(1rem + env(safe-area-inset-top)); }
+.notice-bottom { bottom: calc(1.4rem + env(safe-area-inset-bottom)); }
+.notice-corner { position: fixed; right: 1.4rem; bottom: calc(1.4rem + env(safe-area-inset-bottom)); z-index: 90; }
+body:has(.player-bar) .notice-corner { bottom: calc(7.5rem + env(safe-area-inset-bottom)); }
+.notice-screen-wrap { display: flex; justify-content: center; padding: 18vh 0 4rem; }
+@media (max-width: 640px) {
+  .notice-corner, body:has(.player-bar) .notice-corner {
+    right: 50%; transform: translateX(50%); animation: none;
+    top: calc(0.75rem + env(safe-area-inset-top)); bottom: auto;
+  }
+}
+@media (prefers-reduced-motion: reduce) { .notice { animation: none; } }
+
 
 @media (max-width: 640px) {
   input.seek { flex-basis: 100% !important; }

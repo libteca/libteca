@@ -217,7 +217,7 @@ function PlaylistList() {
         )}
       <form style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap", marginTop: "2.4rem", alignItems: "center" }} onSubmit={create}>
         <input style={{ ...input, flex: 1, minWidth: "12rem" }} placeholder="New playlist name" value={name} onInput={(e) => setName((e.target as HTMLInputElement).value)} />
-        <button className="press btnp" style={primaryBtn} type="submit" disabled={busy}>{busy ? "Creating…" : "Create"}</button>
+        <button className="press btnp" style={{ ...primaryBtn, alignSelf: "center", minHeight: "40px" }} type="submit" disabled={busy}>{busy ? "Creating…" : "Create"}</button>
       </form>
       {err && <p style={errStyle}>{err}</p>}
     </div>

@@ -134,7 +134,7 @@ export function PodcastsView() {
 
       <form style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap", marginTop: "2.4rem", alignItems: "center" }} onSubmit={subscribe}>
         <input style={{ ...input, flex: 1, minWidth: "14rem" }} type="url" required placeholder="https://example.com/feed.xml" value={feedUrl} onInput={(e) => setFeedUrl((e.target as HTMLInputElement).value)} />
-        <button className="press btnp" style={primaryBtn} type="submit" disabled={busy}>{busy ? "Subscribing…" : "Subscribe"}</button>
+        <button className="press btnp" style={{ ...primaryBtn, alignSelf: "center", minHeight: "40px" }} type="submit" disabled={busy}>{busy ? "Subscribing…" : "Subscribe"}</button>
       </form>
       {err && <p style={errStyle}>{err}</p>}
 

@@ -5,6 +5,7 @@ import { fmtClock } from "../util";
 import { c, mono, playerBar } from "../styles";
 import { toast } from "../toast";
 import { IconBack30, IconFwd30, IconHeadphones, IconMoon, IconPause, IconPlay } from "../components/svg";
+import { Notice } from "../components/notice";
 
 export type PlayerFile = { id: number; title: string; duration: number; generation?: string };
 
@@ -235,7 +236,7 @@ function AudioQueuePlayer(props: AudioPlayerProps) {
   const pct = total > 0 ? Math.min(100, (abs / total) * 100) : 0;
   const bufPct = total > 0 ? Math.max(pct, Math.min(100, (bufAbs / total) * 100)) : 0;
 
-  if (streamError) return <div role="alert">Audio could not be opened. Its timeline may have changed.<button onClick={() => location.reload()}>Reload current media</button></div>;
+  if (streamError) return <Notice placement="bottom" message="Audio could not be opened. Its timeline may have changed." actions={[{ label: "Reload current media", primary: true, onClick: () => location.reload() }]} />;
   return (
     <div className="player-bar" style={{
       ...playerBar,

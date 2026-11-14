@@ -4,7 +4,8 @@ export function fmt(secs: number) {
   const m = Math.floor((secs % 3600) / 60);
   const s = Math.floor(secs % 60);
   if (h > 0) return `${h}h ${m}m`;
-  return `${m}m ${s}s`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
 }
 
 export function fmtClock(secs: number) {

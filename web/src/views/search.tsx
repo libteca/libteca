@@ -93,7 +93,7 @@ export function SearchBox() {
   };
 
   return (
-    <div ref={boxRef} style={{ position: "relative", flex: "1 1 11rem", maxWidth: "22rem", minWidth: "7.5rem" }}>
+    <div ref={boxRef} className="topbar-search" style={{ position: "relative", flex: "1 1 11rem", maxWidth: "22rem", minWidth: "7.5rem" }}>
       <div className="search-wrap">
         <span style={{ color: c.muted, display: "inline-flex" }}><IconSearch size={14} /></span>
         <input

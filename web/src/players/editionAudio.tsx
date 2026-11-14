@@ -2,6 +2,7 @@ import { toast } from "../toast";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { media, type EditionDetail } from "../api";
 import { AudioProgressSaver } from "./audioProgress";
+import { Notice } from "../components/notice";
 
 type EditionAudioProps = {
   edition: EditionDetail;
@@ -55,8 +56,8 @@ export function EditionAudio(props: EditionAudioProps) {
     props.seekRef.current = seek;
     return () => { if (props.seekRef.current === seek) props.seekRef.current = null; };
   });
-  if (streamError) return <div role="alert">Audio could not be opened. Its timeline may have changed.<button onClick={() => location.reload()}>Reload current media</button></div>;
-  if (resumeBlocked) return <div role="alert">Saved progress refers to changed media. Choose a new starting point.<button onClick={() => { setCurrent({ index: 0, offset: 0, version: ++fileVersion.current }); save(0, false, true); setResumeBlocked(false); }}>Start from beginning</button></div>;
+  if (streamError) return <Notice placement="bottom" message="Audio could not be opened. Its timeline may have changed." actions={[{ label: "Reload current media", primary: true, onClick: () => location.reload() }]} />;
+  if (resumeBlocked) return <Notice placement="bottom" message="Saved progress refers to changed media. Choose a new starting point." actions={[{ label: "Start from beginning", primary: true, onClick: () => { setCurrent({ index: 0, offset: 0, version: ++fileVersion.current }); save(0, false, true); setResumeBlocked(false); } }]} />;
   if (!files[current.index]) return null;
   return <EditionAudioFile
     key={`${current.index}:${files[current.index].id}:${current.version}`}

@@ -225,7 +225,7 @@ export function MatchingView() {
 
   return (
     <div>
-      <button className="press" style={backLink} onClick={() => history.back()}><IconChevronLeft size={16} /> Admin</button>
+      <a className="press" style={backLink} href="#/admin"><IconChevronLeft size={16} /> Admin</a>
       <h2 style={sectionTitle}>Metadata inbox</h2>
       {!loaded ? (
         <QuietLoad />

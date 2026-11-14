@@ -6,6 +6,7 @@ import { fmtClock } from "../util";
 import { createMediaTimeline, resolveEditionPosition, resolveEndedFile, resolveFilePosition } from "../contracts/mediaTimeline";
 import { VideoProgressSaver } from "./videoProgress";
 import { c, ghostBtn, muted } from "../styles";
+import { Notice } from "../components/notice";
 import {
   IconBack30, IconCC, IconChevronLeft, IconChevronRight, IconFwd30, IconFullscreen,
   IconPause, IconPlay, IconSpinner, IconVolume, IconVolumeOff,
@@ -61,7 +62,7 @@ type VideoPlayerProps = {
 
 export function VideoPlayer(props: VideoPlayerProps) {
   const edition = props.w.editions.find((e) => e.id === props.editionId);
-  if (edition?.available === false || edition?.files.length === 0) return <div role="alert">{edition.unavailableReason ?? "This edition has no available media files"}<button onClick={props.onClose}>Close</button></div>;
+  if (edition?.available === false || edition?.files.length === 0) return <Notice message={edition.unavailableReason ?? "This edition has no available media files"} actions={[{ label: "Close", onClick: props.onClose }]} />;
   if (edition?.generation) return <TimelineVideoPlayer key={`${edition.id}:${edition.generation}`} {...props} />;
   const fileId = props.w.editions.find((edition) => edition.id === props.editionId)?.files[0]?.id ?? 0;
   return <VideoPlayerSession key={`${props.editionId}:${fileId}`} {...props} />;
@@ -94,11 +95,11 @@ function TimelineVideoPlayer(props: VideoPlayerProps) {
   });
   const [problem,setProblem] = useState("");
   const [resumeBlocked, setResumeBlocked] = useState(!!edition.resumeConflict);
-  if (resumeBlocked) return <div role="alert">Saved progress refers to changed media. Choose a new starting point.<button onClick={() => { void shared.current!.save(0, false, true); setPosition(resolveFilePosition(timeline,timeline.generation,timeline.files[0].fileId,0)); setResumeBlocked(false); }}>Start from beginning</button><button onClick={props.onClose}>Close</button></div>;
+  if (resumeBlocked) return <Notice message="Saved progress refers to changed media. Choose a new starting point." actions={[{ label: "Start from beginning", primary: true, onClick: () => { void shared.current!.save(0, false, true); setPosition(resolveFilePosition(timeline,timeline.generation,timeline.files[0].fileId,0)); setResumeBlocked(false); } }, { label: "Close", onClick: props.onClose }]} />;
   const selected = edition.files.find((f) => f.id === position.fileId)!;
   const timelineFile = timeline.files.find((f) => f.fileId === position.fileId)!;
   const start = timelineFile.startSecs;
-  if (start === null) return <div role="alert">This part has no known timeline offset. Rescan the edition before playing it.<button onClick={props.onClose}>Close</button></div>;
+  if (start === null) return <Notice message="This part has no known timeline offset. Rescan the edition before playing it." actions={[{ label: "Close", onClick: props.onClose }]} />;
   const detail = { ...edition, position: position.fileOffsetSecs, files: [selected], chapters: edition.chapters };
   const w = { ...props.w, editions: props.w.editions.map((e) => e.id === edition.id ? detail : e) };
   const seek = (n: number) => {
@@ -106,7 +107,7 @@ function TimelineVideoPlayer(props: VideoPlayerProps) {
     catch { setProblem("That position needs a known duration. Rescan the edition before seeking there."); }
   };
   return <>
-    {problem && <div role="alert">{problem}</div>}
+    {problem && <Notice placement="top" message={problem} actions={[{ label: "Dismiss", onClick: () => setProblem("") }]} />}
     <VideoPlayerSession key={`${edition.id}:${timeline.generation}:${selected.id}:${version.current}`} {...props} w={w}
       localProgress={new Map([[edition.id,{position:position.fileOffsetSecs,isFinished:false}]])}
       timelineContext={{ generation:timeline.generation,start,total:timeline.totalDurationSecs ?? 0,saver:shared.current!,onSeek:seek,onEnded:() => {

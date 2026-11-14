@@ -152,7 +152,7 @@ export function App() {
               const icon = { movies: <IconFilm size={13} />, tv: <IconTv size={13} />, music: <IconMusic size={13} />, audiobooks: <IconHeadphones size={13} />, books: <IconBook size={13} />, comics: <IconComic size={13} /> }[t];
               const on = view.name === "library" && view.type === t;
               return (
-                <a key={t} href={`#/library?type=${t}`} style={navItem(on)} aria-current={on ? "page" : undefined}>
+                <a key={t} href={`#/library?type=${t}`} style={navItem(on)} title={typeLabel(t)} aria-label={typeLabel(t)} aria-current={on ? "page" : undefined}>
                   {icon}<span className="nav-cat">{typeLabel(t)}</span>
                 </a>
               );
@@ -160,7 +160,7 @@ export function App() {
             <a href="#/podcasts" style={navItem(view.name === "podcasts")} aria-current={view.name === "podcasts" ? "page" : undefined}>Podcasts</a>
           </nav>
           <SearchBox />
-          <div ref={menuRef} style={{ marginLeft: "auto", flexShrink: 0, position: "relative" }}>
+          <div ref={menuRef} className="topbar-user" style={{ marginLeft: "auto", flexShrink: 0, position: "relative" }}>
             <button
               className="press"
               style={{ ...linkBtn, whiteSpace: "nowrap" }}
@@ -196,7 +196,7 @@ export function App() {
           </div>
         </div>
       </header>
-      <div key={JSON.stringify(view)} className="anim-page pagecontent" style={content}>
+      <div key={JSON.stringify(view)} className={view.name === "read" ? "pagecontent" : "anim-page pagecontent"} style={content}>
         {view.name === "home" && <Home />}
         {view.name === "library" && <LibraryView lib={view.lib} type={view.type} />}
         {view.name === "work" && view.id != null && <WorkView id={view.id} />}

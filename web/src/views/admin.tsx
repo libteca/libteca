@@ -168,7 +168,7 @@ export function AdminView() {
 
   return (
     <div>
-      <button className="press" style={backLink} onClick={() => history.back()}><IconChevronLeft size={16} /> Library</button>
+      <a className="press" style={backLink} href="#/home"><IconChevronLeft size={16} /> Home</a>
       <h2 style={sectionTitle}>Admin</h2>
 
       <div style={adminStack}>
@@ -259,6 +259,7 @@ function AdminLibRow(props: { lib: Library; onRemoved: () => void }) {
 function ScanJobs(props: { libs: Library[] }) {
   const [jobs, setJobs] = useState<JobRow[]>([]);
   const [open, setOpen] = useState(true);
+  const [all, setAll] = useState(false);
 
   const load = () => {
     Promise.all(props.libs.map((l) =>
@@ -295,7 +296,7 @@ function ScanJobs(props: { libs: Library[] }) {
               </tr>
             </thead>
             <tbody>
-              {jobs.slice(0, 30).map((j) => {
+              {jobs.slice(0, all ? 30 : ROW_PREVIEW).map((j) => {
                 const tone = j.status === "done" ? c.ok : j.status === "error" ? c.danger : j.status === "running" ? c.accent : c.muted;
                 return (
                   <tr key={j.id} className="row-hit">
@@ -315,7 +316,19 @@ function ScanJobs(props: { libs: Library[] }) {
           </table>
         </FadeScroll>
       )}
+      <ShowAll total={Math.min(jobs.length, 30)} all={all} onToggle={() => setAll(!all)} noun="jobs" />
     </section>
+  );
+}
+
+const ROW_PREVIEW = 8;
+
+function ShowAll(props: { total: number; all: boolean; onToggle: () => void; noun: string }) {
+  if (props.total <= ROW_PREVIEW) return null;
+  return (
+    <button className="press" style={{ ...ghostBtn, marginTop: "0.8rem" }} type="button" aria-expanded={props.all} onClick={props.onToggle}>
+      {props.all ? `Show fewer ${props.noun}` : `Show all ${props.total} ${props.noun}`}
+    </button>
   );
 }
 
@@ -563,6 +576,7 @@ function TokensSection(props: { users: AdminUser[] }) {
   const [issued, setIssued] = useState("");
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
+  const [all, setAll] = useState(false);
 
   const load = () => api("/tokens").then((r: TokenRow[]) => setRows(Array.isArray(r) ? r : [])).catch(() => setRows([]));
   useEffect(() => { load(); }, []);
@@ -597,11 +611,15 @@ function TokensSection(props: { users: AdminUser[] }) {
   };
 
   const nameOf = (id: number) => props.users.find((u) => u.id === id)?.name || `#${id}`;
+  const ordered = [...rows].sort((a, b) =>
+    (a.revokedAtMs ? 1 : 0) - (b.revokedAtMs ? 1 : 0)
+    || (b.lastSeenAtMs || b.createdAtMs || 0) - (a.lastSeenAtMs || a.createdAtMs || 0));
+  const active = rows.filter((t) => !t.revokedAtMs).length;
 
   return (
     <section className="admin-panel" style={sectionPanel}>
       <div style={panelHead}>
-        <h3 style={headTitle}>Tokens</h3>
+        <h3 style={headTitle}>Tokens{rows.length > 0 && <span style={{ ...muted, fontWeight: 400, marginLeft: "0.6rem" }}>{active} active</span>}</h3>
         <button className="press" style={ghostBtn} onClick={load}>Refresh</button>
       </div>
       {rows.length === 0 ? (
@@ -620,9 +638,9 @@ function TokensSection(props: { users: AdminUser[] }) {
               </tr>
             </thead>
             <tbody>
-              {rows.map((t) => (
+              {(all ? ordered : ordered.slice(0, ROW_PREVIEW)).map((t) => (
                 <tr key={t.id} className="row-hit">
-                  <td style={{ ...tdA, color: c.text }}>{t.label}</td>
+                  <td style={{ ...tdA, color: c.text, maxWidth: "22rem", overflow: "hidden", textOverflow: "ellipsis" }} title={t.label}>{t.label}</td>
                   <td style={tdA}>{nameOf(t.userId)}</td>
                   <td style={tdNum}>{fmtRel(t.createdAtMs) || "—"}</td>
                   <td style={tdNum}>{fmtRel(t.lastSeenAtMs) || "—"}</td>
@@ -638,6 +656,7 @@ function TokensSection(props: { users: AdminUser[] }) {
           </table>
         </FadeScroll>
       )}
+      <ShowAll total={rows.length} all={all} onToggle={() => setAll(!all)} noun="tokens" />
 
       <form style={adminForm} onSubmit={create}>
         <Field label="Label">
