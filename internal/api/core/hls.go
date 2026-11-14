@@ -3,6 +3,7 @@ package core
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"net/http"
 	"net/url"
@@ -123,6 +124,7 @@ func (a *API) editionThumbs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
+		slog.Warn("libteca: trickplay manifest failed", "item", itemID, "err", err)
 		writeJSON(w, 500, map[string]string{"error": "thumbs unavailable"})
 		return
 	}

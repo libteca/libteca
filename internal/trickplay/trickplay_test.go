@@ -236,3 +236,16 @@ func TestFFmpegIntegration(t *testing.T) {
 		t.Fatalf("beyond set: err = %v, want ErrNotFound", err)
 	}
 }
+
+func TestItemIDAcceptsGenerationScopedIDs(t *testing.T) {
+	for _, id := range []string{"e12", "f43-34-1"} {
+		if !reItemID.MatchString(id) {
+			t.Fatalf("item id %q rejected", id)
+		}
+	}
+	for _, id := range []string{"", "-f1", "f1-", "f1--2", "../e1", "e1/2", "e 1", "e1.2"} {
+		if reItemID.MatchString(id) {
+			t.Fatalf("item id %q accepted", id)
+		}
+	}
+}

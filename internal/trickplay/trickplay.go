@@ -96,7 +96,7 @@ func ffmpegRun(ctx context.Context, name string, files []*os.File, args ...strin
 	return cmd.CombinedOutput()
 }
 
-var reItemID = regexp.MustCompile(`^[A-Za-z0-9]+$`)
+var reItemID = regexp.MustCompile(`^[A-Za-z0-9]+(-[A-Za-z0-9]+)*$`)
 
 // ParseTileName maps a URL filename like "3.jpg" to its 0-based sheet index.
 // corpus: real Jellyfin tile index base (0 vs 1) unverified
