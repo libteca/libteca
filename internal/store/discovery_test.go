@@ -507,3 +507,32 @@ func TestWorksInLibraryFilteredPagination(t *testing.T) {
 		t.Fatalf("zero limit = %v, want all 5", got)
 	}
 }
+
+func TestResumeItemsSkipsUnstartedAndPlayedOut(t *testing.T) {
+	db := openTestDB(t)
+	user := addUser(t, db)
+	lib, _ := db.AddLibrary("movies", "movies", t.TempDir())
+
+	unstarted := addWork(t, db, lib, "Unstarted", nil, 1, 1)
+	addProgress(t, db, user, addEdition(t, db, unstarted, "Unstarted", fltp(100)), 0, fltp(100), false, 10)
+
+	playedOut := addWork(t, db, lib, "Played out", nil, 2, 2)
+	addProgress(t, db, user, addEdition(t, db, playedOut, "Played out", fltp(100)), 100, fltp(100), false, 20)
+
+	mixed := addWork(t, db, lib, "Mixed", nil, 3, 3)
+	live := addEdition(t, db, mixed, "Live", fltp(100))
+	addProgress(t, db, user, live, 30, fltp(100), false, 30)
+	addProgress(t, db, user, addEdition(t, db, mixed, "Touched", fltp(100)), 0, fltp(100), false, 40)
+
+	unknown := addWork(t, db, lib, "Unknown duration", nil, 4, 4)
+	unknownEdition := addEdition(t, db, unknown, "Unknown duration", nil)
+	addProgress(t, db, user, unknownEdition, 12, nil, false, 50)
+
+	items, err := db.ResumeItems(user, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 || items[0].EditionID != unknownEdition || items[1].EditionID != live {
+		t.Fatalf("resume = %+v", items)
+	}
+}

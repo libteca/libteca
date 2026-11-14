@@ -73,7 +73,8 @@ func likeEscape(s string) string {
 
 // ResumeItems returns the authed user's latest in-progress edition per work
 // (max progress.updated_at among not-finished rows on that work's editions),
-// newest first across all libraries.
+// newest first across all libraries. Rows that were never advanced, or whose
+// position already reached the known duration, are not in progress.
 func (d *DB) ResumeItems(userID int64, limit int) ([]ResumeItem, error) {
 	rows, err := d.Query(`SELECT w.id, e.id, w.library_id, l.type, w.title, w.author, w.cover_path,
 		p.edition_position_secs, COALESCE(e.duration_secs, p.duration_secs), p.updated_at,
@@ -87,6 +88,10 @@ func (d *DB) ResumeItems(userID int64, limit int) ([]ResumeItem, error) {
 			SELECT p2.id FROM progress p2
 			JOIN editions e2 ON e2.id = p2.edition_id
 			WHERE p2.user_id = p.user_id AND p2.deleted = 0 AND p2.is_finished = 0 AND e2.work_id = e.work_id
+			  AND (p2.edition_position_secs > 0 OR COALESCE(p2.percent, 0) > 0 OR COALESCE(p2.page, 0) > 0)
+			  AND COALESCE(p2.percent, 0) < 1
+			  AND NOT (COALESCE(e2.duration_secs, p2.duration_secs, 0) > 0
+				AND p2.edition_position_secs >= COALESCE(e2.duration_secs, p2.duration_secs))
 			ORDER BY p2.updated_at DESC, p2.id DESC LIMIT 1
 		  )
 		ORDER BY p.updated_at DESC, p.id DESC
