@@ -102,11 +102,12 @@ function EditionAudioFile(props: {
   const lastPost = useRef(0);
   const callbacks = useRef(props);
   callbacks.current = props;
-  const save = () => {
-    if (!loaded.current || !element.current || ended.current) return;
+  const saveFrom = (audio: HTMLAudioElement | null) => {
+    if (!loaded.current || !audio || ended.current) return;
     lastPost.current = Date.now();
-    callbacks.current.onSave(props.before + element.current.currentTime);
+    callbacks.current.onSave(props.before + audio.currentTime);
   };
+  const save = () => saveFrom(element.current);
   useEffect(() => {
     const audio = element.current!;
     props.audioRef.current = audio;
@@ -117,7 +118,7 @@ function EditionAudioFile(props: {
     return () => {
       active.current = false;
       removeEventListener("pagehide", save);
-      save();
+      saveFrom(audio);
       audio.pause();
       if (props.audioRef.current === audio) props.audioRef.current = null;
     };

@@ -30,13 +30,13 @@ function tokened(url: string) {
   return `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(getToken())}`;
 }
 
-const coverBox: preact.JSX.CSSProperties = {
+const coverBox: preact.CSSProperties = {
   width: "100%", aspectRatio: "1 / 1", borderRadius: "10px", overflow: "hidden",
   boxShadow: c.coverShadow, background: c.bgRaised, display: "flex",
   alignItems: "center", justifyContent: "center", flexShrink: 0,
 };
 
-const letter: preact.JSX.CSSProperties = {
+const letter: preact.CSSProperties = {
   color: c.textDim, fontSize: "2rem", fontWeight: 700,
   fontFamily: "'Iowan Old Style', Georgia, serif",
 };

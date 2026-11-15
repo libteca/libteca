@@ -454,19 +454,19 @@ function IconChapters(p: { size?: number }) {
   );
 }
 
-const barBtn: preact.JSX.CSSProperties = {
+const barBtn: preact.CSSProperties = {
   border: "none", color: c.text, cursor: "pointer",
   display: "inline-flex", alignItems: "center", justifyContent: "center",
   width: "44px", height: "44px", borderRadius: "50%", padding: 0, flexShrink: 0,
 };
 
-const speedPill: preact.JSX.CSSProperties = {
+const speedPill: preact.CSSProperties = {
   height: "30px", minWidth: "46px", padding: "0 0.7rem", borderRadius: "999px",
   color: c.textDim, cursor: "pointer", display: "inline-flex", alignItems: "center",
   justifyContent: "center", flexShrink: 0, fontFamily: mono, fontSize: "0.72rem",
   fontWeight: 600, fontVariantNumeric: "tabular-nums",
 };
 
-const timeTxt: preact.JSX.CSSProperties = {
+const timeTxt: preact.CSSProperties = {
   fontSize: "0.75rem", color: c.muted, fontVariantNumeric: "tabular-nums", flexShrink: 0,
 };
