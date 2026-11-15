@@ -18,7 +18,7 @@ export function OPMLImport(props: { onDone: () => void }) {
   const [error, setError] = useState("");
   const busy = useRef(false);
   const generation = useRef(0);
-  const timer = useRef<ReturnType<typeof setTimeout>>();
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const done = useRef(props.onDone);
   done.current = props.onDone;
 

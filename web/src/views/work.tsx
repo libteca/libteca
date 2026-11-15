@@ -27,7 +27,7 @@ function Description(props: { text: string; maxWidth: string }) {
     const el = ref.current;
     if (el) setClampable(el.scrollHeight - el.clientHeight > 2);
   }, [props.text, open]);
-  const clamp: preact.JSX.CSSProperties = open
+  const clamp: preact.CSSProperties = open
     ? {}
     : { display: "-webkit-box", WebkitLineClamp: 5, WebkitBoxOrient: "vertical", overflow: "hidden" };
   return (
@@ -530,7 +530,7 @@ function IconDots(p: { size?: number }) {
 
 type WorkLite = { id: number; title: string; author: string | null };
 
-const menuCard: preact.JSX.CSSProperties = {
+const menuCard: preact.CSSProperties = {
   position: "absolute", top: "100%", left: 0, marginTop: "0.45rem", zIndex: 50,
   minWidth: "17rem", maxWidth: "22rem", background: c.bgRaised,
   border: `1px solid ${c.line}`, borderRadius: "12px", padding: "0.75rem",
@@ -538,7 +538,7 @@ const menuCard: preact.JSX.CSSProperties = {
   boxShadow: "0 18px 40px rgba(0,0,0,0.5)",
 };
 
-const menuRow: preact.JSX.CSSProperties = {
+const menuRow: preact.CSSProperties = {
   background: "none", border: "none", cursor: "pointer", fontFamily: "inherit",
   color: c.textDim, fontSize: "0.88rem", textAlign: "left", padding: "0.35rem 0.45rem",
   borderRadius: "8px",
@@ -646,7 +646,7 @@ function AddToPlaylist(props: { editionId: number; compact?: boolean }) {
     }
   };
 
-  const btnStyle: preact.JSX.CSSProperties = props.compact
+  const btnStyle: preact.CSSProperties = props.compact
     ? { ...ghostBtn, padding: "0.25rem 0.6rem", fontSize: "0.78rem" }
     : ghostBtn;
 

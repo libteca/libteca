@@ -21,7 +21,7 @@ function PdfSession(props: PdfReaderProps) {
   const [openPage, setOpenPage] = useState(() => resumePage(props.progress));
   const [ready, setReady] = useState(false);
   const pageRef = useRef(resumePage(props.progress));
-  const countRef = useRef<number | undefined>();
+  const countRef = useRef<number | undefined>(undefined);
   const saver = useProgressSaver(props.editionId, props.progress?.revision ?? 0, {
     page: props.progress?.page, percent: props.progress?.percent,
     resetGeneration: props.progress?.resetGeneration,

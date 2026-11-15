@@ -136,7 +136,7 @@ export function App() {
     return <div style={center} role="status" aria-label="Loading"><IconSpinner size={22} /></div>;
   }
 
-  const navItem = (active: boolean): preact.JSX.CSSProperties => ({
+  const navItem = (active: boolean): preact.CSSProperties => ({
     ...navLink, color: active ? c.text : c.muted, fontWeight: active ? 650 : 400,
   });
 
@@ -281,14 +281,17 @@ function ChangePassModal(props: { userId: number; isAdmin: boolean; onClose: () 
       onClick={(e) => { if (e.target === e.currentTarget) props.onClose(); }}
       style={{ position: "fixed", inset: 0, zIndex: 80, background: "rgba(8,9,11,0.72)", display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}
     >
-      <form
-        ref={formRef}
+      <div
         className="anim-pop"
-        onSubmit={submit}
         role="dialog"
         aria-modal="true"
         aria-label="Change password"
-        style={{ width: "min(22rem, 100%)", background: c.bgRaised, border: `1px solid ${c.line}`, borderRadius: "14px", padding: "1.4rem", display: "flex", flexDirection: "column", gap: "0.8rem", boxShadow: "0 24px 60px rgba(0,0,0,0.5)" }}
+        style={{ width: "min(22rem, 100%)" }}
+      >
+      <form
+        ref={formRef}
+        onSubmit={submit}
+        style={{ background: c.bgRaised, border: `1px solid ${c.line}`, borderRadius: "14px", padding: "1.4rem", display: "flex", flexDirection: "column", gap: "0.8rem", boxShadow: "0 24px 60px rgba(0,0,0,0.5)" }}
       >
         <h2 style={{ margin: 0, fontSize: "1.05rem", color: c.text }}>Change password</h2>
         {!props.isAdmin && (
@@ -302,6 +305,7 @@ function ChangePassModal(props: { userId: number; isAdmin: boolean; onClose: () 
           <button className="press btnp" style={primaryBtn} type="submit" disabled={busy}>{busy ? "Updating…" : "Update"}</button>
         </div>
       </form>
+      </div>
     </div>
   );
 }
