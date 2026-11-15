@@ -45,3 +45,8 @@ env:
   LIBTECA_HWACCEL: auto
 volumes:
   data: /data
+volume_ownership:
+  data:
+    uid: 10001
+    gid: 10001
+    mode: "0700"

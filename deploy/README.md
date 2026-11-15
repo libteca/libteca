@@ -118,7 +118,9 @@ stack is present in the image and falls back to software otherwise.
 (single service, port 8096, `/healthcheck` health, `data` volume, the released
 image). Set the first administrator with
 `teploy secret set LIBTECA_INIT_ADMIN 'admin:<password>'` before the first
-deploy. The teploy format has no device mapping, so in-container hwaccel
+deploy. The template declares `volume_ownership` for `data` because the
+image runs as uid 10001 and teploy volumes start as root-owned host
+directories. The teploy format has no device mapping, so in-container hwaccel
 degrades to software; use the bare systemd path for hardware transcoding.
 
 ## Network posture
