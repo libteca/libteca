@@ -2,14 +2,14 @@
 # Gate runner: boots a fresh libteca against a chosen directory and prints
 # the three gates with exactly what to look for. Run, judge, kill.
 #
-#   ./gate.sh ~/path/to/real/books        # G1: scan your real library
-#   ./gate.sh                             # demo library (synthetic)
+#   tools/gate.sh ~/path/to/real/books        # G1: scan your real library
+#   tools/gate.sh                             # demo library (synthetic)
 #
 # The binary is built into /tmp; the data dir is a throwaway in /tmp; your
 # library is only READ (scan), never written to.
 
 set -euo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
 LIB_PATH="${1:-./data/demo}"
 PORT=8096

@@ -110,4 +110,4 @@ No public exposure by default, ever. The intended deployment is LAN or
 Tailscale: reach the box at `http://<tailscale-ip>:8096` and leave it off the
 public internet. If you front it with a proxy anyway, put auth in front too —
 the client protocols carry their own tokens, but the attack surface you add
-is yours. See PLAN.md section 11 (security posture).
+is yours. See docs/PLAN.md section 11 (security posture).
