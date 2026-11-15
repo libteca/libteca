@@ -344,6 +344,7 @@ function VideoPlayerSession(props: VideoPlayerProps) {
   }, [props.editionId]);
 
   useEffect(() => {
+    const mounted = ref.current;
     const t = window.setInterval(() => { if (ref.current) saved.current = ref.current.currentTime; }, 1000);
     const leave = () => { if (sessionAlive.current && live.current && !completed.current) void save(ref.current?.currentTime ?? saved.current); };
     addEventListener("pagehide", leave);
@@ -357,7 +358,7 @@ function VideoPlayerSession(props: VideoPlayerProps) {
       clearInterval(p);
       sessionAlive.current = false;
       if (live.current && !completed.current) {
-        const pos = ref.current?.currentTime ?? saved.current;
+        const pos = (ref.current ?? mounted)?.currentTime ?? saved.current;
         void save(pos);
       }
     };
