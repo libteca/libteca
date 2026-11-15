@@ -60,8 +60,25 @@ units get device access via the device cgroup defaults).
 
 ## Docker
 
-`make docker` (or `docker build -t libteca:dev .`) builds a multi-stage
-image: node:22-alpine builds web/, the dist is copied into
+Released images are published as `ghcr.io/libteca/libteca` for linux/amd64
+and linux/arm64: a tag per version, `stable` for the latest full release and
+`edge` for the latest tag of any kind.
+
+```sh
+docker run -d --name libteca --restart unless-stopped -p 8096:8096 \
+  -v libteca-data:/data -v /path/to/media:/media:ro \
+  -e LIBTECA_INIT_ADMIN='admin:replace-with-a-unique-long-password' \
+  ghcr.io/libteca/libteca:stable
+```
+
+`LIBTECA_INIT_ADMIN` creates that administrator only when the server has no
+users at all. Once any user exists it is ignored, so it is safe to leave set
+across restarts and after the password is changed in the web UI. The
+`--init-admin` flag is stricter: it fails when the user exists with a
+different password.
+
+To build the image yourself, `make docker` (or `docker build -t libteca:dev .`)
+builds a multi-stage image: node:22-alpine builds web/, the dist is copied into
 internal/server/webdist so the Go embed picks it up at compile time, and the
 final alpine stage carries the static binary plus ffmpeg/ffprobe
 (`apk add --no-cache ffmpeg`, which ships both).
@@ -98,11 +115,11 @@ stack is present in the image and falls back to software otherwise.
 ## Teploy
 
 `deploy/teploy/teploy.yml` is the app template for `teploy deploy libteca`
-(single service, port 8096, `/healthcheck` health, `data` volume). Read its
-header before using: it is the target shape — the container image is not
-published yet (neutron-go is a published module; remaining work is the ghcr
-image), and the teploy format has no device mapping, so in-container
-hwaccel degrades to software. Until then, deploy bare or Docker as above.
+(single service, port 8096, `/healthcheck` health, `data` volume, the released
+image). Set the first administrator with
+`teploy secret set LIBTECA_INIT_ADMIN 'admin:<password>'` before the first
+deploy. The teploy format has no device mapping, so in-container hwaccel
+degrades to software; use the bare systemd path for hardware transcoding.
 
 ## Network posture
 

@@ -918,3 +918,11 @@ Nested-HLS refusal through the production argv is still asserted (input fails,
 nothing opens) and concat confinement is proven with `file://` entries both
 admitted and refused. MOV external-reference and adversarial-HLS corpora
 remain open acceptance work, not silently closed.
+
+68. **`LIBTECA_INIT_ADMIN` bootstraps only an empty install (2026-11-15).**
+Container and teploy deployments cannot append `--init-admin` to a running
+service, and that flag fails on restart once the password is changed in the
+web UI. The environment variable creates the named administrator only while
+the users table is empty and is otherwise ignored, so it can stay set. There
+is deliberately no unauthenticated first-run setup page: whoever reaches the
+port first would own the server.

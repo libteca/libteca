@@ -57,6 +57,33 @@ func TestInitAdmin(t *testing.T) {
 	}
 }
 
+func TestEnsureFirstAdmin(t *testing.T) {
+	db := openTestDB(t)
+
+	created, err := EnsureFirstAdmin(db, "admin", "password123")
+	if err != nil || !created {
+		t.Fatalf("empty install: created=%v err=%v", created, err)
+	}
+	created, err = EnsureFirstAdmin(db, "admin", "a-different-password")
+	if err != nil || created {
+		t.Fatalf("existing users must be left alone: created=%v err=%v", created, err)
+	}
+	created, err = EnsureFirstAdmin(db, "other", "password123")
+	if err != nil || created {
+		t.Fatalf("a second admin must not be created: created=%v err=%v", created, err)
+	}
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("users = %d, want 1", n)
+	}
+	if _, err := EnsureFirstAdmin(openTestDB(t), "admin", "short"); err == nil {
+		t.Fatal("expected validation error on an empty install")
+	}
+}
+
 func TestInitAdminValidation(t *testing.T) {
 	for _, tc := range []struct {
 		name, user, pass string

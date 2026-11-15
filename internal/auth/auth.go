@@ -354,6 +354,20 @@ func Token(r *http.Request) string {
 	return ""
 }
 
+func EnsureFirstAdmin(db *store.DB, name, password string) (bool, error) {
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&count); err != nil {
+		return false, err
+	}
+	if count != 0 {
+		return false, nil
+	}
+	if err := InitAdmin(db, name, password); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func InitAdmin(db *store.DB, name, password string) error {
 	name, err := ValidateCredentials(name, password)
 	if err != nil {
