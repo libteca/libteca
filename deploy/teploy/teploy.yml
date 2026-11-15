@@ -1,17 +1,16 @@
 # libteca — one media server, every client (Jellyfin + Audiobookshelf + OPDS
 # + Subsonic wire compatibility, so existing client apps connect unchanged).
 #
-# STATUS: target shape for `teploy deploy libteca` (PLAN §3, Slice 1 exit).
-# Two blockers, both deliberate and temporary:
+# The image is published by the release workflow for linux/amd64 and
+# linux/arm64. Create the first administrator before the first deploy:
 #
-# 1. No published image yet. neutron-go is published
-#    (github.com/neutron-build/neutron/go v0.1.0); remaining work is the
-#    release pipeline pushing ghcr.io/libteca/libteca.
-# 2. No /dev/dri. The teploy format has no device mapping (same class of
-#    limitation as the teploy-arcade docker-socket note — no escape hatch),
-#    so LIBTECA_HWACCEL=auto degrades to software transcode in the
-#    container. Until teploy grows device passthrough, hardware transcode
-#    means the bare systemd path (deploy/README.md).
+#   teploy secret set LIBTECA_INIT_ADMIN 'admin:<password>'
+#
+# It is read only while the server has no users, so it can stay set.
+#
+# No /dev/dri: the teploy format has no device mapping, so
+# LIBTECA_HWACCEL=auto degrades to software transcode in the container.
+# Hardware transcode means the bare systemd path (deploy/README.md).
 #
 # Template metadata (for teploy/templates index.json registration at exit):
 #   name: libteca
@@ -33,8 +32,8 @@
 # with docker's userland proxy direct clients can arrive from the bridge
 # gateway, so trusting that subnet here would let them forge their address.
 #
-# The image entrypoint must start the binary with `--data /data` so it lives
-# on the teploy-managed volume below (port defaults to 8096 already).
+# The image entrypoint starts the binary with `--data /data`, which is the
+# teploy-managed volume below.
 app: libteca
 ingress: host
 port: 8096

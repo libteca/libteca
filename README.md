@@ -43,6 +43,18 @@ make build                                              # web UI into the binary
 ./libteca --data ./data --init-admin 'admin:replace-with-a-unique-long-password'   # creates admin (min 8 bytes), then serves :8096
 ```
 
+With Docker, no build is needed:
+
+```sh
+docker run -d --name libteca --restart unless-stopped -p 8096:8096 \
+  -v libteca-data:/data -v /path/to/media:/media:ro \
+  -e LIBTECA_INIT_ADMIN='admin:replace-with-a-unique-long-password' \
+  ghcr.io/libteca/libteca:stable
+```
+
+`LIBTECA_INIT_ADMIN=name:password` creates the first administrator only when
+the server has no users, and is ignored afterwards.
+
 `--watch` is on by default (`--watch=false` or `LIBTECA_WATCH=false` disables;
 `LIBTECA_SWEEP=<seconds>` sets the sweep, `0` disables). `--hwaccel` accepts
 `auto|none|videotoolbox|vaapi|nvenc|qsv`; empty defers to `$LIBTECA_HWACCEL`,

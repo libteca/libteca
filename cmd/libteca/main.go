@@ -150,6 +150,19 @@ func main() {
 		}
 		fmt.Printf("admin %q ready\n", name)
 	}
+	if env := os.Getenv("LIBTECA_INIT_ADMIN"); *initAdmin == "" && env != "" {
+		name, pass, ok := cut(env, ':')
+		if !ok {
+			fatal(fmt.Errorf("LIBTECA_INIT_ADMIN wants name:password"))
+		}
+		created, err := auth.EnsureFirstAdmin(db, name, pass)
+		if err != nil {
+			fatal(fmt.Errorf("LIBTECA_INIT_ADMIN: %w", err))
+		}
+		if created {
+			fmt.Printf("admin %q created from LIBTECA_INIT_ADMIN\n", name)
+		}
+	}
 
 	if *scanOnly {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
