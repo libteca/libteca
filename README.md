@@ -13,7 +13,7 @@ inherited-client cell below says "works" (Gate F pending).
 
 ## Games (new)
 
-Games is a fifth library type (PLAN-GAMES): ROM folders scanned with
+Games is a fifth library type (docs/PLAN-GAMES.md): ROM folders scanned with
 platform detection, TheGamesDB metadata, and download-then-play serving
 over the core API. Omilator is the client (`docs/omilator-client-contract.md`).
 No face protocol — games are core-API only by design.
@@ -156,4 +156,4 @@ Tailscale is the intended deployment — nothing in the defaults puts auth in
 front of a public bind. Per-device tokens with revocation (web admin); admin
 and user surfaces separated. All file serving resolves through the scanned
 file table's stored paths; client-supplied paths never reach the filesystem
-(path traversal is the classic media-server kill vector). See PLAN.md §11.
+(path traversal is the classic media-server kill vector). See docs/PLAN.md §11.

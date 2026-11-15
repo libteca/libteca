@@ -1,6 +1,6 @@
 # libteca — Slice 0 engineering spec
 
-Companion to `PLAN.md` (product plan). This file is the build contract for Slice 0:
+Companion to `docs/PLAN.md` (product plan). This file is the build contract for Slice 0:
 the spine plus the Audiobookshelf face. Tasks are ordered; each has a done-check.
 DECISIONS.md records pinned choices and their dates.
 
