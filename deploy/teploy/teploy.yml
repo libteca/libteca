@@ -12,7 +12,7 @@
 # LIBTECA_HWACCEL=auto degrades to software transcode in the container.
 # Hardware transcode means the bare systemd path (deploy/README.md).
 #
-# Template metadata (for teploy/templates index.json registration at exit):
+# Published in the teploy catalog as `libteca` (useteploy/templates):
 #   name: libteca
 #   description: One media server, every client - Jellyfin, Audiobookshelf,
 #     OPDS, and Subsonic wire compatibility in one binary
