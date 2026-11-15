@@ -5,11 +5,11 @@ and games from a single Go binary with an embedded SQLite store. The product is 
 first-party web UI. Four protocol faces (Jellyfin, Audiobookshelf, OPDS,
 Subsonic) are optional — existing apps are a nicety, not the target.
 
-Status: RELEASE-READY (public, MIT). All codeable v1 work closed through the
-2026-09-11 release waves (audit + polish; DECISIONS 28): security hardening,
-race/tx fixes, motion system, PWA, Docker image, provider keys in Admin.
-The live gate is Gate W - daily use of the web UI on a real library. No
-inherited-client cell below says "works" (Gate F pending).
+Status: v0.1.0 released (public beta, MIT). Binaries for Linux and macOS are
+on the [releases page](https://github.com/libteca/libteca/releases), and the
+image is `ghcr.io/libteca/libteca`. The first-party web UI is the tested
+path. No inherited-client cell below says "works" yet (Gate F pending), and
+daily use on a real library (Gate W) is still the live gate.
 
 ## Games (new)
 
