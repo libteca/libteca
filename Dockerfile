@@ -1,20 +1,18 @@
-FROM --platform=$BUILDPLATFORM node:22-alpine AS web
+FROM node:22-alpine AS web
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci --no-fund --no-audit
 COPY web/ ./
 RUN npx tsc --noEmit && npm run build
 
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
+FROM golang:1.26-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=web /src/web/dist internal/server/webdist
 ARG VERSION=dev
-ARG TARGETOS
-ARG TARGETARCH
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/libteca ./cmd/libteca
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/libteca ./cmd/libteca
 
 FROM alpine:3.22
 RUN apk add --no-cache ffmpeg
